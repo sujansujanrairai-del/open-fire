@@ -297,6 +297,7 @@ class RobertTest {
                     playerWall: Boolean = false, breaker: Boolean = false, proximity: Float = 95f) =
             RobertRules.shouldRetreatFromFight(hits, landed, consecutive, shots, weakened,
                 enemyWall, playerWall, breaker, proximity)
+        assertTrue(retreat(hits = 1, landed = 0))
         assertTrue(retreat(hits = 2, landed = 1, enemyWall = true))
         assertTrue(retreat(consecutive = 2, enemyWall = true))
         assertTrue(retreat(shots = 2, weakened = true))
@@ -423,7 +424,7 @@ class RobertTest {
             )
         }
         assertTrue(continuous.all { it == 1_500L || it == 2_000L })
-        // While fleeing he never answers continuously and stays on the 2 s beat.
+        // The same two random beats apply to any shot while fleeing.
         assertTrue(
             (1..30).map {
                 RobertRules.fireIntervalMs(
@@ -432,7 +433,7 @@ class RobertTest {
                     random = random,
                     continuous = true
                 )
-            }.all { it == 2_000L }
+            }.all { it == 1_500L || it == 2_000L }
         )
     }
 
@@ -641,7 +642,7 @@ class RobertTest {
         val fleeing = (1..30).map {
             RobertRules.fireIntervalMs(RobertRules.CombatSituation.ADVANTAGE, true, random)
         }
-        assertTrue(fleeing.all { it == 2_000L })
+        assertEquals(setOf(1_500L, 2_000L), fleeing.toSet())
 
         val continuous = (1..60).map {
             RobertRules.tacticalFireInterval(

@@ -567,7 +567,7 @@ object RobertRules {
      * exchange is judged on its own.
      */
     fun shouldFleeFight(robertHitsTaken: Int, robertHitsLanded: Int): Boolean =
-        robertHitsTaken >= 2 && robertHitsTaken > robertHitsLanded
+        robertHitsTaken > 0 && robertHitsTaken > robertHitsLanded
 
     /**
      * True when a one-sided exchange must make Robert run as fast as
@@ -1039,8 +1039,6 @@ object RobertRules {
         random: Random,
         continuous: Boolean = false
     ): Long {
-        if (fleeing) return NORMAL_FIRE_MAX_MS
-        if (continuous) return NORMAL_INTERVALS_MS[random.nextInt(NORMAL_INTERVALS_MS.size)]
         return normalTacticalInterval(random)
     }
 

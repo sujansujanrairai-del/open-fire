@@ -105,8 +105,8 @@ class GameplayUpgradeTest {
         assertFalse(RobertRules.shouldFleeFight(1, 2))
         assertFalse(RobertRules.shouldFleeFight(2, 2))
         assertFalse(RobertRules.shouldFleeFight(2, 3))
-        // A single hit is never enough to panic.
-        assertFalse(RobertRules.shouldFleeFight(1, 0))
+        // Even one unanswered hit gives the player the upper hand.
+        assertTrue(RobertRules.shouldFleeFight(1, 0))
     }
 
     @Test
