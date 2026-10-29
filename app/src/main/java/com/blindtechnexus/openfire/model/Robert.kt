@@ -607,20 +607,24 @@ object RobertRules {
     fun shouldPanic(robertHp: Int, robertMaxHp: Int, previousHp: Int = robertMaxHp): Boolean =
         robertMaxHp > 0 && shouldUseDefence(robertHp, true)
 
-    /** Retreat takes priority over protected or aggressive firing. */
+    /** Evaluate actual hits, not trigger pulls. A single hit is answered;
+     * two hits ahead, or sustained damaging fire, trigger a quick retreat.
+     * A barrier always takes priority over ordinary gunfire retreat. */
     fun shouldRetreatFromFight(
         playerHits: Int, enemyHits: Int, consecutiveHits: Int,
         playerBurstShots: Int, enemyHealthDropping: Boolean,
         enemyWall: Boolean, playerWall: Boolean, playerHasBreaker: Boolean,
         proximityPercent: Float
     ): Boolean {
-        if (enemyWall && playerWall && playerHasBreaker) return true
-        if (shouldFleeFight(playerHits, enemyHits) || consecutiveHits >= FLEE_AFTER_PLAYER_HITS) return true
-        // A nearby, protected enemy may hold its ground against shots that do not weaken it.
-        val protectedNearby = enemyWall && !playerWall && proximityPercent >= Combat.STRONG_ZONE_MAX
-        return (!protectedNearby && isContinuousPlayerFire(playerBurstShots)) ||
-            (enemyHealthDropping && playerBurstShots >= 2)
+        if (enemyWall) return false
+        return (playerHits >= 2 && playerHits > enemyHits) ||
+            consecutiveHits >= FLEE_AFTER_PLAYER_HITS ||
+            (enemyHealthDropping && playerBurstShots >= COUNTER_FIRE_BURST_SHOTS)
     }
+
+    /** One deadline shared by normal and breaker shots. */
+    fun shotInterval(enemyHasGlooWall: Boolean, random: Random): Long =
+        if (enemyHasGlooWall) CONTINUOUS_FIRE_MS else normalTacticalInterval(random)
 
 
     /** True when the player is vulnerable (damaged, trapped, locked, hindered). */
