@@ -148,13 +148,7 @@ data class GameState(
     /** The running speed level toggled by a three-finger swipe ([RunSpeed.id]). */
     val runSpeed: String = RunSpeed.NORMAL.id,
 
-    /**
-     * The direction the player is really aiming at ([Facing.id]). It follows
-     * the last movement: running right turns the player to the right. A shot
-     * only lands while Robert stands inside the aiming cone of this
-     * direction, so firing blindly forward at an enemy who stands to the side
-     * never registers a hit.
-     */
+    /** Last movement direction ([Facing.id]), used for status, not aiming. */
     val playerFacing: String = Facing.FORWARD.id,
 
     /** A cover blocks 11 hits; the 12th breaks it. */
@@ -364,13 +358,9 @@ data class GameState(
     val runSpeedLevel: RunSpeed
         get() = RunSpeed.fromId(runSpeed)
 
-    /** The direction the player is aiming at right now. */
+    /** The player's last movement direction, reported in status. */
     val facing: Facing
         get() = Facing.fromId(playerFacing)
-
-    /** True when Robert stands inside the player's aiming cone. */
-    val playerFacingRobert: Boolean
-        get() = Combat.isFacingTarget(facing, robertX - playerX, robertY - playerY)
 
     /** True while Robert may still raise a gloo wall of his own. */
     val robertGlueWallAvailable: Boolean

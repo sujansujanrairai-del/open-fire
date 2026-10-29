@@ -368,9 +368,8 @@ data class FighterMove(
 /**
  * Runs the player forward (towards Robert) or backward (away from him).
  *
- * Running forward always turns the player towards the enemy, running
- * backward turns him away, and the new facing is stored in the state so the
- * next shot is judged against the direction he is really aiming at.
+ * Running forward or backward updates the last movement direction for status
+ * reports. Shots are aimed automatically regardless of that direction.
  */
 fun GameState.movePlayer(forward: Boolean, metres: Float): FighterMove {
     val move = if (forward) {
@@ -380,10 +379,10 @@ fun GameState.movePlayer(forward: Boolean, metres: Float): FighterMove {
     }
     val facing = playerFacingNow
     val turned = if (forward) {
-        // Facing the enemy: the direction that really points at him.
+        // Record the direction of travel.
         Facing.toward(robertX - playerX, robertY - playerY)
     } else {
-        // Backing away: he is now behind the player.
+        // Record the direction of travel away from the enemy.
         Facing.toward(playerX - robertX, playerY - robertY)
     }
     return FighterMove(
@@ -396,8 +395,7 @@ fun GameState.movePlayer(forward: Boolean, metres: Float): FighterMove {
 
 /**
  * Runs the player left or right along the width of the zone. The player
- * really turns that way: an enemy standing to the right can only be hit
- * after running right.
+ * records that direction for status, without restricting shots.
  */
 fun GameState.movePlayerLateral(right: Boolean, metres: Float): FighterMove {
     val move = Arena.moveLateral(playerX, playerY, right, metres)
@@ -420,10 +418,6 @@ val GameState.robertOffsetX: Float
 /** Offset of Robert from the player, in metres, on the depth (Y) axis. */
 val GameState.robertOffsetY: Float
     get() = robertY - playerY
-
-// The aiming-cone check itself lives on GameState as `playerFacingRobert`,
-// so every caller reads the same member whether it comes from the arena
-// helpers or from the state model.
 
 /**
  * Stereo material for the enemy's sounds: the lateral offset and the depth

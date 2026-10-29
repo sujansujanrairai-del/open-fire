@@ -167,6 +167,8 @@ class StringsAndGunRulesTest {
         assertTrue("Guide must document the fast level", en.contains("matches Robert's own fast fleeing speed"))
         assertTrue("Guide must document the running volume", en.contains("a fast run is louder and quicker"))
         assertTrue("Guide must document pressure running", en.contains("stronger you press"))
+        assertTrue("Guide must explain automatic aiming", en.contains("Shots automatically target Robert"))
+        assertFalse("Guide must not require turning to fire", en.contains("must run right to face him"))
         // The damage table and the caps.
         assertTrue("Guide must document the bands", en.contains("70 to 90 percent is the strong band"))
         assertTrue("Guide must document the knife row", en.contains("knife 0, 8, 12 and 14 health points"))

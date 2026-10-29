@@ -5,6 +5,9 @@ import com.blindtechnexus.openfire.model.DamageTable
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Facing
 import com.blindtechnexus.openfire.model.FireRange
+import com.blindtechnexus.openfire.model.GameState
+import com.blindtechnexus.openfire.model.movePlayerLateral
+import com.blindtechnexus.openfire.model.withPositions
 import com.blindtechnexus.openfire.model.HitZone
 import com.blindtechnexus.openfire.model.RobertRules
 import com.blindtechnexus.openfire.model.Weapon
@@ -246,19 +249,31 @@ class CombatTest {
     }
 
     @Test
-    fun aShotOnlyLandsInsideTheAimingCone() {
-        // The enemy really on the right can only be hit after turning right.
-        assertTrue(Combat.isFacingTarget(Facing.RIGHT, 10f, 0f))
-        assertFalse(Combat.isFacingTarget(Facing.FORWARD, 10f, 0f))
-        assertFalse(Combat.isFacingTarget(Facing.LEFT, 10f, 0f))
-        // Point blank is always inside the cone.
-        assertTrue(Combat.isFacingTarget(Facing.FORWARD, 0.5f, 0f))
-        assertEquals("targetRight", Combat.targetBearingKey(Facing.FORWARD, 10f, 0f))
-        assertEquals("targetLeft", Combat.targetBearingKey(Facing.FORWARD, -10f, 0f))
-        assertEquals("targetBehind", Combat.targetBearingKey(Facing.FORWARD, 0f, -10f))
-        assertEquals("targetAhead", Combat.targetBearingKey(Facing.FORWARD, 0f, 10f))
-        assertEquals(Facing.LEFT, Facing.toward(-3f, 1f))
-        assertEquals(Facing.BACKWARD, Facing.toward(0f, -4f))
+    fun shotsUseDistanceNotMovementOrFacing() {
+        // Robert is to the right while the player has just moved left. The
+        // enemy can also move further right: neither direction blocks a hit.
+        val initial = GameState().withPositions(
+            playerX = 10f, playerY = 12f, robertX = 15f, robertY = 12f
+        )
+        val movingLeft = initial.movePlayerLateral(right = false, metres = 1f).state
+            .withPositions(robertX = 16f)
+        assertEquals(Facing.LEFT, movingLeft.facing)
+        assertEquals(7f, movingLeft.distance, 0.001f)
+
+        for (facing in Facing.entries) {
+            val state = movingLeft.copy(playerFacing = facing.id)
+            val proximity = Combat.proximityOf(state.distance)
+            assertEquals(HitZone.STRONG, Combat.zoneFor(proximity))
+            assertEquals(13, Combat.weaponDamage(Weapon.ASSAULT_GUN, proximity, 200))
+        }
+
+        // Being genuinely out of range still misses, regardless of facing.
+        val far = movingLeft.withPositions(robertX = 25f, robertY = 25f)
+        assertEquals(HitZone.MISS, Combat.zoneFor(Combat.proximityOf(far.distance)))
+        assertEquals(0, Combat.weaponDamage(Weapon.ASSAULT_GUN, Combat.proximityOf(far.distance), 200))
+        // The AWM's existing long-range exception still applies.
+        val awmRange = initial.withPositions(playerX = 6f, robertX = 25f, robertY = 12f)
+        assertEquals(14, Combat.weaponDamage(Weapon.AWM, Combat.proximityOf(awmRange.distance), 200))
     }
 
     @Test

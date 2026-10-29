@@ -63,24 +63,14 @@ enum class FireRange(
 /**
  * The four directions a fighter can face inside the square arena.
  *
- * Facing is what makes shooting directional: a shot only lands while the
- * target stands inside the aiming cone of the direction the fighter last ran
- * towards ([Combat.isFacingTarget]). Running right therefore turns you to the
- * right, and that is the only way to hit an enemy who really is on your right.
+ * Facing records the player's last movement direction for status reports.
+ * Shots are aimed automatically; facing does not restrict damage.
  */
 enum class Facing(val id: String, val dx: Float, val dy: Float, val nameKey: String) {
     FORWARD("forward", 0f, 1f, "facingForward"),
     BACKWARD("backward", 0f, -1f, "facingBackward"),
     LEFT("left", -1f, 0f, "facingLeft"),
     RIGHT("right", 1f, 0f, "facingRight");
-
-    /** The opposite direction (turn around). */
-    fun opposite(): Facing = when (this) {
-        FORWARD -> BACKWARD
-        BACKWARD -> FORWARD
-        LEFT -> RIGHT
-        RIGHT -> LEFT
-    }
 
     companion object {
         fun fromId(id: String?): Facing =
@@ -166,16 +156,6 @@ object Combat {
     /** Only a Gloo Wall Breaker shot at or above this proximity hurts a wall. */
     const val GLUE_WALL_BREAK_PROXIMITY = 90f
 
-    /**
-     * Half-angle (degrees) of the aiming cone.
-     *
-     * A shot only registers while the target really stands inside the cone in
-     * front of the fighter. Firing blindly forward while the enemy is to the
-     * side (or behind) always misses, so the player has to turn - that is,
-     * run right when the enemy is to the right - before the fight can land.
-     */
-    const val TARGETING_CONE_DEGREES = 65f
-
     /** Close-range shotgun power retained as a named combat constant. */
     const val SHORT_GUN_CLOSE_POWER_PERCENT = 16
 
@@ -251,48 +231,6 @@ object Combat {
      */
     fun canBreakGlueWall(weapon: Weapon, proximityPercent: Float): Boolean =
         weapon == Weapon.GLUE_BREAKER && proximityPercent >= GLUE_WALL_BREAK_PROXIMITY
-
-    /**
-     * Cosine of the angle between the facing direction and the direction of
-     * the target. 1 = dead ahead, 0 = exactly to the side, -1 = behind.
-     */
-    fun facingAlignment(facing: Facing, dx: Float, dy: Float): Float {
-        val length = kotlin.math.hypot(dx, dy)
-        if (length <= 0.0001f) return 1f
-        return ((facing.dx * dx + facing.dy * dy) / length).coerceIn(-1f, 1f)
-    }
-
-    /**
-     * True while a target at the offset (dx, dy) really stands inside the
-     * aiming cone of [facing]. Point-blank targets (inside one metre) are
-     * always inside the cone: a fighter cannot be behind you if they are
-     * standing on your feet.
-     */
-    fun isFacingTarget(
-        facing: Facing,
-        dx: Float,
-        dy: Float,
-        coneDegrees: Float = TARGETING_CONE_DEGREES
-    ): Boolean {
-        if (kotlin.math.hypot(dx, dy) <= 1f) return true
-        val cone = kotlin.math.cos(Math.toRadians(coneDegrees.toDouble())).toFloat()
-        return facingAlignment(facing, dx, dy) >= cone
-    }
-
-    /**
-     * Where the target stands relative to the facing direction, as a
-     * translation key the battle report can speak: ahead, right, left or
-     * behind. This is the hint the player hears after a shot that missed
-     * because he was aiming the wrong way.
-     */
-    fun targetBearingKey(facing: Facing, dx: Float, dy: Float): String {
-        val bearing = Facing.toward(dx, dy)
-        return when (bearing) {
-            facing -> "targetAhead"
-            facing.opposite() -> "targetBehind"
-            else -> if (bearing == Facing.RIGHT) "targetRight" else "targetLeft"
-        }
-    }
 
     /** Health granted by the one-per-fight second chance. */
     fun secondChanceHealth(maxHp: Int): Int =
