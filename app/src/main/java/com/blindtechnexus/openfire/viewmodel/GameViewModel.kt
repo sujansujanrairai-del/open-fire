@@ -3439,23 +3439,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             audioManager.playWeaponSound(weapon.fireSoundKey, volume = 1.0f)
         }
 
-        // Directional targeting. A shot only lands while Robert really stands
-        // inside the aiming cone of the direction the player last ran to: an
-        // enemy on the right can only be hit after running right, and firing
-        // blindly forward while he is to the side is a clean miss.
-        if (!state.playerFacingRobert) {
-            if (weapon.melee) {
-                audioManager.playWeaponSound(weapon.missSoundKey, volume = 0.6f)
-            }
-            val bearing = Combat.targetBearingKey(
-                state.facing,
-                state.robertX - state.playerX,
-                state.robertY - state.playerY
-            )
-            msg("${t("notFacingEnemy")} ${t(bearing)}.")
-            return
-        }
-
         val proxPercent = Combat.proximityOf(state.distance)
         val zone = Combat.zoneFor(proxPercent)
         // The AWM is the long-range rifle: inside its 20% to 40% band it hits
