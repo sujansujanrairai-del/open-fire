@@ -277,36 +277,35 @@ class RobertTest {
     }
 
     @Test
-    fun defenceThresholdsFollowTheRound() {
-        // Rounds one and two: below 60 percent of health, never below 100.
-        assertEquals(120, RobertRules.defenceThresholdHp(1, 200))
-        assertEquals(360, RobertRules.defenceThresholdHp(1, 600))
-        assertEquals(420, RobertRules.defenceThresholdHp(2, 700))
-        assertEquals(100, RobertRules.defenceThresholdHp(1, 100))
-        assertEquals(100, RobertRules.defenceThresholdHp(2, 50))
-        // Round three: below 200 health.
-        assertEquals(200, RobertRules.defenceThresholdHp(3, 900))
-        assertEquals(200, RobertRules.defenceThresholdHp(3, 150))
-        // Rounds four and five: below 300 health.
-        assertEquals(300, RobertRules.defenceThresholdHp(4, 1300))
-        assertEquals(300, RobertRules.defenceThresholdHp(5, 2600))
-        assertEquals(300, RobertRules.defenceThresholdHp(5, 100))
+    fun defencesStartStrictlyBelow150InEveryRound() {
+        for (round in 1..5) for (maxHp in listOf(200, 700, 2600)) {
+            assertEquals(150, RobertRules.defenceThresholdHp(round, maxHp))
+            assertFalse(RobertRules.shouldUseDefence(151, true))
+            assertFalse(RobertRules.shouldUseDefence(150, true))
+            assertTrue(RobertRules.shouldUseDefence(149, true))
+            assertFalse(RobertRules.shouldUseDefence(0, true))
+            assertFalse(RobertRules.shouldUseDefence(149, false))
+            assertFalse(RobertRules.shouldPanic(150, maxHp))
+            assertTrue(RobertRules.shouldPanic(149, maxHp))
+        }
+    }
 
-        // The round aware threshold really drives the defence decision.
-        assertTrue(
-            RobertRules.shouldUseDefence(
-                robertHp = 250,
-                defenceArmed = true,
-                thresholdHp = RobertRules.defenceThresholdHp(4, 1300)
-            )
-        )
-        assertFalse(
-            RobertRules.shouldUseDefence(
-                robertHp = 350,
-                defenceArmed = true,
-                thresholdHp = RobertRules.defenceThresholdHp(4, 1300)
-            )
-        )
+    @Test
+    fun retreatTakesPriorityOverFiringAndProtectedWallIsSituational() {
+        fun retreat(hits: Int = 0, landed: Int = 0, consecutive: Int = 0,
+                    shots: Int = 0, weakened: Boolean = false, enemyWall: Boolean = false,
+                    playerWall: Boolean = false, breaker: Boolean = false, proximity: Float = 95f) =
+            RobertRules.shouldRetreatFromFight(hits, landed, consecutive, shots, weakened,
+                enemyWall, playerWall, breaker, proximity)
+        assertTrue(retreat(hits = 2, landed = 1, enemyWall = true))
+        assertTrue(retreat(consecutive = 2, enemyWall = true))
+        assertTrue(retreat(shots = 2, weakened = true))
+        assertTrue(retreat(shots = 3))
+        assertFalse(retreat(shots = 3, enemyWall = true))
+        assertTrue(retreat(shots = 3, enemyWall = true, proximity = 50f))
+        assertTrue(retreat(enemyWall = true, playerWall = true, breaker = true))
+        assertFalse(retreat(enemyWall = true, playerWall = true, breaker = false))
+        assertFalse(retreat(enemyWall = false, playerWall = true, breaker = true))
     }
 
     @Test
@@ -653,7 +652,7 @@ class RobertTest {
                 random = random
             )
         }
-        assertTrue(continuous.all { it == RobertRules.CONTINUOUS_FIRE_MS })
+        assertEquals(setOf(1_500L, 2_000L), continuous.toSet())
         val losing = (1..30).map {
             RobertRules.tacticalFireInterval(
                 enemyHasDefence = true,
@@ -765,10 +764,10 @@ class RobertTest {
     }
 
     @Test
-    fun defencesStartBelowSixtyHealthAndAlternate() {
-        assertFalse(RobertRules.shouldUseDefence(60, true))
-        assertTrue(RobertRules.shouldUseDefence(59, true))
-        assertFalse(RobertRules.shouldUseDefence(59, false))
+    fun defencesStartBelow150HealthAndAlternate() {
+        assertFalse(RobertRules.shouldUseDefence(150, true))
+        assertTrue(RobertRules.shouldUseDefence(149, true))
+        assertFalse(RobertRules.shouldUseDefence(149, false))
         assertEquals(DefenceItem.MEDKIT, RobertRules.nextDefence(1, 1, 1))
         assertEquals(DefenceItem.COVER, RobertRules.nextDefence(0, 1, 1))
         assertEquals(DefenceItem.GLUE_WALL, RobertRules.nextDefence(0, 0, 1))
