@@ -118,7 +118,7 @@ class GestureRouterTest {
         assertTrue(MoveDirection.RIGHT.lateral)
         assertEquals(MoveDirection.LEFT, MoveDirection.fromId("left"))
         assertEquals(MoveDirection.FORWARD, MoveDirection.fromId("nonsense"))
-        assertEquals(100f, Arena.SIZE, 0.0001f)
+        assertEquals(25f, Arena.SIZE, 0.0001f)
     }
 
     @Test

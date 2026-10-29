@@ -96,7 +96,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             val isCenter = isBattle && !isTop && !isBottom
                             // The center portion is split in two halves: the
                             // left half runs left, the right half runs right,
-                            // so all four directions of the 100 m zone are
+                            // so all four directions of the 25 m square zone are
                             // reachable. A tap in the center still activates
                             // the quick menu (or confirms a timer bomb).
                             val isCenterLeft = isCenter && firstDown.position.x < screenWidth / 2f

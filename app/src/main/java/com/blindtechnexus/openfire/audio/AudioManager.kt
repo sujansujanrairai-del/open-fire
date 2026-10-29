@@ -119,16 +119,21 @@ class AudioManager(private val context: Context) {
         private const val MAX_LOAD_ATTEMPTS = 3
 
         /**
-         * Every sound that belongs to a weapon being fired or swung. Only one
-         * of them may ever sound at a time: the moment a new weapon sound
-         * starts, the previous one is cut, so the player's AWM shot and
-         * Robert's answering gunshot never overlap and never leak.
+         * Every sound that belongs to a weapon being fired or swung.
+         *
+         * Firing the SAME weapon again interrupts that weapon's own previous
+         * tail (a second pistol shot cuts the first, exactly as before), while
+         * a DIFFERENT weapon mixes with whatever is still ringing: a sniper
+         * shot fired right after a pistol plays together with it, and a sword
+         * and a knife striking each other are heard at the same time. The
+         * sounds are mixed on independent SoundPool streams.
          */
         val WEAPON_SOUND_KEYS: Set<String> = setOf(
             "assault",
             "pistol",
             "shortGun",
             "sniperRifle",
+            "glueWallBreaker",
             "awm",
             "mp40",
             "machineGun",
@@ -339,6 +344,9 @@ class AudioManager(private val context: Context) {
         "pistol" to listOf("pistol-sound.mp3"),
         "shortGun" to listOf("short-gun.mp3"),
         "sniperRifle" to listOf("sniper-rifle.mp3"),
+        // The dedicated Gloo Wall Breaker gun: the only sound that destroys a
+        // gloo wall. Three consecutive shots from the 90%-100% band break it.
+        "glueWallBreaker" to listOf("glue-wall-breaker.mp3"),
         // Round two weapons: the MP40 submachine gun and the AWM long-range
         // rifle, each with its own recorded shot.
         "mp40" to listOf("mp-40-gun.mp3"),
@@ -365,7 +373,7 @@ class AudioManager(private val context: Context) {
         "glueSound" to listOf("glue-sound.mp3"),
         "glueHit" to listOf("glue-hit.mp3"),
         "glueWallCrack" to listOf("glue-wall-crack.mp3"),
-        // Hitting one of the four boundaries of the 100 m zone: the dedicated
+        // Hitting one of the four boundaries of the 25 m square zone: the dedicated
         // wall impact sound. It belongs to the player alone — only a manually
         // controlled fighter can ever run into a boundary, because Robert
         // detects the wall before he reaches it and changes heading instead.
@@ -597,6 +605,37 @@ class AudioManager(private val context: Context) {
         val left = (totalVol * leftGain).coerceIn(0f, 1f)
         val right = (totalVol * rightGain).coerceIn(0f, 1f)
         return Pair(left, right)
+    }
+
+    /**
+     * Plays a weapon sound at a real two-dimensional position inside the
+     * arena, relative to the listener (the player).
+     *
+     * [lateralOffset] is the enemy's sideways offset in metres (positive =
+     * his right, the player's right too) and [depthOffset] is his forward
+     * offset along the depth axis. The stereo pan and the distance
+     * attenuation are both derived from those real numbers, so an enemy
+     * running along the right half of the square is heard on the right, one
+     * running along the left half on the left, and one running straight at
+     * the player stays centred and simply grows louder.
+     */
+    fun playPositionalWeaponSound(
+        key: String,
+        lateralOffset: Float,
+        depthOffset: Float,
+        volume: Float = 1.0f,
+        rate: Float = 1.0f
+    ) {
+        synchronized(weaponAudioLock) {
+            playSound(
+                key,
+                volume = volume,
+                rate = rate,
+                posX = lateralOffset,
+                posY = 0f,
+                posZ = -depthOffset
+            )
+        }
     }
 
     /**
@@ -1016,24 +1055,25 @@ class AudioManager(private val context: Context) {
     }
 
     /**
-     * Makes weapon playback genuinely exclusive and leak free.
+     * Weapon mixing rule.
      *
-     * Every active streamed track, SoundPool stream *and queued request* of
-     * every weapon key is stopped - including the key that is about to start,
-     * so a second shot of the same gun cuts its own previous tail. Walk loops
-     * are then ducked immediately (and stay ducked for [WALK_DUCK_MS]), so a
-     * running fighter can never bleed into a gunshot. Footsteps themselves
-     * are never in this set, so walking never stops a weapon sound.
+     *  - The same weapon fired again interrupts its own previous shot (and
+     *    its queued requests), so a pistol fired twice in a row sounds like
+     *    two pistol shots, not like a growing stack of them.
+     *  - A different weapon is NOT cut: the new shot starts on its own
+     *    stream and the two really mix together, so a sniper rifle fired
+     *    right after a pistol is heard over the pistol's tail, and a sword
+     *    and a knife that strike each other are both audible.
+     *
+     * The two automatic weapons keep their dedicated gapless hold channel and
+     * are never stopped here: a held burst must not go silent between two
+     * bullets.
      */
     private fun enforceWeaponExclusivity(key: String) {
         if (released || key !in WEAPON_SOUND_KEYS) return
-        for (weaponKey in WEAPON_SOUND_KEYS) {
-            // A held automatic burst is never cut by another shot: silencing
-            // it here is exactly what used to leave a silent gap between two
-            // repeats of the MP40 or the machine gun.
-            if (weaponKey in AUTO_LOOP_KEYS) continue
-            stopSound(weaponKey)
-        }
+        if (key in AUTO_LOOP_KEYS) return
+        // Only this key's own tail (and its queued requests) is cut.
+        stopSoundInternal(key)
         walkDuckUntilMs = System.currentTimeMillis() + WALK_DUCK_MS
         duckActiveFootsteps()
     }

@@ -105,16 +105,16 @@ class BattleMenuTest {
     }
 
     @Test
-    fun aFreshBattleStartsInsideTheHundredMeterZoneAtNormalSpeed() {
+    fun aFreshBattleStartsInsideTheTwentyFiveMeterSquareAtNormalSpeed() {
         val state = GameState()
         // Both fighters start on the centre line at opposite edges, one full
         // range apart, and the stored distance agrees with the positions.
-        assertEquals(50f, state.playerX, 0.0001f)
+        assertEquals(12.5f, state.playerX, 0.0001f)
         assertEquals(Arena.MIN, state.playerY, 0.0001f)
-        assertEquals(50f, state.robertX, 0.0001f)
+        assertEquals(12.5f, state.robertX, 0.0001f)
         assertEquals(Arena.MAX, state.robertY, 0.0001f)
-        assertEquals(100f, state.distance, 0.0001f)
-        assertEquals(100f, Arena.SIZE, 0.0001f)
+        assertEquals(25f, state.distance, 0.0001f)
+        assertEquals(25f, Arena.SIZE, 0.0001f)
 
         // The battle always starts at the normal running speed.
         assertEquals(RunSpeed.NORMAL, state.runSpeedLevel)
@@ -132,7 +132,7 @@ class BattleMenuTest {
     }
 
     @Test
-    fun nobodyCanLeaveTheHundredMeterPerimeter() {
+    fun nobodyCanLeaveTheTwentyFiveMeterPerimeter() {
         val state = GameState()
         // Running away from Robert at the far edge is a wall hit: the state
         // never changes and the move is reported as blocked.
@@ -144,13 +144,13 @@ class BattleMenuTest {
         // Running towards Robert really moves and shortens the distance.
         val forward = state.movePlayer(forward = true, metres = 5f)
         assertFalse(forward.blockedByWall)
-        assertEquals(95f, forward.state.distance, 0.001f)
+        assertEquals(20f, forward.state.distance, 0.001f)
         assertEquals(5f, forward.state.playerY, 0.001f)
 
         // The two sideways directions run along the width of the zone.
         val left = state.movePlayerLateral(right = false, metres = 10f)
         assertTrue(MoveDirection.LEFT.lateral)
-        assertEquals(40f, left.state.playerX, 0.001f)
+        assertEquals(2.5f, left.state.playerX, 0.001f)
         // A step longer than the room left is shortened to the wall: the
         // fighter touches it, and the next step is blocked completely.
         val right = left.state.movePlayerLateral(right = true, metres = 200f)

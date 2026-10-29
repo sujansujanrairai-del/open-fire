@@ -46,7 +46,8 @@ class StringsAndGunRulesTest {
             Weapon.SHORT_GUN,
             Weapon.ASSAULT_GUN,
             Weapon.PISTOL,
-            Weapon.SNIPER
+            Weapon.SNIPER,
+            Weapon.GLUE_BREAKER
         )) {
             assertEquals("Weapon '${weapon.id}' must hold six rounds", 6, weapon.magazine)
             assertTrue("Firearms need a reload", weapon.needsReload)
@@ -82,7 +83,7 @@ class StringsAndGunRulesTest {
         // launcher: nothing slipped through untested.
         val counted = listOf(
             Weapon.SHORT_GUN, Weapon.ASSAULT_GUN, Weapon.PISTOL, Weapon.SNIPER,
-            Weapon.AWM, Weapon.MP40, Weapon.MACHINE_GUN
+            Weapon.GLUE_BREAKER, Weapon.AWM, Weapon.MP40, Weapon.MACHINE_GUN
         ) + Weapon.entries.filter { it.melee } +
             Weapon.entries.filter { it.bomb } + Weapon.MISSILE
         assertEquals(Weapon.entries.size, counted.size)
@@ -95,6 +96,7 @@ class StringsAndGunRulesTest {
         assertEquals(550, Weapon.PISTOL.price)
         assertEquals(750, Weapon.SWORD.price)
         assertEquals(1000, Weapon.SNIPER.price)
+        assertEquals(1000, Weapon.GLUE_BREAKER.price)
         assertEquals(3300, Weapon.MISSILE.price)
         assertEquals(900, Weapon.MP40.price)
         assertEquals(1400, Weapon.AWM.price)
@@ -115,8 +117,8 @@ class StringsAndGunRulesTest {
         assertEquals(250, Extension.AUTO_COVER.price)
         assertEquals(250, Extension.AUTO_GLUE_WALL.price)
         assertEquals(300, Extension.MAX_SPEED.price)
-        // The catalogue is complete: 13 weapons, 5 defences, 5 extensions.
-        assertEquals(13, Weapon.entries.size)
+        // The catalogue is complete: 14 weapons, 5 defences, 5 extensions.
+        assertEquals(14, Weapon.entries.size)
         assertEquals(5, DefenceItem.entries.size)
         assertEquals(5, Extension.entries.size)
     }
@@ -154,7 +156,7 @@ class StringsAndGunRulesTest {
         assertTrue("Guide must document the completion sounds", en.contains("level complete sound"))
         assertTrue("Guide must document the reward being spoken", en.contains("exactly what you received"))
         // The arena, the walls and the movement.
-        assertTrue("Guide must document the 100 meter zone", en.contains("real 100 meter zone with four boundaries"))
+        assertTrue("Guide must document the 25 metre square", en.contains("real 25 metre by 25 metre square arena with four boundaries"))
         assertTrue("Guide must document the wall sound", en.contains("the wall impact sound plays"))
         assertTrue("Guide must document the spoken wall", en.contains("the word Wall is spoken"))
         assertTrue("Guide must document Robert turning back", en.contains("turns back towards the open middle"))
@@ -204,13 +206,13 @@ class StringsAndGunRulesTest {
         assertTrue("Guide must document the intercepted blast", en.contains("also plays its explosion sound right there in the air"))
         // Bombs.
         assertTrue("Guide must document the fixed destination", en.contains("lands on a fixed destination"))
-        assertTrue("Guide must document the 50 meter blast", en.contains("inside 50 meters of the destination"))
+        assertTrue("Guide must document the 12 meter blast", en.contains("inside 12 meters of the destination"))
         assertTrue("Guide must document the escape race", en.contains("sprints away from the destination"))
         assertTrue("Guide must document the timer picker", en.contains("Select your timer"))
         assertTrue("Guide must document the timer durations", en.contains("15, 30, 40, 50 and 60 seconds"))
         assertTrue("Guide must document the timer explosion", en.contains("then stops, and the explosion sound plays"))
         assertTrue("Guide must document the thrower death", en.contains("destroys its own thrower"))
-        assertTrue("Guide must document the safe distance", en.contains("at least 50 meters away"))
+        assertTrue("Guide must document the safe distance", en.contains("at least 12 meters away"))
         assertTrue("Guide must document the bomb destination display", en.contains("shown and spoken next to the enemy health"))
         assertTrue("Guide must document Robert's bombs", en.contains("two grenades per game in round three"))
         assertTrue("Guide must document the anti-bomb price", en.contains("anti-bomb explosive defence costs 2600 coins"))
@@ -289,11 +291,12 @@ class StringsAndGunRulesTest {
             // keeps the Latin digits, Nepali spells them in Devanagari, so the
             // numbers are compared in the digits of that language.
             fun number(value: String) = digitsOf(lang, value)
-            assertTrue("'$lang' guide must document the 100 meter zone", text.contains(number("100")))
+            assertTrue("'$lang' guide must document the 25 meter square", text.contains(number("25")))
+            assertTrue("'$lang' guide must document the 12 meter blast", text.contains(number("12")))
             assertTrue("'$lang' guide must document the five wins", text.contains(number("5")))
             assertTrue("'$lang' guide must document the timer bomb", text.contains(number("15")))
             assertTrue("'$lang' guide must document the timer maximum", text.contains(number("60")))
-            assertTrue("'$lang' guide must document the 50 meter blast", text.contains(number("50")))
+            assertTrue("'$lang' guide must document the timer seconds", text.contains(number("50")))
             assertTrue("'$lang' guide must document the 40 percent cap", text.contains(number("40")))
             assertTrue("'$lang' guide must document the AWM band", text.contains(number("20")))
             assertTrue("'$lang' guide must document the AWM damage", text.contains(number("10")))

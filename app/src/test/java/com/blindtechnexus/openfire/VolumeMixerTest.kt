@@ -76,7 +76,9 @@ class VolumeMixerTest {
         assertTrue(VolumeMixer.walkRate(1f) < 1f)
         assertTrue(VolumeMixer.walkRate(14f) > 1f)
         assertEquals(0.6f, VolumeMixer.walkRate(0f), 0.0001f)
-        assertEquals(1.9f, VolumeMixer.walkRate(100f), 0.0001f)
+        // The Max Speed extension pushes a run to the very top of the range.
+        assertEquals(2.0f, VolumeMixer.walkRate(100f), 0.0001f)
+        assertEquals(VolumeMixer.MAX_WALK_RATE, VolumeMixer.walkRate(100f), 0.0001f)
     }
 
     @Test

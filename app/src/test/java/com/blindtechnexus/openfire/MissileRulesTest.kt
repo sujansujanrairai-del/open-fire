@@ -41,12 +41,12 @@ class MissileRulesTest {
     @Test
     fun aTargetWithRoomToRunIsChasedWithALoopingSound() {
         assertTrue(MissileRules.targetWillFlee(5f))
-        assertTrue(MissileRules.targetWillFlee(50f))
-        assertTrue(MissileRules.soundLoops(50f))
+        assertTrue(MissileRules.targetWillFlee(20f))
+        assertTrue(MissileRules.soundLoops(20f))
         // A chase always lasts at least one full play of the sound and
-        // grows with the room the target has left to run.
-        assertTrue(MissileRules.flightMs(50f) > MissileRules.SOUND_DURATION_MS)
-        assertTrue(MissileRules.flightMs(10f) > MissileRules.flightMs(50f))
+        // grows with the room the target has left to run (25 m square).
+        assertTrue(MissileRules.flightMs(20f) > MissileRules.SOUND_DURATION_MS)
+        assertTrue(MissileRules.flightMs(5f) > MissileRules.flightMs(20f))
         assertTrue(MissileRules.flightMs(0f) <= MissileRules.MAX_FLIGHT_MS)
     }
 

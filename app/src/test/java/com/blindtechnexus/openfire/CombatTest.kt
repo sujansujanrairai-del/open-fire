@@ -3,6 +3,7 @@ package com.blindtechnexus.openfire
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DamageTable
 import com.blindtechnexus.openfire.model.DefenceItem
+import com.blindtechnexus.openfire.model.Facing
 import com.blindtechnexus.openfire.model.FireRange
 import com.blindtechnexus.openfire.model.HitZone
 import com.blindtechnexus.openfire.model.RobertRules
@@ -59,6 +60,7 @@ class CombatTest {
             Weapon.ASSAULT_GUN to Triple(8, 13, 18),
             Weapon.PISTOL to Triple(9, 14, 20),
             Weapon.SNIPER to Triple(10, 16, 22),
+            Weapon.GLUE_BREAKER to Triple(4, 7, 10),
             Weapon.SWORD to Triple(10, 16, 22),
             Weapon.AWM to Triple(16, 26, 40),
             Weapon.MP40 to Triple(5, 8, 11),
@@ -196,17 +198,18 @@ class CombatTest {
 
     @Test
     fun theWallToleranceDecidesWhenABoundaryBlocksAMove() {
-        assertEquals(1.5f, Combat.WALL_TOLERANCE_M, 0.0001f)
+        assertEquals(0.75f, Combat.WALL_TOLERANCE_M, 0.0001f)
     }
 
     @Test
-    fun proximityUsesTheOneHundredMeterArena() {
-        assertEquals(0f, Combat.proximityOf(100f), 0.001f)
-        assertEquals(40f, Combat.proximityOf(60f), 0.001f)
-        assertEquals(70f, Combat.proximityOf(30f), 0.001f)
-        assertEquals(90f, Combat.proximityOf(10f), 0.001f)
+    fun proximityUsesTheTwentyFiveMeterSquare() {
+        assertEquals(25f, Combat.MAX_RANGE, 0.001f)
+        assertEquals(0f, Combat.proximityOf(25f), 0.001f)
+        assertEquals(40f, Combat.proximityOf(15f), 0.001f)
+        assertEquals(70f, Combat.proximityOf(7.5f), 0.001f)
+        assertEquals(90f, Combat.proximityOf(2.5f), 0.001f)
         assertEquals(100f, Combat.proximityOf(0f), 0.001f)
-        assertEquals(0f, Combat.proximityOf(150f), 0.001f)
+        assertEquals(0f, Combat.proximityOf(40f), 0.001f)
         assertEquals(100f, Combat.proximityOf(-20f), 0.001f)
     }
 
@@ -215,10 +218,10 @@ class CombatTest {
         for (proximity in listOf(0f, 15f, 40f, 55f, 70f, 95f, 100f)) {
             assertEquals(proximity, Combat.proximityOf(Combat.distanceFor(proximity)), 0.001f)
         }
-        assertEquals(80f, FireRange.FAR.targetDistance, 0.001f)
-        assertEquals(45f, FireRange.MID.targetDistance, 0.001f)
-        assertEquals(20f, FireRange.STRONG.targetDistance, 0.001f)
-        assertEquals(5f, FireRange.CLOSE.targetDistance, 0.001f)
+        assertEquals(20f, FireRange.FAR.targetDistance, 0.001f)
+        assertEquals(11.25f, FireRange.MID.targetDistance, 0.001f)
+        assertEquals(5f, FireRange.STRONG.targetDistance, 0.001f)
+        assertEquals(1.25f, FireRange.CLOSE.targetDistance, 0.001f)
     }
 
     @Test
@@ -230,12 +233,32 @@ class CombatTest {
     }
 
     @Test
-    fun onlySniperShotsAtPointBlankCanBreakAGlueWall() {
-        assertTrue(Combat.canBreakGlueWall(Weapon.SNIPER, 90f))
-        assertTrue(Combat.canBreakGlueWall(Weapon.SNIPER, 100f))
-        assertFalse(Combat.canBreakGlueWall(Weapon.SNIPER, 89.9f))
+    fun onlyTheGlooWallBreakerAtPointBlankCanBreakAGlueWall() {
+        assertTrue(Combat.canBreakGlueWall(Weapon.GLUE_BREAKER, 90f))
+        assertTrue(Combat.canBreakGlueWall(Weapon.GLUE_BREAKER, 100f))
+        assertFalse(Combat.canBreakGlueWall(Weapon.GLUE_BREAKER, 89.9f))
         assertFalse(Combat.canBreakGlueWall(Weapon.ASSAULT_GUN, 100f))
+        // The sniper rifle no longer breaks walls: the breaker replaced it.
+        assertFalse(Combat.canBreakGlueWall(Weapon.SNIPER, 90f))
+        assertFalse(Combat.canBreakGlueWall(Weapon.SNIPER, 100f))
         assertEquals(3, Combat.GLUE_WALL_BREAK_HITS)
+        assertEquals(90f, Combat.GLUE_WALL_BREAK_PROXIMITY, 0.001f)
+    }
+
+    @Test
+    fun aShotOnlyLandsInsideTheAimingCone() {
+        // The enemy really on the right can only be hit after turning right.
+        assertTrue(Combat.isFacingTarget(Facing.RIGHT, 10f, 0f))
+        assertFalse(Combat.isFacingTarget(Facing.FORWARD, 10f, 0f))
+        assertFalse(Combat.isFacingTarget(Facing.LEFT, 10f, 0f))
+        // Point blank is always inside the cone.
+        assertTrue(Combat.isFacingTarget(Facing.FORWARD, 0.5f, 0f))
+        assertEquals("targetRight", Combat.targetBearingKey(Facing.FORWARD, 10f, 0f))
+        assertEquals("targetLeft", Combat.targetBearingKey(Facing.FORWARD, -10f, 0f))
+        assertEquals("targetBehind", Combat.targetBearingKey(Facing.FORWARD, 0f, -10f))
+        assertEquals("targetAhead", Combat.targetBearingKey(Facing.FORWARD, 0f, 10f))
+        assertEquals(Facing.LEFT, Facing.toward(-3f, 1f))
+        assertEquals(Facing.BACKWARD, Facing.toward(0f, -4f))
     }
 
     @Test

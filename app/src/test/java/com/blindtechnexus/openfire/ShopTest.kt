@@ -27,6 +27,7 @@ class ShopTest {
         assertTrue(inventory.ownsWeapon(Weapon.ASSAULT_GUN))
         assertFalse(inventory.ownsWeapon(Weapon.PISTOL))
         assertFalse(inventory.ownsWeapon(Weapon.SNIPER))
+        assertFalse(inventory.ownsWeapon(Weapon.GLUE_BREAKER))
         assertFalse(inventory.ownsWeapon(Weapon.KNIFE))
         assertFalse(inventory.ownsWeapon(Weapon.SWORD))
         assertFalse(inventory.ownsWeapon(Weapon.MISSILE))
@@ -42,6 +43,11 @@ class ShopTest {
         assertEquals(550, Weapon.PISTOL.price)
         assertEquals(750, Weapon.SWORD.price)
         assertEquals(1000, Weapon.SNIPER.price)
+        // The dedicated wall breaker costs the same 1000 coins.
+        assertEquals(1000, Weapon.GLUE_BREAKER.price)
+        assertEquals(6, Weapon.GLUE_BREAKER.magazine)
+        assertEquals("glueBreaker", Weapon.GLUE_BREAKER.id)
+        assertEquals("gunGlueBreaker", Weapon.GLUE_BREAKER.nameKey)
         assertEquals(900, Weapon.MP40.price)
         assertEquals(1400, Weapon.AWM.price)
         assertEquals(1900, Weapon.MACHINE_GUN.price)
@@ -437,7 +443,7 @@ class ShopTest {
         val everything = Inventory(weaponIds = Weapon.entries.map { it.id }.toSet())
         // Round one: the two free guns plus every round-one shop weapon.
         assertEquals(
-            setOf("shortGun", "assaultGun", "pistol", "sniper", "knife", "sword"),
+            setOf("shortGun", "assaultGun", "pistol", "sniper", "glueBreaker", "knife", "sword"),
             everything.battleWeapons(1).map { it.id }.toSet()
         )
         assertTrue(everything.battleWeapons(2).contains(Weapon.MP40))

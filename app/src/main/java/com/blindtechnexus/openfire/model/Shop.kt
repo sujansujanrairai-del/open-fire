@@ -132,6 +132,29 @@ enum class Weapon(
         hitSoundKey = "gunHit",
         missSoundKey = "click"
     ),
+    /**
+     * The Gloo Wall Breaker: the one and only gun that can destroy a gloo
+     * wall. Three consecutive shots from the 90%-100% band break any wall;
+     * every other weapon - the sniper rifle included - bounces off it.
+     *
+     * It is a light utility firearm (it is bought to break barriers, not to
+     * win a straight firefight), it costs 1000 coins and it is available
+     * from round one.
+     */
+    GLUE_BREAKER(
+        id = "glueBreaker",
+        nameKey = "gunGlueBreaker",
+        powerPercent = 4,
+        closeRangePowerPercent = 10,
+        magazine = 6,
+        price = 1000,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "glueWallBreaker",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "gunHit",
+        missSoundKey = "click"
+    ),
     KNIFE(
         id = "knife",
         nameKey = "gunKnife",
@@ -181,7 +204,9 @@ enum class Weapon(
         unlockRound = 2,
         issuedFreeFromRound = 2,
         autoFire = true,
-        burstIntervalMs = 500L,
+        // A submachine gun really sprays: five bullets a second while the
+        // trigger is held.
+        burstIntervalMs = 200L,
         maxBurstMs = 4_000L
     ),
     /**
@@ -227,7 +252,9 @@ enum class Weapon(
         missSoundKey = "click",
         unlockRound = 4,
         autoFire = true,
-        burstIntervalMs = 400L,
+        // The machine gun is the fastest gun of the game: more than eight
+        // bullets a second while the trigger is held.
+        burstIntervalMs = 120L,
         maxBurstMs = 5_000L
     ),
     GRENADE(
@@ -437,6 +464,16 @@ enum class Extension(
     companion object {
         /** Extra running speed of the Max Speed extension, as a multiplier. */
         const val MAX_SPEED_GAIN = 1.30f
+
+        /**
+         * The multiplier Max Speed gives the FAST running level.
+         *
+         * While the extension is bought and enabled the fast level is not
+         * merely 30 percent quicker: it is pushed to the absolute maximum the
+         * game allows, so the character really runs as fast as possible and
+         * the footstep sound follows at the top of its playback range.
+         */
+        const val MAX_SPEED_FAST_GAIN = 2.20f
 
         fun fromId(id: String?): Extension? = Extension.entries.firstOrNull { it.id == id }
     }

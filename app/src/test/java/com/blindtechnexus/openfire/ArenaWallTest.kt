@@ -46,19 +46,20 @@ class ArenaWallTest {
     )
 
     /** Step sizes from a careful walk up to a round five sprint. */
-    private val stepSizes = listOf(1f, 4f, 8f, 14.4f, 24f)
+    private val stepSizes = listOf(0.5f, 1f, 2f, 3.6f, 6f)
 
     @Test
     fun aPredictedStepKnowsWhenTheWallIsInTheWay() {
+        val mid = Arena.SIZE / 2f
         // Walking straight at the far boundary from two metres away.
-        assertTrue(Arena.stepHitsWall(50f, 98f, 0f, 1f, 10f))
+        assertTrue(Arena.stepHitsWall(mid, Arena.SIZE - 2f, 0f, 1f, 10f))
         // The same walk in open ground does not.
-        assertFalse(Arena.stepHitsWall(50f, 50f, 0f, 1f, 10f))
+        assertFalse(Arena.stepHitsWall(mid, mid, 0f, 1f, 10f))
         // The safety margin keeps him off the boundary before he touches it.
-        assertTrue(Arena.stepHitsWall(50f, 90f, 0f, 1f, 8f, Arena.ROBERT_WALL_MARGIN_M))
-        assertFalse(Arena.stepHitsWall(50f, 90f, 0f, 1f, 8f, 0f))
-        assertTrue(Arena.nearWall(50f, 99f, 2f))
-        assertFalse(Arena.nearWall(50f, 50f, 2f))
+        assertTrue(Arena.stepHitsWall(mid, Arena.SIZE - 5f, 0f, 1f, 8f, Arena.ROBERT_WALL_MARGIN_M))
+        assertFalse(Arena.stepHitsWall(mid, Arena.SIZE - 5f, 0f, 1f, 4f, 0f))
+        assertTrue(Arena.nearWall(mid, Arena.SIZE - 1f, 2f))
+        assertFalse(Arena.nearWall(mid, mid, 2f))
     }
 
     @Test
@@ -99,7 +100,7 @@ class ArenaWallTest {
         var previous = Arena.SIZE to Arena.SIZE
         var moved = 0
         repeat(40) {
-            val move = state.moveRobertSafely(0f, 1f, 14.4f)
+            val move = state.moveRobertSafely(0f, 1f, 3.6f)
             assertFalse(move.blockedByWall)
             assertFalse(move.touchedWall)
             state = move.state
@@ -117,8 +118,8 @@ class ArenaWallTest {
         // and always tries to walk straight at him: he must still get close,
         // walking around the last metres instead of grinding into them.
         var state = GameState(
-            playerX = 2f,
-            playerY = 2f,
+            playerX = 1f,
+            playerY = 1f,
             robertX = Arena.SIZE,
             robertY = Arena.SIZE
         )
@@ -134,14 +135,14 @@ class ArenaWallTest {
             val move = state.moveRobertSafely(
                 state.playerX - state.robertX,
                 state.playerY - state.robertY,
-                14.4f
+                3.6f
             )
             assertFalse(move.blockedByWall)
             assertFalse(move.touchedWall)
             state = move.state
             closest = minOf(closest, gap())
         }
-        assertTrue("Robert never closed in ($closest)", closest < 15f)
-        assertTrue("Robert did not approach at all ($closest)", closest < start - 20f)
+        assertTrue("Robert never closed in ($closest)", closest < 4f)
+        assertTrue("Robert did not approach at all ($closest)", closest < start - 15f)
     }
 }

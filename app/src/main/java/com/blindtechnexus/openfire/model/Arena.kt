@@ -7,12 +7,12 @@ import kotlin.math.max
 import kotlin.math.sin
 
 /**
- * One movement attempt inside the 100 m battle zone.
+ * One movement attempt inside the 25 m square battle zone.
  *
  * [blockedByWall] is true when the boundary stopped the fighter completely
  * (nothing moved at all); [touchedWall] is true when the fighter still moved
  * but the boundary shortened the step. Both cases keep the fighter inside
- * the zone: nobody ever runs beyond the 100 m perimeter.
+ * the zone: nobody ever runs beyond the 25 m perimeter.
  */
 data class ArenaMove(
     val x: Float,
@@ -27,7 +27,7 @@ data class ArenaMove(
 
 /**
  * The battle zone: a square perimeter of exactly [Combat.MAX_RANGE] metres
- * on every side (100 m by 100 m).
+ * on every side (25 m by 25 m).
  *
  * Both fighters live inside this zone. Their real two-dimensional positions
  * decide the fighting distance, so every existing proximity rule keeps
@@ -60,13 +60,30 @@ object Arena {
      * controlled by hand, can ever really touch a wall - and only the player
      * therefore hears the wall impact sound.
      */
-    const val ROBERT_WALL_MARGIN_M = 2.0f
+    const val ROBERT_WALL_MARGIN_M = 1.0f
 
-    /** Both fighters start on the centre line, at opposite edges. */
+    /**
+     * Both fighters start on the centre line, at opposite edges of the
+     * square, exactly one full side apart (25 m).
+     */
     val PLAYER_START_X = SIZE / 2f
     val PLAYER_START_Y = MIN
     val ROBERT_START_X = SIZE / 2f
     val ROBERT_START_Y = MAX
+
+    /** True when a target offset puts the enemy to the right of the player. */
+    fun isToTheRight(dx: Float): Boolean = dx > 0f
+
+    /**
+     * Sideways offset of a target from a listener, in metres: positive means
+     * the target is on the listener's right, negative on the left. This is
+     * the number the stereo panner uses, so an enemy running along the right
+     * half of the square is really heard on the right ear.
+     */
+    fun lateralOffset(fromX: Float, toX: Float): Float = clampX(toX) - clampX(fromX)
+
+    /** Forward offset of a target from a listener, in metres (depth axis). */
+    fun depthOffset(fromY: Float, toY: Float): Float = clampY(toY) - clampY(fromY)
 
     fun clampX(value: Float): Float =
         if (value.isNaN()) PLAYER_START_X else value.coerceIn(MIN, MAX)
@@ -348,29 +365,73 @@ data class FighterMove(
         get() = !blockedByWall
 }
 
-/** Runs the player forward (towards Robert) or backward (away from him). */
+/**
+ * Runs the player forward (towards Robert) or backward (away from him).
+ *
+ * Running forward always turns the player towards the enemy, running
+ * backward turns him away, and the new facing is stored in the state so the
+ * next shot is judged against the direction he is really aiming at.
+ */
 fun GameState.movePlayer(forward: Boolean, metres: Float): FighterMove {
     val move = if (forward) {
         Arena.moveToward(playerX, playerY, robertX, robertY, metres)
     } else {
         Arena.moveAway(playerX, playerY, robertX, robertY, metres)
     }
+    val facing = playerFacingNow
+    val turned = if (forward) {
+        // Facing the enemy: the direction that really points at him.
+        Facing.toward(robertX - playerX, robertY - playerY)
+    } else {
+        // Backing away: he is now behind the player.
+        Facing.toward(playerX - robertX, playerY - robertY)
+    }
     return FighterMove(
-        state = withPositions(playerX = move.x, playerY = move.y),
+        state = withPositions(playerX = move.x, playerY = move.y)
+            .copy(playerFacing = (if (move.moved) turned else facing).id),
         blockedByWall = move.blockedByWall,
         touchedWall = move.touchedWall
     )
 }
 
-/** Runs the player left or right along the width of the zone. */
+/**
+ * Runs the player left or right along the width of the zone. The player
+ * really turns that way: an enemy standing to the right can only be hit
+ * after running right.
+ */
 fun GameState.movePlayerLateral(right: Boolean, metres: Float): FighterMove {
     val move = Arena.moveLateral(playerX, playerY, right, metres)
     return FighterMove(
-        state = withPositions(playerX = move.x, playerY = move.y),
+        state = withPositions(playerX = move.x, playerY = move.y)
+            .copy(playerFacing = if (right) Facing.RIGHT.id else Facing.LEFT.id),
         blockedByWall = move.blockedByWall,
         touchedWall = move.touchedWall
     )
 }
+
+/** The player's current facing direction. */
+val GameState.playerFacingNow: Facing
+    get() = Facing.fromId(playerFacing)
+
+/** Offset of Robert from the player, in metres, on the lateral (X) axis. */
+val GameState.robertOffsetX: Float
+    get() = robertX - playerX
+
+/** Offset of Robert from the player, in metres, on the depth (Y) axis. */
+val GameState.robertOffsetY: Float
+    get() = robertY - playerY
+
+// The aiming-cone check itself lives on GameState as `playerFacingRobert`,
+// so every caller reads the same member whether it comes from the arena
+// helpers or from the state model.
+
+/**
+ * Stereo material for the enemy's sounds: the lateral offset and the depth
+ * offset the 3D mixer needs, so an enemy running along the right half of the
+ * square is heard on the right and an enemy running straight at the player
+ * stays centred.
+ */
+fun GameState.robertAudioOffset(): Pair<Float, Float> = Pair(robertOffsetX, robertOffsetY)
 
 /**
  * Places Robert exactly [distance] metres from the player, inside the zone.
