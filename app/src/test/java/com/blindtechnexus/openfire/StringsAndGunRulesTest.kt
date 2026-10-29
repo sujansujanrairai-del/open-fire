@@ -117,8 +117,8 @@ class StringsAndGunRulesTest {
         assertEquals(250, Extension.AUTO_COVER.price)
         assertEquals(250, Extension.AUTO_GLUE_WALL.price)
         assertEquals(300, Extension.MAX_SPEED.price)
-        // The catalogue is complete: 13 weapons, 5 defences, 5 extensions.
-        assertEquals(13, Weapon.entries.size)
+        // The catalogue is complete: 14 weapons, 5 defences, 5 extensions.
+        assertEquals(14, Weapon.entries.size)
         assertEquals(5, DefenceItem.entries.size)
         assertEquals(5, Extension.entries.size)
     }
@@ -291,11 +291,12 @@ class StringsAndGunRulesTest {
             // keeps the Latin digits, Nepali spells them in Devanagari, so the
             // numbers are compared in the digits of that language.
             fun number(value: String) = digitsOf(lang, value)
-            assertTrue("'$lang' guide must document the 100 meter zone", text.contains(number("100")))
+            assertTrue("'$lang' guide must document the 25 meter square", text.contains(number("25")))
+            assertTrue("'$lang' guide must document the 12 meter blast", text.contains(number("12")))
             assertTrue("'$lang' guide must document the five wins", text.contains(number("5")))
             assertTrue("'$lang' guide must document the timer bomb", text.contains(number("15")))
             assertTrue("'$lang' guide must document the timer maximum", text.contains(number("60")))
-            assertTrue("'$lang' guide must document the 50 meter blast", text.contains(number("50")))
+            assertTrue("'$lang' guide must document the timer seconds", text.contains(number("50")))
             assertTrue("'$lang' guide must document the 40 percent cap", text.contains(number("40")))
             assertTrue("'$lang' guide must document the AWM band", text.contains(number("20")))
             assertTrue("'$lang' guide must document the AWM damage", text.contains(number("10")))

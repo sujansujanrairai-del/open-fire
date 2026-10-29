@@ -548,7 +548,9 @@ class RobertTest {
         assertFalse(BombRules.timerBombKillsThrower(24f))
         assertTrue(BombRules.mustEscape(6f))
         assertFalse(BombRules.mustEscape(24f))
-        assertEquals(80f, BombRules.escapeDistance(30f), 0.0001f)
+        // The escape target never leaves the 25 m square.
+        assertEquals(22f, BombRules.escapeDistance(10f), 0.0001f)
+        assertEquals(Arena.SIZE, BombRules.escapeDistance(20f), 0.0001f)
     }
 
     @Test

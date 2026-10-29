@@ -421,9 +421,9 @@ val GameState.robertOffsetX: Float
 val GameState.robertOffsetY: Float
     get() = robertY - playerY
 
-/** True when Robert stands inside the player's aiming cone right now. */
-val GameState.playerFacingRobert: Boolean
-    get() = Combat.isFacingTarget(playerFacingNow, robertOffsetX, robertOffsetY)
+// The aiming-cone check itself lives on GameState as `playerFacingRobert`,
+// so every caller reads the same member whether it comes from the arena
+// helpers or from the state model.
 
 /**
  * Stereo material for the enemy's sounds: the lateral offset and the depth
