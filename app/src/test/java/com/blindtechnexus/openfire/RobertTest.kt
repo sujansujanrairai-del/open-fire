@@ -291,22 +291,25 @@ class RobertTest {
     }
 
     @Test
-    fun retreatTakesPriorityOverFiringAndProtectedWallIsSituational() {
+    fun retreatRequiresRealDamageAndProtectionTakesPriority() {
         fun retreat(hits: Int = 0, landed: Int = 0, consecutive: Int = 0,
-                    shots: Int = 0, weakened: Boolean = false, enemyWall: Boolean = false,
-                    playerWall: Boolean = false, breaker: Boolean = false, proximity: Float = 95f) =
+                    shots: Int = 0, weakened: Boolean = false, protected: Boolean = false) =
             RobertRules.shouldRetreatFromFight(hits, landed, consecutive, shots, weakened,
-                enemyWall, playerWall, breaker, proximity)
-        assertTrue(retreat(hits = 1, landed = 0))
-        assertTrue(retreat(hits = 2, landed = 1, enemyWall = true))
-        assertTrue(retreat(consecutive = 2, enemyWall = true))
-        assertTrue(retreat(shots = 2, weakened = true))
-        assertTrue(retreat(shots = 3))
-        assertFalse(retreat(shots = 3, enemyWall = true))
-        assertTrue(retreat(shots = 3, enemyWall = true, proximity = 50f))
-        assertTrue(retreat(enemyWall = true, playerWall = true, breaker = true))
-        assertFalse(retreat(enemyWall = true, playerWall = true, breaker = false))
-        assertFalse(retreat(enemyWall = false, playerWall = true, breaker = true))
+                protected, false, false, 50f)
+        assertFalse(retreat(hits = 1))
+        assertTrue(retreat(hits = 2, landed = 1))
+        assertTrue(retreat(consecutive = 2))
+        assertTrue(retreat(shots = 3, weakened = true))
+        assertFalse(retreat(shots = 3))
+        assertFalse(retreat(hits = 2, landed = 1, protected = true))
+        assertFalse(retreat(shots = 4, weakened = true, protected = true))
+    }
+
+    @Test
+    fun actualShotCadenceDependsOnGlooWall() {
+        val random = Random(61)
+        assertEquals(setOf(1500L), (1..100).map { RobertRules.shotInterval(true, random) }.toSet())
+        assertEquals(setOf(1500L, 2000L), (1..100).map { RobertRules.shotInterval(false, random) }.toSet())
     }
 
     @Test

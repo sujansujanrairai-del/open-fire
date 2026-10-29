@@ -1762,8 +1762,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (state.playerHp <= 0 || state.robertHp <= 0) return
         if (state.missileInFlight || state.bombInFlight) return
         val hasBreaker = robertHasBreaker(state)
-        val shouldAvoid = RobertRules.shouldAvoidGlueWall(state.glueWallActive, hasBreaker) ||
-            (state.glueWallActive && state.robertGlueWallActive && _inventory.value.ownsWeapon(Weapon.GLUE_BREAKER))
+        val shouldAvoid = RobertRules.shouldAvoidGlueWall(state.glueWallActive, hasBreaker) && !state.robertHasActiveDefence
         val avoiding = state.robertState == "avoid"
         if (shouldAvoid && !avoiding && state.robertState != "turnBack") {
             _gameState.update {
@@ -1803,11 +1802,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun robertFireInterval(): Long {
         if (_gameState.value.timerSelectActive) return TIMER_SELECTION_HOLD_MS
         val remaining = robertNextShotAtMs - android.os.SystemClock.elapsedRealtime()
-        return if (remaining > 0) remaining else RobertRules.normalTacticalInterval(Random)
+        return if (remaining > 0) remaining else FLEE_TICK_MS
     }
 
     private fun markRobertShot() {
-        robertNextShotAtMs = android.os.SystemClock.elapsedRealtime() + RobertRules.normalTacticalInterval(Random)
+        robertNextShotAtMs = android.os.SystemClock.elapsedRealtime() +
+            RobertRules.shotInterval(_gameState.value.robertGlueWallActive, Random)
     }
 
     /** The player's health as a fraction of their own maximum. */
@@ -1832,7 +1832,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         consecutiveHits = state.robertConsecutiveHits,
         playerBurstShots = state.playerBurstShots,
         enemyHealthDropping = robertHealthDropping(state),
-        enemyWall = state.robertGlueWallActive,
+        enemyWall = state.robertHasActiveDefence,
         playerWall = state.glueWallActive,
         playerHasBreaker = _inventory.value.ownsWeapon(Weapon.GLUE_BREAKER),
         proximityPercent = Combat.proximityOf(state.distance)
@@ -1848,24 +1848,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun registerPlayerBurstShot() {
         val now = System.currentTimeMillis()
         lastPlayerShotAtMs = now
-        var shouldRetreat = false
         _gameState.update { state ->
-            val fresh = now - playerBurstStartedAtMs > RobertRules.PLAYER_BURST_WINDOW_MS
+            val fresh = playerBurstStartedAtMs == 0L || now - playerBurstStartedAtMs > RobertRules.PLAYER_BURST_WINDOW_MS
             if (fresh) playerBurstStartedAtMs = now
-            val newShots = if (fresh) 1 else state.playerBurstShots + 1
-
             state.copy(
-                playerBurstShots = newShots,
+                playerBurstShots = if (fresh) 1 else state.playerBurstShots + 1,
                 playerBurstRobertHp = if (fresh) state.robertHp else state.playerBurstRobertHp,
                 playerBurstPlayerHp = if (fresh) state.playerHp else state.playerBurstPlayerHp
             )
-        }
-        shouldRetreat = shouldRobertRetreat(_gameState.value)
-        if (shouldRetreat) {
-            val state = _gameState.value
-            if (state.robertState == "advance" || state.robertState == "flank") {
-                beginRobertSprint()
-            }
         }
     }
 
@@ -1904,69 +1894,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val mirrorDuel = playerFiringNow()
-
-        val situation = RobertRules.assessSituation(
-            robertHp = state.robertHp,
-            robertMaxHp = state.robertMaxHp,
-            playerHp = state.playerHp,
-            playerMaxHp = state.playerMaxHp,
-            playerWeaponDamaged = isPlayerWeaponLocked(state)
-        )
-        // Only a nearby enemy protected by his gloo wall may sustain fire.
-        val playerWeakFraction = playerHpFraction(state)
-        val pressing = state.robertGlueWallActive && !state.playerHasActiveDefence &&
-            Combat.proximityOf(state.distance) >= Combat.STRONG_ZONE_MAX &&
-            situation != RobertRules.CombatSituation.DISADVANTAGE
-
-        // Hit-exchange rule: as soon as the player lands more hits than
-        // Robert in this exchange (two against one, for example) Robert runs
-        // away immediately. A protected Robert is the one exception - he
-        // keeps firing from behind his barrier.
-        if (!pressing && (
-                RobertRules.shouldFleeFight(state.fightPlayerHits, state.fightRobertHits) ||
-                    (situation == RobertRules.CombatSituation.DISADVANTAGE &&
-                        (state.robertState == "advance" || state.robertState == "flank"))
-            )
-        ) {
-            beginRobertSprint()
-            return
-        }
-
-        // A finished burst is never extended: he fired one or two shots, so
-        // now he pauses and very often repositions instead of shooting again.
-        // Only the pressing situations are allowed to fire continuously.
-        if (!pressing &&
-            RobertRules.burstFinished(state.robertSuccessiveShots, state.robertBurstLimit)
-        ) {
-            _gameState.update {
-                it.copy(
-                    robertSuccessiveShots = 0,
-                    robertBurstLimit = RobertRules.burstLimit(Random)
-                )
-            }
-            val fresh = _gameState.value
-            if (RobertRules.shouldRunAfterBurst(Random) &&
-                (fresh.robertState == "advance" || fresh.robertState == "flank")
-            ) {
-                beginRobertSprint()
-            }
-            return
-        }
-
-        // He runs as readily as he shoots: unless the player is pinned down,
-        // a good share of his decisions is a reposition instead of a shot.
-        if (!pressing && RobertRules.shouldRepositionInsteadOfFiring(
-                situation = situation,
-                playerWeaponDamaged = isPlayerWeaponLocked(state),
-                playerHpFraction = playerWeakFraction,
-                random = Random
-            )
-        ) {
-            if (state.robertState == "advance" || state.robertState == "flank") {
-                beginRobertSprint()
-                return
-            }
-        }
 
         // Round four and later he may spend his one missile power, but only
         // as a desperation weapon while he is clearly losing.
@@ -2026,24 +1953,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 state = _gameState.value
             }
         }
-        // Smart weapon selection based on health bands: 40-70%, 90-100%, 20-40%
-        // If enemy feels unsafe (low health or heavy damage streak) he retreats.
-        if ( RobertRules.shouldRetreatUnsafe(
-                state.robertHp,
-                state.robertMaxHp,
-                state.robertConsecutiveHits,
-                proximityNow
-            )
-        ) {
-            if (state.robertState == "advance" || state.robertState == "flank") {
-                beginRobertSprint()
-                return
-            }
-        }
         // The player raised a gloo wall and Robert has no Gloo Wall Breaker
         // charge left: he does not trade shots, he runs away and stays away
         // until the wall drops.
-        if (state.glueWallActive) {
+        if (state.glueWallActive && !state.robertHasActiveDefence) {
             if (state.robertState != "avoid") {
                 _gameState.update { it.copy(robertState = "avoid") }
                 planRobertStep(140L)
@@ -2091,7 +2004,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             // Robert reloads silently: only the player ever hears the
             // mechanical gun-switch/reload recording.
             setLog(t("robertReloaded"))
-            return
+            state = _gameState.value
         }
 
         // A melee attack must not play its swing/switch sound before the
@@ -2313,10 +2226,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             deployRobertDefence(DefenceItem.GLUE_WALL)
         }
         val afterWall = _gameState.value
-        if (afterWall.robertGlueWallActive && _inventory.value.ownsWeapon(Weapon.GLUE_BREAKER)) {
-            ensureGlueWallAvoidance()
-            return
-        }
         if (afterWall.robertGlueBreakers > 0) {
             _gameState.update {
                 it.copy(
@@ -2460,17 +2369,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun robertAfterHit(): String {
         val state = _gameState.value
         if (state.robertHp <= 0) return ""
-        val retreat = shouldRobertRetreat(state) || RobertRules.shouldRetreatUnsafe(
-            state.robertHp, state.robertMaxHp, state.robertConsecutiveHits,
-            Combat.proximityOf(state.distance)
-        )
-        if (retreat && state.robertState in setOf("advance", "flank")) beginRobertSprint()
         if (state.robertHp >= RobertRules.DEFENCE_THRESHOLD_HP || state.robertConsecutiveHits >= 2) {
             _gameState.update { it.copy(robertDefenceArmed = true) }
         }
         val defence = robertPanicDefence(_gameState.value)?.let { deployRobertDefence(it) }.orEmpty()
+        val after = _gameState.value
+        val retreat = shouldRobertRetreat(after)
+        if (retreat && after.robertState in setOf("advance", "flank")) beginRobertSprint()
         ensureGlueWallAvoidance()
-        return (if (retreat) " ${t("robertFled")}" else "") + defence
+        return (if (retreat && after.robertState != "retreat") " ${t("robertFled")}" else "") + defence
     }
 
     // ---------------------------------------------------------------------

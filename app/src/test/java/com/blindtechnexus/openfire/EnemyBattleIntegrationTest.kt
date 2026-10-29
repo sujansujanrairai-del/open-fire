@@ -69,7 +69,7 @@ class EnemyBattleIntegrationTest {
     }
 
     @Test
-    fun wallAndBreakerThreatOverridesArmedEnemyBreaker() {
+    fun protectedEnemyStandsGroundAgainstBreakerThreat() {
         val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
         try {
             val state = flow<GameState>(vm, "_gameState")
@@ -78,13 +78,61 @@ class EnemyBattleIntegrationTest {
             state.value = GameState(robertHp = 149, robertMaxHp = 500,
                 glueWallActive = true, robertGlueWallActive = true, robertGlueBreakers = 1)
             invoke(vm, "onPlayerGlueWallRaised")
-            assertEquals("avoid", state.value.robertState)
+            assertEquals("advance", state.value.robertState)
             assertEquals(1, state.value.robertGlueBreakers)
-            assertFalse(state.value.robertBreakerArmed)
+            assertTrue(state.value.robertBreakerArmed)
         } finally {
             vm.onAppPaused()
             vm.audioManager.release()
             vm.ttsManager.shutdown()
         }
     }
+    @Test
+    fun realAttacksKeepFiringAndRespectDeadlineEvenAfterReload() {
+        val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
+        try {
+            val state = flow<GameState>(vm, "_gameState")
+            flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            state.value = GameState(distance = 5f, robertGlueWallActive = true,
+                robertWeapons = listOf(Weapon.ASSAULT_GUN.id, Weapon.SHORT_GUN.id, Weapon.SNIPER.id),
+                robertAmmo = listOf(0, 0, 0), robertDamaged = listOf(false, false, false))
+            val deadline = GameViewModel::class.java.getDeclaredField("robertNextShotAtMs").apply { isAccessible = true }
+            repeat(6) { index ->
+                deadline.setLong(vm, 0L)
+                invoke(vm, "robertAttack")
+                assertEquals(index + 1, state.value.robertShots)
+                assertTrue(deadline.getLong(vm) > android.os.SystemClock.elapsedRealtime())
+                invoke(vm, "robertAttack")
+                assertEquals(index + 1, state.value.robertShots)
+            }
+        } finally {
+            vm.onAppPaused()
+            vm.audioManager.release()
+            vm.ttsManager.shutdown()
+        }
+    }
+
+    @Test
+    fun hitExchangeRetreatsImmediatelyButCoverKeepsEnemyFighting() {
+        val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
+        try {
+            val state = flow<GameState>(vm, "_gameState")
+            flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            val initial = GameState(distance = 5f, robertHp = 180, fightPlayerHits = 2,
+                fightRobertHits = 1, robertConsecutiveHits = 1)
+            state.value = initial
+            invoke(vm, "robertAfterHit")
+            assertEquals("retreat", state.value.robertState)
+            for (wall in listOf(false, true)) {
+                state.value = initial.copy(robertCoverActive = !wall, robertGlueWallActive = wall)
+                invoke(vm, "robertAfterHit")
+                assertEquals("advance", state.value.robertState)
+            }
+        } finally {
+            vm.onAppPaused()
+            vm.audioManager.release()
+            vm.ttsManager.shutdown()
+        }
+    }
+
 }
