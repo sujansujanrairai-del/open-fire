@@ -171,7 +171,8 @@ class GameplayUpgradeTest {
     fun weaponSoundsAreExclusiveAndNoStrayAliasesRemain() {
         for (key in listOf(
             "assault", "shortGun", "pistol", "sniperRifle", "awm",
-            "mp40", "machineGun", "knifeSwish", "knifeMiss", "swordGlide", "swordMiss"
+            "mp40", "machineGun", "knifeSwish", "knifeMiss", "swordGlide", "swordMiss",
+            "glueWallBreaker"
         )) {
             assertTrue("$key must be exclusive", key in AudioManager.WEAPON_SOUND_KEYS)
         }

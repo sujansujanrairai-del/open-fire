@@ -97,7 +97,7 @@ object GestureRouter {
 }
 
 /**
- * The four running directions of the 100 m battle zone.
+ * The four running directions of the 25 m square battle zone.
  *
  * The top and bottom portions of the battle screen run towards and away from
  * the enemy; the center portion is split in half, so holding its left half
@@ -150,11 +150,15 @@ object RunPressure {
      * The player's walking speed in metres per second at the default press.
      * Every running speed level is expressed as a multiple of it, which is
      * what lets the fast level match Robert's real fleeing speed exactly.
+     *
+     * It is tuned for the 25 m square arena: a normal run crosses the whole
+     * battlefield in about ten seconds, a fast run in about three, and the
+     * Max Speed extension can push it under two.
      */
-    const val BASE_SPEED_MPS = 6.5f
+    const val BASE_SPEED_MPS = 2.6f
 
     /** One movement step per 100 ms tick at the default speed. */
-    const val BASE_STEP_METRES = 0.65f
+    const val BASE_STEP_METRES = 0.26f
 
     /**
      * Maps a raw touch pressure (0..1 on most devices, sometimes larger)

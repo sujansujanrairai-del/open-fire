@@ -238,12 +238,13 @@ class RoundRulesTest {
     }
 
     @Test
-    fun onlyOneWeaponSoundCanPlayAndFootstepsStaySeparate() {
+    fun everyWeaponOwnsItsOwnChannelAndFootstepsStaySeparate() {
         val keys = AudioManager.WEAPON_SOUND_KEYS
-        // Every weapon of the game is part of the exclusive channel.
+        // Every weapon of the game is part of the weapon channel set: only
+        // the same key is ever cut, so two different weapons really mix.
         for (weaponKey in listOf(
             "assault", "shortGun", "pistol", "sniperRifle", "awm", "mp40", "machineGun",
-            "knifeSwish", "swordGlide"
+            "knifeSwish", "swordGlide", "glueWallBreaker"
         )) {
             assertTrue("$weaponKey must be an exclusive weapon sound", weaponKey in keys)
         }

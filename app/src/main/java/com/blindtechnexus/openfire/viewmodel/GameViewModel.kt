@@ -16,6 +16,7 @@ import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DamageTable
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
+import com.blindtechnexus.openfire.model.Facing
 import com.blindtechnexus.openfire.model.FireRange
 import com.blindtechnexus.openfire.model.GameAction
 import com.blindtechnexus.openfire.model.GameSettings
@@ -169,9 +170,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         get() = RobertRules.profile(
             round = _stats.value.round,
             level = _stats.value.level,
-            // Round one mirrors the player's sniper rifle, and the enemy may
-            // answer a player gloo wall with one of his own.
-            playerOwnsSniper = _inventory.value.ownsWeapon(Weapon.SNIPER),
+            // The pistol is mirrored: the moment the player owns one, the
+            // enemy carries one too. The sniper rifle is never mirrored any
+            // more - a gloo wall is destroyed by the Gloo Wall Breaker, not
+            // by a sniper rifle.
+            playerOwnsPistol = _inventory.value.ownsWeapon(Weapon.PISTOL),
             playerGlueWalls = _inventory.value.glueWalls
         )
 
@@ -318,9 +321,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         volume: Float = 1.0f,
         posX: Float = 0f,
         posY: Float = 0f,
-        posZ: Float = 0f
+        posZ: Float = 0f,
+        rate: Float = 1.0f
     ) {
-        audioManager.playSound(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
+        audioManager.playSound(
+            key,
+            volume = volume,
+            rate = rate,
+            posX = posX,
+            posY = posY,
+            posZ = posZ
+        )
     }
 
     private fun toast(text: String) {
@@ -883,7 +894,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val profile = RobertRules.profile(
             round = round,
             level = level,
-            playerOwnsSniper = _inventory.value.ownsWeapon(Weapon.SNIPER),
+            playerOwnsPistol = _inventory.value.ownsWeapon(Weapon.PISTOL),
             playerGlueWalls = _inventory.value.glueWalls
         )
         val hp = Progression.hpFor(round, level)
@@ -910,12 +921,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             damaged = owned.map { false },
             distance = Combat.MAX_RANGE,
             // Both fighters start on the centre line at opposite edges of the
-            // 100 m zone, exactly one full range apart.
+            // 25 m square, exactly one full side apart.
             playerX = Arena.PLAYER_START_X,
             playerY = Arena.PLAYER_START_Y,
             robertX = Arena.ROBERT_START_X,
             robertY = Arena.ROBERT_START_Y,
             runSpeed = RunSpeed.fromId(_inventory.value.lastRunSpeedId).id,
+            // The player starts aiming into the arena, towards Robert.
+            playerFacing = Facing.FORWARD.id,
             coverActive = false,
             coverHits = 0,
             glueWallActive = false,
@@ -924,6 +937,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertCoverHits = 0,
             robertGlueWallActive = false,
             robertGlueWallProgress = 0,
+            // The enemy always carries his Gloo Wall Breaker charges: round
+            // one allows one use, round two and later two uses. He only ever
+            // spends one when the player raises a gloo wall.
+            robertGlueBreakers = RobertRules.glueWallBreakerLimitForRound(round),
+            robertBreakerArmed = false,
+            robertBreakerHits = 0,
             robertWeapons = profile.weapons.map { it.id },
             robertWeaponIndex = 0,
             robertAmmo = profile.weapons.map { it.magazine },
@@ -1066,18 +1085,69 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         RobertRules.enemyFastSpeedMps(_gameState.value.round)
 
     /**
-     * The Max Speed extension: while it is owned and enabled every running
-     * direction is 30 percent faster than the level chosen with the
-     * three-finger gesture. It is exactly 1.0 while it is missing, disabled
-     * or removed, so the three running levels stay untouched for everybody
-     * who does not own it.
+     * Robert's real 3D offsets from the player, in metres: the sideways
+     * (lateral) offset first, then the depth offset along the forward axis.
+     * Everything he does is mixed from these two numbers, so the stereo image
+     * of the square arena is always the truth.
      */
-    private fun maxSpeedFactor(): Float =
-        if (_inventory.value.extensionEnabled(Extension.MAX_SPEED)) {
-            Extension.MAX_SPEED_GAIN
+    private fun enemyAudioOffsets(): Pair<Float, Float> {
+        val state = _gameState.value
+        return Pair(state.robertX - state.playerX, state.robertY - state.playerY)
+    }
+
+    /**
+     * Plays any enemy sound at his real position inside the square arena:
+     * on the right ear when he really stands on the right, on the left ear
+     * when he stands on the left, quieter as he moves away and louder as he
+     * closes in.
+     */
+    private fun playEnemySound(key: String, volume: Float = 1.0f, rate: Float = 1.0f) {
+        val (lateral, depth) = enemyAudioOffsets()
+        playSound(
+            key,
+            volume = volume,
+            posX = lateral,
+            posY = 0f,
+            posZ = -depth,
+            rate = rate
+        )
+    }
+
+    /** Plays one of Robert's weapon sounds at his real position. */
+    private fun playEnemyWeaponSound(key: String, volume: Float = 1.0f, rate: Float = 1.0f) {
+        val (lateral, depth) = enemyAudioOffsets()
+        audioManager.playPositionalWeaponSound(
+            key,
+            lateralOffset = lateral,
+            depthOffset = depth,
+            volume = volume,
+            rate = rate
+        )
+    }
+
+    /** True while Robert still has a Gloo Wall Breaker charge for a wall. */
+    private fun robertHasBreaker(state: GameState = _gameState.value): Boolean =
+        RobertRules.hasUsableGlueBreaker(state.glueWallActive, state.robertGlueBreakers)
+
+    /**
+     * The Max Speed extension.
+     *
+     * While it is owned and enabled the fast running level is pushed to the
+     * absolute maximum the game allows ([Extension.MAX_SPEED_FAST_GAIN]): the
+     * character really runs as fast as possible on the battlefield, and the
+     * footstep loop follows at the top of its playback range while the
+     * positional volume keeps tracking the real distance. Every other level
+     * keeps the smaller 30 percent gain. It is exactly 1.0 while the
+     * extension is missing, disabled or removed.
+     */
+    private fun maxSpeedFactor(level: RunSpeed = _gameState.value.runSpeedLevel): Float {
+        if (!_inventory.value.extensionEnabled(Extension.MAX_SPEED)) return 1.0f
+        return if (level == RunSpeed.FAST) {
+            Extension.MAX_SPEED_FAST_GAIN
         } else {
-            1.0f
+            Extension.MAX_SPEED_GAIN
         }
+    }
 
     /**
      * The three-finger running speed gesture: swiping right steps one level
@@ -1106,7 +1176,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val speedMps = next.speedMps(
                 RunPressure.speedFactor(movePressure),
                 enemyFastSpeedMps()
-            ) * maxSpeedFactor()
+            ) * maxSpeedFactor(next)
             audioManager.updatePlayerWalkAudio(speedMps, next.volumeGain())
         }
         val maxSpeedNote = if (_inventory.value.extensionEnabled(Extension.MAX_SPEED)) {
@@ -1118,7 +1188,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Continuous player movement inside the 100 m battle zone, in all four
+     * Continuous player movement inside the 25 m square battle zone, in all four
      * directions:
      *  - forward / backward: towards or away from Robert (top and bottom
      *    portions of the battle screen);
@@ -1130,7 +1200,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * sound follows the same level: faster and louder when running fast,
      * slower and quieter when running slow. Touching one of the four
      * boundaries stops the run, plays the wall sound and announces "Wall";
-     * nobody ever gets beyond the 100 m perimeter.
+     * nobody ever gets beyond the 25 m perimeter.
      */
     fun startPlayerMove(direction: MoveDirection) {
         if (_currentScreen.value != Screen.BATTLE) return
@@ -1144,7 +1214,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
                 val speed = state.runSpeedLevel
                 val factor = speed.factor(RunPressure.speedFactor(movePressure), enemyFastSpeedMps()) *
-                    maxSpeedFactor()
+                    maxSpeedFactor(speed)
                 val speedMps = RunPressure.BASE_SPEED_MPS * factor
                 val tickMs = (PLAYER_MOVE_TICK_MS * (RunPressure.BASE_SPEED_MPS / speedMps))
                     .toLong()
@@ -1163,7 +1233,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 if (blocked) {
-                    // A boundary of the 100 m zone: no movement, wall sound.
+                    // A boundary of the 25 m square zone: no movement, wall sound.
                     audioManager.stopSound("playerWalk")
                     announceWall()
                     playerAtWall = true
@@ -1278,15 +1348,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerHp = state.playerHp,
             playerMaxHp = state.playerMaxHp,
             deceptionShotsLeft = state.robertDeceptionShots,
-            robertHasSniper = robertHasUsableSniper(state),
+            robertHasBreaker = robertHasBreaker(state),
             playerWeapon = state.activeWeapon
         )
-    }
-
-    /** True when Robert owns a sniper rifle he may use and that is not damaged. */
-    private fun robertHasUsableSniper(state: GameState): Boolean {
-        val allowed = RobertRules.allowedWeapons(robertProfile, state.glueWallActive, state.robertHp)
-        return RobertRules.hasUsableSniper(allowed, isRobertWeaponDamaged(state, Weapon.SNIPER))
     }
 
     /** The arena distance Robert is walking to for his current band. */
@@ -1342,7 +1406,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private data class StepOutcome(val state: GameState, val blocked: Boolean)
 
     /**
-     * Robert's movement step. He really walks inside the 100 m zone with all
+     * Robert's movement step. He really walks inside the 25 m square zone with all
      * four directions available (towards the player, away from him and both
      * sideways), and every single step is simulated against the four
      * boundaries *before* it is taken ([GameState.moveRobertSafely]). The
@@ -1378,8 +1442,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertSprintTicks = 0
         }
 
-        // While the player's glue wall is up and Robert has no sniper rifle to
-        // break it, he refuses to approach and keeps running away instead.
+        // While the player's glue wall is up and Robert has no Gloo Wall
+        // Breaker charge to break it, he refuses to approach and keeps
+        // running away instead.
         ensureGlueWallAvoidance()
 
         val round = state.round
@@ -1496,7 +1561,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             "flank" -> {
                 val current = _gameState.value
                 val target = robertTargetDistance(current)
-                val speed = (4.5f + round * 0.35f) * speedMultiplier
+                val speed = (0.60f + round * 0.06f) * speedMultiplier
                 var blocked = false
                 _gameState.update { now ->
                     val side = now.robertFlankSide
@@ -1532,7 +1597,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     return
                 }
                 val prox = Combat.proximityOf(current.distance) / 100f
-                val speed = (2.0f + prox * 4.0f + round * 0.25f) *
+                val speed = (0.35f + prox * 0.90f + round * 0.04f) *
                     speedMultiplier *
                     if (pressure) PRESSURE_SPEED_FACTOR else 1f
                 val metres = min(abs(delta), speed)
@@ -1694,19 +1759,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Keeps the "avoid" state in sync with the glue wall: while the player's
-     * glue wall is up and Robert owns no usable sniper rifle to break it, he
-     * runs away and stays away. As soon as the wall drops (or he does own a
-     * working sniper) he approaches again and fires continuously.
+     * Keeps the "avoid" state in sync with the gloo wall: while the player's
+     * wall is up and Robert has no Gloo Wall Breaker charge left to destroy
+     * it, he runs away and stays away. As soon as the wall drops (or while he
+     * still owns a breaker charge) he approaches again and uses it.
      */
     private fun ensureGlueWallAvoidance() {
         val state = _gameState.value
         if (state.playerHp <= 0 || state.robertHp <= 0) return
         if (state.missileInFlight || state.bombInFlight) return
-        val allowed = RobertRules.allowedWeapons(robertProfile, state.glueWallActive, state.robertHp)
-        val sniperDamaged = isRobertWeaponDamaged(state, Weapon.SNIPER)
-        val hasSniper = RobertRules.hasUsableSniper(allowed, sniperDamaged)
-        val shouldAvoid = RobertRules.shouldAvoidGlueWall(state.glueWallActive, hasSniper)
+        val hasBreaker = robertHasBreaker(state)
+        val shouldAvoid = RobertRules.shouldAvoidGlueWall(state.glueWallActive, hasBreaker)
         val avoiding = state.robertState == "avoid"
         if (shouldAvoid && !avoiding && state.robertState != "turnBack") {
             _gameState.update {
@@ -1911,6 +1974,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (state.missileInFlight) return
         // The same holds for a bomb counting down towards him: he only runs.
         if (state.bombInFlight && state.bombFromPlayer) return
+        // A raised player gloo wall is answered automatically, before any
+        // other decision: the moment the player raises the wall the enemy
+        // arms his Gloo Wall Breaker and fires it at the wall.
+        if (state.glueWallActive && fireRobertBreakerAtWall()) return
         expirePlayerBurstIfStale()
         // An exchange is running (or he is coverless against a covered
         // player): he trades shots at the player's own cadence instead of
@@ -2059,11 +2126,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 return
             }
         }
-        // The player raised a gloo wall and Robert has no sniper rifle to
-        // break it: he does not trade shots, he runs away and stays away
+        // The player raised a gloo wall and Robert has no Gloo Wall Breaker
+        // charge left: he does not trade shots, he runs away and stays away
         // until the wall drops.
-        val robertHasSniperNow = RobertRules.hasUsableSniper(allowed, isRobertWeaponDamaged(state, Weapon.SNIPER))
-        if (state.glueWallActive && !robertHasSniperNow) {
+        if (state.glueWallActive) {
             if (state.robertState != "avoid") {
                 _gameState.update { it.copy(robertState = "avoid") }
                 planRobertStep(140L)
@@ -2077,12 +2143,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertMaxHp = state.robertMaxHp,
             proximityPercent = proximityNow,
             playerGlueWallActive = state.glueWallActive,
-            hasSniper = robertHasSniperNow
+            hasSniper = false
         )
         // Round 5 strategic logic: equal power — prioritize positioning over brute force
         val isStrategyRound = state.round == 5
         val chosen = when {
-            state.glueWallActive && pool.contains(Weapon.SNIPER) -> Weapon.SNIPER
             !isStrategyRound && state.activeWeapon.autoFire &&
                 pool.contains(Weapon.MP40) &&
                 Combat.zoneFor(proximityNow) != HitZone.MISS -> Weapon.MP40
@@ -2120,13 +2185,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Firearm sounds are exclusive: his shot cuts whatever weapon sound
         // the player still has in the air, so the two never mix.
         if (!chosen.melee) {
-            audioManager.playWeaponSound(
+            playEnemyWeaponSound(
                 chosen.fireSoundKey,
                 volume = 0.9f,
                 // The recorded MP40 sample is a long burst; slightly faster
-                // playback gives a distinct, finite shot instead of a near-continuous rumble.
-                rate = if (chosen == Weapon.MP40) 1.8f else 1.0f,
-                posZ = -state.distance
+                // playback gives a distinct, finite shot instead of a
+                // near-continuous rumble.
+                rate = if (chosen == Weapon.MP40) 1.8f else 1.0f
             )
         }
         _gameState.update { s ->
@@ -2162,35 +2227,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         if (zone == HitZone.MISS) {
             if (chosen.melee) {
-                audioManager.playWeaponSound(chosen.missSoundKey, volume = 0.55f, posZ = -state.distance)
+                playEnemyWeaponSound(chosen.missSoundKey, volume = 0.55f)
             }
             _gameState.update { it.copy(consecutiveHeavyHits = 0) }
             setLog("${t("robertMissed")} ${t(chosen.nameKey)}.")
             return
         }
 
-        // The player's glue wall stops everything until three sniper hits break it.
-        if (state.glueWallActive) {
-            val breaks = Combat.canBreakGlueWall(chosen, proxPercent)
-            val progress = if (breaks) state.glueWallProgress + 1 else 0
-            _gameState.update { it.copy(glueWallProgress = progress) }
-            playSound("glueHit", volume = 0.9f)
-            if (progress >= Combat.GLUE_WALL_BREAK_HITS) {
-                _gameState.update {
-                    it.copy(glueWallActive = false, glueWallProgress = 0)
-                }
-                playSound("glueWallCrack", volume = 1.0f)
-                msg(t("glueWallDown"))
-            } else {
-                val progressText = if (breaks) {
-                    " ${t("glueWallBreaks")} $progress."
-                } else {
-                    ""
-                }
-                msg("${t("glueWallBlocked")}$progressText")
-            }
-            return
-        }
+        // The player's gloo wall stops everything: only the dedicated Gloo
+        // Wall Breaker hurts it (see fireRobertBreakerAtWall), and that is
+        // resolved before the enemy picks a weapon at all.
+        if (state.glueWallActive) return
 
         // The player's cover stops eleven hits and breaks on the twelfth.
         if (state.coverActive) {
@@ -2389,7 +2436,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         // A gloo wall he cannot break: he refuses the exchange entirely.
-        if (state.glueWallActive && !robertHasUsableSniper(state)) {
+        if (state.glueWallActive && !robertHasBreaker(state)) {
             if (state.robertState != "avoid") {
                 _gameState.update { it.copy(robertState = "avoid") }
                 planRobertStep(140L)
@@ -2414,6 +2461,81 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * The moment the player raises a gloo wall.
+     *
+     * Two things happen automatically, exactly as the rules require:
+     *
+     *  1. the enemy receives a gloo wall of his own and raises it at once -
+     *     one use per match in round one, two from round two;
+     *  2. the enemy arms his Gloo Wall Breaker and starts working on the
+     *     player's wall. One charge is spent per destroyed wall, with one use
+     *     allowed in round one and two from round two.
+     */
+    private fun onPlayerGlueWallRaised() {
+        val state = _gameState.value
+        if (state.robertGlueWalls > 0 && !state.robertGlueWallActive) {
+            deployRobertDefence(DefenceItem.GLUE_WALL)
+        }
+        val afterWall = _gameState.value
+        if (afterWall.robertGlueBreakers > 0) {
+            _gameState.update {
+                it.copy(
+                    robertBreakerArmed = true,
+                    robertBreakerHits = 0,
+                    robertState = if (it.robertState == "avoid") "advance" else it.robertState
+                )
+            }
+            ensureRobertPositioned()
+        }
+    }
+
+    /**
+     * Fires the enemy's Gloo Wall Breaker at the player's wall.
+     *
+     * Every shot that lands from the 90%-100% band cracks the wall, and the
+     * third consecutive one destroys it. The charge is spent only when a wall
+     * really comes down, and the number of charges is fixed per round: one in
+     * round one, two from round two. Returns true when the wall owned the
+     * enemy's action this tick, so no ordinary shot is fired.
+     */
+    private fun fireRobertBreakerAtWall(): Boolean {
+        val state = _gameState.value
+        if (!state.glueWallActive) return false
+        if (state.robertGlueBreakers <= 0) return false
+        if (state.robertHp <= 0 || state.playerHp <= 0) return false
+        if (state.robertState == "missileFlee" || state.robertState == "bombFlee") return false
+
+        val proxPercent = Combat.proximityOf(state.distance)
+        playEnemyWeaponSound(Weapon.GLUE_BREAKER.fireSoundKey, volume = 0.95f)
+        val breaks = Combat.canBreakGlueWall(Weapon.GLUE_BREAKER, proxPercent)
+        val progress = if (breaks) state.robertBreakerHits + 1 else 0
+        _gameState.update {
+            it.copy(robertBreakerArmed = true, robertBreakerHits = progress)
+        }
+        if (progress >= Combat.GLUE_WALL_BREAK_HITS) {
+            _gameState.update {
+                it.copy(
+                    glueWallActive = false,
+                    glueWallProgress = 0,
+                    robertBreakerHits = 0,
+                    robertBreakerArmed = false,
+                    robertGlueBreakers = (it.robertGlueBreakers - 1).coerceAtLeast(0)
+                )
+            }
+            playSound("glueWallCrack", volume = 1.0f)
+            msg("${t("glueWallDown")} ${t("enemyBreakerSpent")}")
+            ensureRobertPositioned()
+        } else if (breaks) {
+            playSound("glueHit", volume = 0.9f)
+            msg("${t("enemyBreakerCrack")} ${t("glueWallBreaks")} $progress.")
+        } else {
+            playSound("glueHit", volume = 0.6f)
+            msg(t("enemyBreakerTooFar"))
+        }
+        return true
+    }
+
+    /**
      * Deploys one of Robert's defences for real: the stock is spent, the
      * barrier is raised (or the medkit heals) and the matching sound plays.
      * The two interceptors are consumed when a projectile is in the air, so
@@ -2432,7 +2554,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         robertConsecutiveHits = 0
                     )
                 }
-                playSound("medkit", posZ = -current.distance)
+                playEnemySound("medkit")
                 ensureRobertPositioned()
                 " ${t("robertMedkit")} ${t("enemyHealth")} ${_gameState.value.robertHp}."
             }
@@ -2447,7 +2569,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         robertConsecutiveHits = 0
                     )
                 }
-                playSound("cover", posZ = -current.distance)
+                playEnemySound("cover")
                 " ${t("robertCoverUp")}"
             }
             DefenceItem.GLUE_WALL -> {
@@ -2461,7 +2583,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         robertConsecutiveHits = 0
                     )
                 }
-                playSound("glueSound", posZ = -current.distance)
+                playEnemySound("glueSound")
                 " ${t("robertGlueWall")}"
             }
             DefenceItem.ANTI_MISSILE, DefenceItem.ANTI_BOMB -> ""
@@ -2969,7 +3091,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Robert throws one of his own bombs (round three: one per game, rounds
      * four and five: two). The destination is the player's position and the
-     * player must sprint out of the 50 metres or deploy the anti-bomb
+     * player must sprint out of the 12 metres or deploy the anti-bomb
      * explosive defence while the bomb sound is still running.
      */
     private fun launchEnemyBomb() {
@@ -3061,7 +3183,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * The blast. The countdown sound stops at once and the explosion plays
      * mixed with the hit sound of whoever it caught - and it plays in every
      * outcome: when the bomb destroys its target, when the target escaped the
-     * 50 metres, and when an anti-bomb explosive destroyed the bomb in the
+     * 12 metres, and when an anti-bomb explosive destroyed the bomb in the
      * air. A finished battle is only ended after the explosion has run out.
      */
     private fun onBombBlast() {
@@ -3122,7 +3244,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Bombs now kill enemies at any cost, tracking like missiles — guaranteed unless intercepted
         val killsTarget = if (intercepted) false else BombRules.trackingKillGuaranteed()
         // The timer bomb is the one bomb that also destroys its own thrower
-        // when the thrower stayed inside the 50 metre safety distance.
+        // when the thrower stayed inside the 12 metre safety distance.
         val killsThrower = kind == BombKind.TIMER &&
             BombRules.timerBombKillsThrower(throwerDistance)
 
@@ -3134,7 +3256,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _gameState.update {
             it.copy(
                 // The target of the bomb, and - for a timer bomb only - its
-                // own thrower when the thrower stayed inside the 50 metres.
+                // own thrower when the thrower stayed inside the 12 metres.
                 robertHp = when {
                     fromPlayer && killsTarget -> 0
                     !fromPlayer && killsThrower -> 0
@@ -3317,6 +3439,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             audioManager.playWeaponSound(weapon.fireSoundKey, volume = 1.0f)
         }
 
+        // Directional targeting. A shot only lands while Robert really stands
+        // inside the aiming cone of the direction the player last ran to: an
+        // enemy on the right can only be hit after running right, and firing
+        // blindly forward while he is to the side is a clean miss.
+        if (!state.playerFacingRobert) {
+            if (weapon.melee) {
+                audioManager.playWeaponSound(weapon.missSoundKey, volume = 0.6f)
+            }
+            val bearing = Combat.targetBearingKey(
+                state.facing,
+                state.robertX - state.playerX,
+                state.robertY - state.playerY
+            )
+            msg("${t("notFacingEnemy")} ${t(bearing)}.")
+            return
+        }
+
         val proxPercent = Combat.proximityOf(state.distance)
         val zone = Combat.zoneFor(proxPercent)
         // The AWM is the long-range rifle: inside its 20% to 40% band it hits
@@ -3333,12 +3472,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Robert's glue wall: only three continuous sniper hits break it.
+        // Robert's gloo wall: only three consecutive Gloo Wall Breaker shots
+        // from the 90%-100% band destroy it. Every other weapon bounces off.
         if (state.robertGlueWallActive) {
             val breaks = Combat.canBreakGlueWall(weapon, proxPercent)
             val progress = if (breaks) state.robertGlueWallProgress + 1 else 0
             _gameState.update { it.copy(robertGlueWallProgress = progress) }
-            playSound("glueHit", volume = 0.9f)
+            playEnemySound("glueHit", volume = 0.9f)
             if (progress >= Combat.GLUE_WALL_BREAK_HITS) {
                 _gameState.update {
                     it.copy(robertGlueWallActive = false, robertGlueWallProgress = 0)
@@ -3347,6 +3487,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 msg(t("robertGlueDown"))
             } else if (breaks) {
                 msg("${t("robertGlueCrack")} ${t("glueWallBreaks")} $progress.")
+            } else if (weapon != Weapon.GLUE_BREAKER) {
+                msg(t("robertGlueNeedsBreaker"))
             } else {
                 msg(t("robertGlueBlocked"))
             }
@@ -3398,7 +3540,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         playSound(weapon.hitSoundKey, volume = if (zone == HitZone.HEAVY) 1f else 0.7f)
-        playSound("enemyHit", volume = if (zone == HitZone.HEAVY) 1f else 0.7f, posZ = -state.distance)
+        playEnemySound("enemyHit", volume = if (zone == HitZone.HEAVY) 1f else 0.7f)
 
         var text = "${
             when {
@@ -3926,6 +4068,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 _gameState.update { it.copy(glueWallActive = true, glueWallProgress = 0) }
                 consumeDefence(item)
                 playSound("glueSound")
+                // The enemy answers a raised wall immediately: he receives a
+                // gloo wall of his own and arms his Gloo Wall Breaker.
+                onPlayerGlueWallRaised()
                 ensureRobertPositioned()
                 return if (automatic) t("autoGlueWallUsed") else t("glooWallDeployed")
             }
@@ -4022,11 +4167,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 ""
             }
             // The three-finger running speed and the position inside the
-            // 100 metre zone belong to the own status too.
+            // 25 metre square belong to the own status too.
             val speedText = "${t("runSpeed")} ${t(state.runSpeedLevel.nameKey)}." +
                 if (inv.extensionEnabled(Extension.MAX_SPEED)) " ${t("maxSpeedOn")}" else ""
             val positionText = "${t("yourPosition")} ${state.playerX.roundToInt()}, " +
                 "${state.playerY.roundToInt()} ${t("meters")}."
+            // The direction the player is really aiming at: only an enemy
+            // inside this cone can be hit.
+            val facingText = "${t("yourFacing")} ${t(state.facing.nameKey)}."
             val bombText = if (state.bombInFlight) {
                 " ${t("bombDestination")} ${state.playerDistanceFromBomb.roundToInt()} ${t("meters")}."
             } else {
@@ -4034,7 +4182,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
             speak(
                 "${t("yourHealth")} ${state.playerHp}. ${t("ammo")} ${state.activeAmmo}. " +
-                    "$weaponState. $speedText $positionText $weapons. " +
+                    "$weaponState. $speedText $positionText $facingText $weapons. " +
                     "${t("medkits")} ${inv.medikits}. ${t("glooWall")} ${inv.glueWalls}. " +
                     "${t("cover")} ${inv.covers}. ${t("antiMissile")} ${inv.antiMissiles}. " +
                     "${t("antiBomb")} ${inv.antiBombs}.$antiBombText$bombText $timeText " +
@@ -4046,8 +4194,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 " ${t("cover")} ${Combat.COVER_MAX_HITS - state.robertCoverHits}."
             } else ""
             val glueText = if (state.robertGlueWallActive) {
-                " ${t("glooWall")} ${state.robertGlueWallProgress}."
+                " ${t("glooWall")} ${t("glueWallBreaks")} ${state.robertGlueWallProgress}."
             } else ""
+            // The enemy's own gloo wall and the breaker charges he has left
+            // are part of the enemy status: both are limited per match.
+            val enemyWallText = if (state.robertGlueBreakers > 0 && state.glueWallActive) {
+                " ${t("enemyBreakerArmed")} ${state.robertGlueBreakers}."
+            } else if (state.robertGlueBreakers <= 0) {
+                " ${t("enemyBreakerSpent")}"
+            } else {
+                ""
+            }
             val weaponText = state.robertWeapon?.let { t(it.nameKey) } ?: ""
             val positionText = "${t("enemyPosition")} ${state.robertX.roundToInt()}, " +
                 "${state.robertY.roundToInt()} ${t("meters")}."
@@ -4064,7 +4221,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             speak(
                 "${t("enemyHealth")} ${state.robertHp}. ${t("distance")} " +
                     "${state.distance.roundToInt()} ${t("meters")}. $positionText $weaponText." +
-                    "$coverText$glueText$bombText"
+                    "$coverText$glueText$enemyWallText$bombText"
             )
         }
     }

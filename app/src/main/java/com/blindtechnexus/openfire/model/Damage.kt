@@ -21,6 +21,7 @@ import kotlin.math.roundToInt
  *  | assault rifle   |   0   |    8   |   13   |    18   |
  *  | pistol          |   0   |    9   |   14   |    20   |
  *  | sniper rifle    |   0   |   10   |   16   |    22   |
+ *  | gloo breaker    |   0   |    4   |    7   |    10   |
  *  | sword           |   0   |   10   |   16   |    22   |
  *  | AWM             |  14 * |   16   |   26   |    40   |
  *  | MP40            |   0   |    5   |    8   |    11   |
@@ -80,6 +81,9 @@ object DamageTable {
         Weapon.ASSAULT_GUN to intArrayOf(0, 8, 13, 18),
         Weapon.PISTOL to intArrayOf(0, 9, 14, 20),
         Weapon.SNIPER to intArrayOf(0, 10, 16, 22),
+        // The Gloo Wall Breaker is a utility gun: its real purpose is
+        // destroying barriers, so it only scratches a fighter.
+        Weapon.GLUE_BREAKER to intArrayOf(0, 4, 7, 10),
         Weapon.SWORD to intArrayOf(0, 10, 16, 22),
         Weapon.AWM to intArrayOf(0, 16, 26, 40),
         Weapon.MP40 to intArrayOf(0, 5, 8, 11),

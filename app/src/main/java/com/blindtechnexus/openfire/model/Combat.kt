@@ -5,9 +5,9 @@ import kotlin.math.roundToInt
 /**
  * The four proximity zones that decide how much of a weapon's power lands.
  *
- * The arena is exactly [Combat.MAX_RANGE] metres across. Proximity is the
- * closeness of the target as a percentage of that range (100% = point blank,
- * 0% = the far edge of the arena).
+ * The square battlefield is exactly [Combat.MAX_RANGE] metres on every side.
+ * Proximity is the closeness of the target as a percentage of that range
+ * (100% = point blank, 0% = the far edge of the arena).
  */
 enum class HitZone {
     /** 0% - 40% proximity: the shot misses completely. */
@@ -61,6 +61,42 @@ enum class FireRange(
 }
 
 /**
+ * The four directions a fighter can face inside the square arena.
+ *
+ * Facing is what makes shooting directional: a shot only lands while the
+ * target stands inside the aiming cone of the direction the fighter last ran
+ * towards ([Combat.isFacingTarget]). Running right therefore turns you to the
+ * right, and that is the only way to hit an enemy who really is on your right.
+ */
+enum class Facing(val id: String, val dx: Float, val dy: Float, val nameKey: String) {
+    FORWARD("forward", 0f, 1f, "facingForward"),
+    BACKWARD("backward", 0f, -1f, "facingBackward"),
+    LEFT("left", -1f, 0f, "facingLeft"),
+    RIGHT("right", 1f, 0f, "facingRight");
+
+    /** The opposite direction (turn around). */
+    fun opposite(): Facing = when (this) {
+        FORWARD -> BACKWARD
+        BACKWARD -> FORWARD
+        LEFT -> RIGHT
+        RIGHT -> LEFT
+    }
+
+    companion object {
+        fun fromId(id: String?): Facing =
+            entries.firstOrNull { it.id == id } ?: FORWARD
+
+        /** The facing that points at a target offset (dx, dy). */
+        fun toward(dx: Float, dy: Float): Facing =
+            if (kotlin.math.abs(dx) >= kotlin.math.abs(dy)) {
+                if (dx >= 0f) RIGHT else LEFT
+            } else {
+                if (dy >= 0f) FORWARD else BACKWARD
+            }
+    }
+}
+
+/**
  * Standard combat rules shared by the player and the Robert.
  *
  * Zone rules (proximity = how close the target is, in percent):
@@ -84,14 +120,21 @@ enum class FireRange(
  * repaired by the Recovery action, which costs [GUN_RECOVERY_COST] coins.
  */
 object Combat {
-    /** Full combat area width in metres (the arena is a 100 m range). */
-    const val MAX_RANGE = 100f
+    /**
+     * Side length of the square battlefield in metres.
+     *
+     * The arena is a balanced 25 m by 25 m square: every fighter lives inside
+     * that square, the fighting distance is the real two-dimensional distance
+     * between them, and the whole 0%..100% proximity scale is mapped onto
+     * those 25 metres (0 m = point blank, 25 m = the opposite corner).
+     */
+    const val MAX_RANGE = 25f
 
     /**
      * A movement that lands within this many metres of a wall counts as
      * "blocked by the wall": the fighter stops and has to turn back.
      */
-    const val WALL_TOLERANCE_M = 1.5f
+    const val WALL_TOLERANCE_M = 0.75f
 
     const val MISS_ZONE_MIN = 0f
     const val MISS_ZONE_MAX = 40f
@@ -117,11 +160,21 @@ object Combat {
     /** A cover blocks this many hits; the next (12th) hit breaks it. */
     const val COVER_MAX_HITS = 11
 
-    /** Sniper hits at 90%-100% proximity needed to break a glue wall. */
+    /** Gloo Wall Breaker hits at 90%-100% proximity needed to break a wall. */
     const val GLUE_WALL_BREAK_HITS = 3
 
-    /** Only a sniper shot at or above this proximity can damage a glue wall. */
+    /** Only a Gloo Wall Breaker shot at or above this proximity hurts a wall. */
     const val GLUE_WALL_BREAK_PROXIMITY = 90f
+
+    /**
+     * Half-angle (degrees) of the aiming cone.
+     *
+     * A shot only registers while the target really stands inside the cone in
+     * front of the fighter. Firing blindly forward while the enemy is to the
+     * side (or behind) always misses, so the player has to turn - that is,
+     * run right when the enemy is to the right - before the fight can land.
+     */
+    const val TARGETING_CONE_DEGREES = 65f
 
     /** Close-range shotgun power retained as a named combat constant. */
     const val SHORT_GUN_CLOSE_POWER_PERCENT = 16
@@ -191,9 +244,55 @@ object Combat {
     fun menuProtectedDamage(victimMaxHp: Int): Int =
         DamageTable.menuProtectedDamage(victimMaxHp)
 
-    /** True when this shot can damage a glue wall (sniper rifle, point blank). */
+    /**
+     * True when this shot can damage a glue wall: only the dedicated Gloo
+     * Wall Breaker gun does, and only from the 90%-100% proximity band.
+     * Every other weapon - the sniper rifle included - bounces off a wall.
+     */
     fun canBreakGlueWall(weapon: Weapon, proximityPercent: Float): Boolean =
-        weapon == Weapon.SNIPER && proximityPercent >= GLUE_WALL_BREAK_PROXIMITY
+        weapon == Weapon.GLUE_BREAKER && proximityPercent >= GLUE_WALL_BREAK_PROXIMITY
+
+    /**
+     * Cosine of the angle between the facing direction and the direction of
+     * the target. 1 = dead ahead, 0 = exactly to the side, -1 = behind.
+     */
+    fun facingAlignment(facing: Facing, dx: Float, dy: Float): Float {
+        val length = kotlin.math.hypot(dx, dy)
+        if (length <= 0.0001f) return 1f
+        return ((facing.dx * dx + facing.dy * dy) / length).coerceIn(-1f, 1f)
+    }
+
+    /**
+     * True while a target at the offset (dx, dy) really stands inside the
+     * aiming cone of [facing]. Point-blank targets (inside one metre) are
+     * always inside the cone: a fighter cannot be behind you if they are
+     * standing on your feet.
+     */
+    fun isFacingTarget(
+        facing: Facing,
+        dx: Float,
+        dy: Float,
+        coneDegrees: Float = TARGETING_CONE_DEGREES
+    ): Boolean {
+        if (kotlin.math.hypot(dx, dy) <= 1f) return true
+        val cone = kotlin.math.cos(Math.toRadians(coneDegrees.toDouble())).toFloat()
+        return facingAlignment(facing, dx, dy) >= cone
+    }
+
+    /**
+     * Where the target stands relative to the facing direction, as a
+     * translation key the battle report can speak: ahead, right, left or
+     * behind. This is the hint the player hears after a shot that missed
+     * because he was aiming the wrong way.
+     */
+    fun targetBearingKey(facing: Facing, dx: Float, dy: Float): String {
+        val bearing = Facing.toward(dx, dy)
+        return when (bearing) {
+            facing -> "targetAhead"
+            facing.opposite() -> "targetBehind"
+            else -> if (bearing == Facing.RIGHT) "targetRight" else "targetLeft"
+        }
+    }
 
     /** Health granted by the one-per-fight second chance. */
     fun secondChanceHealth(maxHp: Int): Int =

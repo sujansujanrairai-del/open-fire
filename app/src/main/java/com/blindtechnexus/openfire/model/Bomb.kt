@@ -139,11 +139,17 @@ object BombRules {
     /** First round that carries bombs and anti-bomb explosives. */
     const val FIRST_BOMB_ROUND = 3
 
-    /** A fighter inside this distance from the destination is destroyed. */
-    const val BLAST_RADIUS = 50f
+    /**
+     * A fighter inside this distance from the destination is destroyed.
+     *
+     * The blast is scaled to the 25 m square battlefield: 12 metres from the
+     * destination, so a fighter standing in the open half of the square
+     * really survives the explosion.
+     */
+    const val BLAST_RADIUS = 12f
 
-    /** Distance the timer bomb thrower must keep to survive its own bomb. */
-    const val SAFE_DISTANCE = 50f
+    /** Distance the timer bomb thrower must keep to survive his own bomb. */
+    const val SAFE_DISTANCE = 12f
 
     /** The timer durations the picker offers, in seconds (up to one minute). */
     val TIMER_SECONDS: List<Int> = listOf(15, 30, 40, 50, 60)

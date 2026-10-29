@@ -221,8 +221,8 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun testGameDefaultsUseTheOneHundredMeterArena() {
+    fun testGameDefaultsUseTheTwentyFiveMeterSquare() {
         assertEquals(Combat.MAX_RANGE, GameState().distance, 0.001f)
-        assertEquals(100f, Combat.MAX_RANGE, 0.001f)
+        assertEquals(25f, Combat.MAX_RANGE, 0.001f)
     }
 }

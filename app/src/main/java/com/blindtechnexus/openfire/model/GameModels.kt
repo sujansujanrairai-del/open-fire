@@ -113,7 +113,7 @@ data class GameStats(
  * Health, weapons, ammo, positions and defences of both fighters live here so
  * the interface can render the whole battle from one state object.
  *
- * The battle is played inside a real 100 m by 100 m zone ([Arena]): both
+ * The battle is played inside a real 25 m by 25 m square zone ([Arena]): both
  * fighters own an (x, y) position, the fighting distance is derived from those
  * positions, and running into one of the four boundaries is a wall hit.
  */
@@ -135,9 +135,9 @@ data class GameState(
     val distance: Float = Combat.MAX_RANGE,
 
     // ------------------------------------------------------------------
-    // Real positions inside the 100 m battle zone. Y is the depth axis: the
+    // Real positions inside the 25 m square battle zone. Y is the depth axis: the
     // player starts at the near edge, Robert at the far edge, so the fight
-    // begins exactly 100 m apart. X is the width of the zone and is what the
+    // begins exactly 25 m apart. X is the width of the zone and is what the
     // left and right halves of the center portion run along.
     // ------------------------------------------------------------------
     val playerX: Float = Arena.PLAYER_START_X,
@@ -148,10 +148,22 @@ data class GameState(
     /** The running speed level toggled by a three-finger swipe ([RunSpeed.id]). */
     val runSpeed: String = RunSpeed.NORMAL.id,
 
+    /**
+     * The direction the player is really aiming at ([Facing.id]). It follows
+     * the last movement: running right turns the player to the right. A shot
+     * only lands while Robert stands inside the aiming cone of this
+     * direction, so firing blindly forward at an enemy who stands to the side
+     * never registers a hit.
+     */
+    val playerFacing: String = Facing.FORWARD.id,
+
     /** A cover blocks 11 hits; the 12th breaks it. */
     val coverActive: Boolean = false,
     val coverHits: Int = 0,
-    /** A glue wall stops everything except three consecutive sniper hits. */
+    /**
+     * A player gloo wall stops everything except three consecutive
+     * Gloo Wall Breaker shots from the 90%-100% band.
+     */
     val glueWallActive: Boolean = false,
     val glueWallProgress: Int = 0,
 
@@ -159,6 +171,16 @@ data class GameState(
     val robertCoverHits: Int = 0,
     val robertGlueWallActive: Boolean = false,
     val robertGlueWallProgress: Int = 0,
+    /**
+     * Gloo Wall Breaker charges Robert may still spend this match. The enemy
+     * only ever receives the breaker when the player raises a gloo wall: once
+     * in round one, twice in round two, and he uses it automatically.
+     */
+    val robertGlueBreakers: Int = 0,
+    /** True while Robert is firing his breaker at the player's wall. */
+    val robertBreakerArmed: Boolean = false,
+    /** Gloo Wall Breaker shots Robert has already landed on the current wall. */
+    val robertBreakerHits: Int = 0,
     val robertWeapons: List<String> = emptyList(),
     val robertWeaponIndex: Int = 0,
     val robertAmmo: List<Int> = emptyList(),
@@ -341,6 +363,22 @@ data class GameState(
     /** The running speed level selected with the three-finger gesture. */
     val runSpeedLevel: RunSpeed
         get() = RunSpeed.fromId(runSpeed)
+
+    /** The direction the player is aiming at right now. */
+    val facing: Facing
+        get() = Facing.fromId(playerFacing)
+
+    /** True when Robert stands inside the player's aiming cone. */
+    val playerFacingRobert: Boolean
+        get() = Combat.isFacingTarget(facing, robertX - playerX, robertY - playerY)
+
+    /** True while Robert may still raise a gloo wall of his own. */
+    val robertGlueWallAvailable: Boolean
+        get() = robertGlueWalls > 0
+
+    /** True while Robert may still use his Gloo Wall Breaker. */
+    val robertGlueBreakerAvailable: Boolean
+        get() = robertGlueBreakers > 0
 
     /** The bomb currently in the air, or null. */
     val bomb: BombKind?
