@@ -64,16 +64,10 @@ class GameplayUpgradeTest {
     @Test
     fun protectedRobertFiresAtTheFastContinuousBeat() {
         val random = Random(5)
-        assertEquals(
-            1_500L,
-            RobertRules.tacticalFireInterval(
-                enemyHasDefence = true,
-                playerHasDefence = false,
-                playerWeaponDamaged = false,
-                playerHpFraction = 1f,
-                random = random
-            )
-        )
+        val intervals = (1..100).map {
+            RobertRules.tacticalFireInterval(true, false, false, 1f, random)
+        }
+        assertEquals(setOf(1_500L, 2_000L), intervals.toSet())
         // Damaged weapon and an extremely weak player also allow the press.
         assertTrue(
             RobertRules.shouldPressFromDefence(
@@ -111,8 +105,8 @@ class GameplayUpgradeTest {
         assertFalse(RobertRules.shouldFleeFight(1, 2))
         assertFalse(RobertRules.shouldFleeFight(2, 2))
         assertFalse(RobertRules.shouldFleeFight(2, 3))
-        // A single hit is never enough to panic.
-        assertFalse(RobertRules.shouldFleeFight(1, 0))
+        // Even one unanswered hit gives the player the upper hand.
+        assertTrue(RobertRules.shouldFleeFight(1, 0))
     }
 
     @Test

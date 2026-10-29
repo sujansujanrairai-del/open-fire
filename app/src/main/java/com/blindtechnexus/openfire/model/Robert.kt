@@ -1,6 +1,5 @@
 package com.blindtechnexus.openfire.model
 
-import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
@@ -55,12 +54,8 @@ data class RobertProfile(
 )
 
 object RobertRules {
-    /**
-     * Legacy absolute defence trigger. The real trigger is round aware: see
-     * [defenceThresholdHp]. Robert starts far earlier now, which is what makes
-     * him actually use the medkits, covers and glue walls he carries.
-     */
-    const val DEFENCE_THRESHOLD_HP = 60
+    /** Defensive assets become available strictly below this health. */
+    const val DEFENCE_THRESHOLD_HP = 150
 
     /** Robert's sniper is usable under this health while it is locked. */
     const val LOCKED_SNIPER_MAX_HP = 100
@@ -326,21 +321,8 @@ object RobertRules {
     fun fleeStep(round: Int): Float =
         FLEE_STEP_M * movementSpeedMultiplier(round) * FLEE_SPEED_MULTIPLIER
 
-    /**
-     * The health Robert must fall under before he starts spending his
-     * defences. Rounds one and two trigger below 60% of maximum health or
-     * below 100 health (whichever is higher); round three triggers below 200;
-     * rounds four and five trigger below 300.
-     */
-    fun defenceThresholdHp(round: Int, maxHp: Int): Int {
-        val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
-        val safeMax = maxHp.coerceAtLeast(1)
-        return when (safeRound) {
-            1, 2 -> maxOf(100, (safeMax * 0.60f).roundToInt())
-            3 -> 200
-            else -> 300
-        }
-    }
+    /** Defensive assets may only be used while alive and below 150 HP, in every round. */
+    fun defenceThresholdHp(round: Int, maxHp: Int): Int = DEFENCE_THRESHOLD_HP
 
     /** Every standard battle weapon (bombs and the missile are separate). */
     val ALL_STANDARD_WEAPONS: List<Weapon> =
@@ -585,7 +567,7 @@ object RobertRules {
      * exchange is judged on its own.
      */
     fun shouldFleeFight(robertHitsTaken: Int, robertHitsLanded: Int): Boolean =
-        robertHitsTaken >= 2 && robertHitsTaken > robertHitsLanded
+        robertHitsTaken > 0 && robertHitsTaken > robertHitsLanded
 
     /**
      * True when a one-sided exchange must make Robert run as fast as
@@ -622,16 +604,24 @@ object RobertRules {
         isContinuousPlayerFire(playerBurstShots)
 
     /** True when health dropped below panic thresholds (150 or 200 HP or fraction). */
-    fun shouldPanic(robertHp: Int, robertMaxHp: Int, previousHp: Int = robertMaxHp): Boolean {
-        if (robertMaxHp <= 0) return false
-        val fraction = robertHp.toFloat() / robertMaxHp.toFloat()
-        // Even 1% drop below fraction thresholds triggers panic
-        if (fraction < PANIC_FRACTION || fraction < PANIC_FRACTION_SEVERE) return true
-        if (robertHp < PANIC_HP_200 || robertHp < PANIC_HP_150) return true
-        // Any drop below previous (even 1%) when already below 95% triggers panic
-        if (previousHp > robertHp && fraction < 0.95f) return true
-        return false
+    fun shouldPanic(robertHp: Int, robertMaxHp: Int, previousHp: Int = robertMaxHp): Boolean =
+        robertMaxHp > 0 && shouldUseDefence(robertHp, true)
+
+    /** Retreat takes priority over protected or aggressive firing. */
+    fun shouldRetreatFromFight(
+        playerHits: Int, enemyHits: Int, consecutiveHits: Int,
+        playerBurstShots: Int, enemyHealthDropping: Boolean,
+        enemyWall: Boolean, playerWall: Boolean, playerHasBreaker: Boolean,
+        proximityPercent: Float
+    ): Boolean {
+        if (enemyWall && playerWall && playerHasBreaker) return true
+        if (shouldFleeFight(playerHits, enemyHits) || consecutiveHits >= FLEE_AFTER_PLAYER_HITS) return true
+        // A nearby, protected enemy may hold its ground against shots that do not weaken it.
+        val protectedNearby = enemyWall && !playerWall && proximityPercent >= Combat.STRONG_ZONE_MAX
+        return (!protectedNearby && isContinuousPlayerFire(playerBurstShots)) ||
+            (enemyHealthDropping && playerBurstShots >= 2)
     }
+
 
     /** True when the player is vulnerable (damaged, trapped, locked, hindered). */
     fun isPlayerVulnerable(
@@ -753,13 +743,7 @@ object RobertRules {
         random: Random,
         enemyHasAdvantage: Boolean = true
     ): Long {
-        val mayPress = enemyHasAdvantage && shouldPressFromDefence(
-            enemyHasDefence = enemyHasDefence,
-            playerHasDefence = playerHasDefence,
-            playerWeaponDamaged = playerWeaponDamaged,
-            playerHpFraction = playerHpFraction
-        )
-        return if (mayPress) CONTINUOUS_FIRE_MS else normalTacticalInterval(random)
+        return normalTacticalInterval(random)
     }
 
     /**
@@ -1055,8 +1039,6 @@ object RobertRules {
         random: Random,
         continuous: Boolean = false
     ): Long {
-        if (fleeing) return NORMAL_FIRE_MAX_MS
-        if (continuous) return NORMAL_INTERVALS_MS[random.nextInt(NORMAL_INTERVALS_MS.size)]
         return normalTacticalInterval(random)
     }
 
