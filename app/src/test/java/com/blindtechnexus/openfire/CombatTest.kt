@@ -173,14 +173,15 @@ class CombatTest {
         assertFalse(DamageTable.isAwmLongRangeBand(Weapon.AWM, 40f))
         assertFalse(DamageTable.isAwmLongRangeBand(Weapon.SNIPER, 30f))
 
-        // Exactly 10 health points in the long-range band, at any max health.
-        assertEquals(10, Combat.weaponDamage(Weapon.AWM, 30f, 1000))
+        // Exactly 14 health points in the long-range band, at any max health.
+        assertEquals(14, Combat.weaponDamage(Weapon.AWM, 30f, 1000))
         assertEquals(14, DamageTable.awmLongRangeDamage(1000))
         assertEquals(14, DamageTable.awmLongRangeDamage(200))
         assertEquals(14, DamageTable.awmLongRangeDamage(50))
+        assertEquals(DamageTable.AWM_LONG_RANGE_DAMAGE_HP, DamageTable.awmLongRangeDamage(1000))
         // Outside the band the normal table applies.
         assertEquals(0, Combat.weaponDamage(Weapon.AWM, 10f, 1000))
-        assertEquals(12, Combat.weaponDamage(Weapon.AWM, 50f, 1000))
+        assertEquals(16, Combat.weaponDamage(Weapon.AWM, 50f, 1000))
     }
 
     @Test
