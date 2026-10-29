@@ -1,6 +1,5 @@
 package com.blindtechnexus.openfire.model
 
-import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
@@ -55,11 +54,7 @@ data class RobertProfile(
 )
 
 object RobertRules {
-    /**
-     * Legacy absolute defence trigger. The real trigger is round aware: see
-     * [defenceThresholdHp]. Robert starts far earlier now, which is what makes
-     * him actually use the medkits, covers and glue walls he carries.
-     */
+    /** Defensive assets become available strictly below this health. */
     const val DEFENCE_THRESHOLD_HP = 150
 
     /** Robert's sniper is usable under this health while it is locked. */
@@ -623,7 +618,7 @@ object RobertRules {
         if (shouldFleeFight(playerHits, enemyHits) || consecutiveHits >= FLEE_AFTER_PLAYER_HITS) return true
         // A nearby, protected enemy may hold its ground against shots that do not weaken it.
         val protectedNearby = enemyWall && !playerWall && proximityPercent >= Combat.STRONG_ZONE_MAX
-        return !protectedNearby && isContinuousPlayerFire(playerBurstShots) ||
+        return (!protectedNearby && isContinuousPlayerFire(playerBurstShots)) ||
             (enemyHealthDropping && playerBurstShots >= 2)
     }
 

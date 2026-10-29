@@ -878,6 +878,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         playerBurstStartedAtMs = 0L
         lastPlayerShotAtMs = 0L
         lastHitSpeechAtMs = 0L
+        robertNextShotAtMs = 0L
         lastFireAt = 0L
 
         val round = _stats.value.round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
@@ -1798,8 +1799,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         return state.robertDamaged.getOrElse(index) { false }
     }
 
-    /** Internal polling does not alter the randomly chosen deadline between shots. */
-    private fun robertFireInterval(): Long = 250L
+    /** A held action may delay a shot, but cannot move its deadline earlier. */
+    private fun robertFireInterval(): Long {
+        if (_gameState.value.timerSelectActive) return TIMER_SELECTION_HOLD_MS
+        val remaining = robertNextShotAtMs - android.os.SystemClock.elapsedRealtime()
+        return if (remaining > 0) remaining else RobertRules.normalTacticalInterval(Random)
+    }
 
     private fun markRobertShot() {
         robertNextShotAtMs = android.os.SystemClock.elapsedRealtime() + RobertRules.normalTacticalInterval(Random)
@@ -1907,9 +1912,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerMaxHp = state.playerMaxHp,
             playerWeaponDamaged = isPlayerWeaponLocked(state)
         )
-        // A retreat is movement, not a hidden opportunity to keep shooting -
-        // unless the shot is a retaliation: an enemy that is being shot at
-        // answers over his shoulder while he runs.
+        // Only a nearby enemy protected by his gloo wall may sustain fire.
         val playerWeakFraction = playerHpFraction(state)
         val pressing = state.robertGlueWallActive && !state.playerHasActiveDefence &&
             Combat.proximityOf(state.distance) >= Combat.STRONG_ZONE_MAX &&
@@ -2299,13 +2302,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * The moment the player raises a gloo wall.
      *
-     * Two things happen automatically, exactly as the rules require:
-     *
-     *  1. the enemy receives a gloo wall of his own and raises it at once -
-     *     one use per match in round one, two from round two;
-     *  2. the enemy arms his Gloo Wall Breaker and starts working on the
-     *     player's wall. One charge is spent per destroyed wall, with one use
-     *     allowed in round one and two from round two.
+     * He may deploy his own wall only below 150 HP. A player who owns a
+     * breaker and has a wall up makes a walled-in Robert avoid the fight.
+     * Otherwise Robert arms his own breaker when he has a charge.
      */
     private fun onPlayerGlueWallRaised() {
         val state = _gameState.value
@@ -2470,6 +2469,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _gameState.update { it.copy(robertDefenceArmed = true) }
         }
         val defence = robertPanicDefence(_gameState.value)?.let { deployRobertDefence(it) }.orEmpty()
+        ensureGlueWallAvoidance()
         return (if (retreat) " ${t("robertFled")}" else "") + defence
     }
 
@@ -3812,8 +3812,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 _gameState.update { it.copy(glueWallActive = true, glueWallProgress = 0) }
                 consumeDefence(item)
                 playSound("glueSound")
-                // The enemy answers a raised wall immediately: he receives a
-                // gloo wall of his own and arms his Gloo Wall Breaker.
+                // Robert may deploy his wall only below the defence threshold.
                 onPlayerGlueWallRaised()
                 ensureRobertPositioned()
                 return if (automatic) t("autoGlueWallUsed") else t("glooWallDeployed")
@@ -4254,7 +4253,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         matchLimitJob = null
         matchDeadlineMs = 0L
         robertSprintTicks = 0
-        robertNextShotAtMs = 0L
         playerAtWall = false
         // Stop a missile or a bomb still in the air (their countdown sounds
         // included), but never cut an explosion that has just impacted:
