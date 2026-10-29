@@ -54,15 +54,15 @@ class CombatTest {
     fun weaponPowersMatchTheSingleDamageTable() {
         // light band HP, strong band HP, heavy band HP
         val expected = mapOf(
-            Weapon.KNIFE to Triple(5, 8, 10),
-            Weapon.SHORT_GUN to Triple(5, 8, 12),
-            Weapon.ASSAULT_GUN to Triple(7, 10, 14),
-            Weapon.PISTOL to Triple(7, 11, 15),
-            Weapon.SNIPER to Triple(8, 12, 16),
-            Weapon.SWORD to Triple(8, 12, 16),
-            Weapon.AWM to Triple(12, 18, 24),
-            Weapon.MP40 to Triple(4, 6, 8),
-            Weapon.MACHINE_GUN to Triple(5, 8, 11)
+            Weapon.KNIFE to Triple(8, 12, 14),
+            Weapon.SHORT_GUN to Triple(6, 11, 16),
+            Weapon.ASSAULT_GUN to Triple(8, 13, 18),
+            Weapon.PISTOL to Triple(9, 14, 20),
+            Weapon.SNIPER to Triple(10, 16, 22),
+            Weapon.SWORD to Triple(10, 16, 22),
+            Weapon.AWM to Triple(16, 26, 40),
+            Weapon.MP40 to Triple(5, 8, 11),
+            Weapon.MACHINE_GUN to Triple(7, 11, 15)
         )
         for ((weapon, row) in expected) {
             assertEquals("${weapon.id} light", row.first, weapon.powerPercent)
@@ -78,27 +78,27 @@ class CombatTest {
     @Test
     fun everyHitDeductsExactlyTheTableNumberOfHealthPoints() {
         // Point blank: the flat HP value of the table, independent of max HP.
-        assertEquals(10, Combat.weaponDamage(Weapon.KNIFE, 100f, 1000))
-        assertEquals(12, Combat.weaponDamage(Weapon.SHORT_GUN, 100f, 1000))
-        assertEquals(14, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 1000))
-        assertEquals(15, Combat.weaponDamage(Weapon.PISTOL, 100f, 1000))
-        assertEquals(16, Combat.weaponDamage(Weapon.SNIPER, 100f, 1000))
-        assertEquals(16, Combat.weaponDamage(Weapon.SWORD, 100f, 1000))
-        assertEquals(24, Combat.weaponDamage(Weapon.AWM, 100f, 1000))
-        assertEquals(8, Combat.weaponDamage(Weapon.MP40, 100f, 1000))
-        assertEquals(11, Combat.weaponDamage(Weapon.MACHINE_GUN, 100f, 1000))
+        assertEquals(14, Combat.weaponDamage(Weapon.KNIFE, 100f, 1000))
+        assertEquals(16, Combat.weaponDamage(Weapon.SHORT_GUN, 100f, 1000))
+        assertEquals(18, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 1000))
+        assertEquals(20, Combat.weaponDamage(Weapon.PISTOL, 100f, 1000))
+        assertEquals(22, Combat.weaponDamage(Weapon.SNIPER, 100f, 1000))
+        assertEquals(22, Combat.weaponDamage(Weapon.SWORD, 100f, 1000))
+        assertEquals(40, Combat.weaponDamage(Weapon.AWM, 100f, 1000))
+        assertEquals(11, Combat.weaponDamage(Weapon.MP40, 100f, 1000))
+        assertEquals(15, Combat.weaponDamage(Weapon.MACHINE_GUN, 100f, 1000))
 
-        assertEquals(5, Combat.weaponDamage(Weapon.SHORT_GUN, 50f, 1000))
-        assertEquals(8, Combat.weaponDamage(Weapon.SHORT_GUN, 80f, 1000))
-        assertEquals(7, Combat.weaponDamage(Weapon.ASSAULT_GUN, 50f, 1000))
-        assertEquals(10, Combat.weaponDamage(Weapon.ASSAULT_GUN, 80f, 1000))
+        assertEquals(6, Combat.weaponDamage(Weapon.SHORT_GUN, 50f, 1000))
+        assertEquals(11, Combat.weaponDamage(Weapon.SHORT_GUN, 80f, 1000))
+        assertEquals(8, Combat.weaponDamage(Weapon.ASSAULT_GUN, 50f, 1000))
+        assertEquals(13, Combat.weaponDamage(Weapon.ASSAULT_GUN, 80f, 1000))
         assertEquals(0, Combat.weaponDamage(Weapon.SWORD, 20f, 1000))
 
         // The old bug: a "14" weapon used to deal 140 damage to a 1000 HP
         // victim. Maximum health must not change a single hit any more.
         for (maxHp in listOf(200, 1000, 2600)) {
-            assertEquals("assault at $maxHp", 14, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, maxHp))
-            assertEquals("AWM at $maxHp", 24, Combat.weaponDamage(Weapon.AWM, 100f, maxHp))
+            assertEquals("assault at $maxHp", 18, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, maxHp))
+            assertEquals("AWM at $maxHp", 40, Combat.weaponDamage(Weapon.AWM, 100f, maxHp))
         }
 
         // The same table drives Robert: both fighters deduct exactly the
@@ -116,6 +116,21 @@ class CombatTest {
                 )
             }
         }
+    }
+
+    @Test
+    fun theAwmReachesTheFullFortyPointCeiling() {
+        // The rebalance makes the AWM the only normal weapon that reaches the
+        // documented maximum 40 percent health reduction of one hit.
+        assertEquals(40, DamageTable.percentOf(Weapon.AWM, HitZone.HEAVY))
+        assertEquals(40, Combat.weaponDamage(Weapon.AWM, 100f, 200))
+        // Every other normal weapon stays strictly below it, in capacity order.
+        val heavy = listOf(
+            Weapon.MP40, Weapon.KNIFE, Weapon.MACHINE_GUN, Weapon.SHORT_GUN,
+            Weapon.ASSAULT_GUN, Weapon.PISTOL, Weapon.SNIPER, Weapon.SWORD
+        ).map { DamageTable.percentOf(it, HitZone.HEAVY) }
+        assertEquals(heavy.sorted(), heavy)
+        assertTrue(heavy.all { it < 40 })
     }
 
     @Test
@@ -160,9 +175,9 @@ class CombatTest {
 
         // Exactly 10 health points in the long-range band, at any max health.
         assertEquals(10, Combat.weaponDamage(Weapon.AWM, 30f, 1000))
-        assertEquals(10, DamageTable.awmLongRangeDamage(1000))
-        assertEquals(10, DamageTable.awmLongRangeDamage(200))
-        assertEquals(10, DamageTable.awmLongRangeDamage(50))
+        assertEquals(14, DamageTable.awmLongRangeDamage(1000))
+        assertEquals(14, DamageTable.awmLongRangeDamage(200))
+        assertEquals(14, DamageTable.awmLongRangeDamage(50))
         // Outside the band the normal table applies.
         assertEquals(0, Combat.weaponDamage(Weapon.AWM, 10f, 1000))
         assertEquals(12, Combat.weaponDamage(Weapon.AWM, 50f, 1000))

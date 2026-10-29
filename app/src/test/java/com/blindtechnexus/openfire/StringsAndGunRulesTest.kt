@@ -109,15 +109,16 @@ class StringsAndGunRulesTest {
         assertEquals(2800, DefenceItem.ANTI_MISSILE.price)
         assertEquals(2600, DefenceItem.ANTI_BOMB.price)
         assertEquals(1600, MissileRules.MISSILE_POWER_PRICE)
-        // Every extension is 50 coins cheaper than before.
-        assertEquals(
-            setOf(100, 190, 250),
-            Extension.entries.map { it.price }.toSet()
-        )
-        // The catalogue is complete: 13 weapons, 5 defences, 4 extensions.
+        // Extensions: the four automatic helpers plus Max Speed.
+        assertEquals(100, Extension.AUTO_RELOAD.price)
+        assertEquals(190, Extension.AUTO_MEDKIT.price)
+        assertEquals(250, Extension.AUTO_COVER.price)
+        assertEquals(250, Extension.AUTO_GLUE_WALL.price)
+        assertEquals(300, Extension.MAX_SPEED.price)
+        // The catalogue is complete: 13 weapons, 5 defences, 5 extensions.
         assertEquals(13, Weapon.entries.size)
         assertEquals(5, DefenceItem.entries.size)
-        assertEquals(4, Extension.entries.size)
+        assertEquals(5, Extension.entries.size)
     }
 
     @Test
@@ -166,14 +167,14 @@ class StringsAndGunRulesTest {
         assertTrue("Guide must document pressure running", en.contains("stronger you press"))
         // The damage table and the caps.
         assertTrue("Guide must document the bands", en.contains("70 to 90 percent is the strong band"))
-        assertTrue("Guide must document the knife row", en.contains("knife 0, 5, 8 and 10 health points"))
-        assertTrue("Guide must document the shotgun row", en.contains("shotgun 0, 5, 8 and 12"))
-        assertTrue("Guide must document the MP40 row", en.contains("MP40 0, 4, 6 and 8"))
-        assertTrue("Guide must document the machine gun row", en.contains("machine gun 0, 5, 8 and 11"))
-        assertTrue("Guide must document the AWM row", en.contains("AWM 10, 12, 18 and 24"))
+        assertTrue("Guide must document the knife row", en.contains("knife 0, 8, 12 and 14 health points"))
+        assertTrue("Guide must document the shotgun row", en.contains("shotgun 0, 6, 11 and 16"))
+        assertTrue("Guide must document the MP40 row", en.contains("MP40 0, 5, 8 and 11"))
+        assertTrue("Guide must document the machine gun row", en.contains("machine gun 0, 7, 11 and 15"))
+        assertTrue("Guide must document the AWM row", en.contains("AWM 14, 16, 26 and 40"))
         assertTrue("Guide must document the 40 percent cap", en.contains("more than 40 health points in one hit"))
         assertTrue("Guide must document the AWM long range band", en.contains("20 percent to 40 percent band"))
-        assertTrue("Guide must document the AWM damage", en.contains("never less than 10 health points"))
+        assertTrue("Guide must document the AWM damage", en.contains("never less than 14 health points"))
         assertTrue("Guide must document the explosives", en.contains("full 100 percent capacity"))
         // Magazines and the submachine guns.
         assertTrue("Guide must document the six round magazines", en.contains("hold exactly six rounds"))
@@ -252,13 +253,19 @@ class StringsAndGunRulesTest {
         // The v2.4 upgrades: flat damage, human fire rhythm, hit-exchange
         // retreat, shop unlock lines, clean audio and the round four reward.
         assertTrue("Guide must document flat damage", en.contains("fixed health points"))
-        assertTrue("Guide must document the 14 HP fix", en.contains("always takes 14 health and never 140"))
+        assertTrue("Guide must document the 14 HP fix", en.contains("always takes 18 health and never 180"))
         assertTrue("Guide must document the 1.5 to 2 s rhythm", en.contains("between 1.5 and 2 seconds"))
         assertTrue("Guide must document the one second press", en.contains("once every second"))
         assertTrue("Guide must document the hit exchange", en.contains("retreats immediately and very quickly"))
         assertTrue("Guide must document shop unlock lines", en.contains("separate line under the description"))
         assertTrue("Guide must document the anti-missile reward", en.contains("one free interceptor"))
         assertTrue("Guide must document the exclusive weapon channel", en.contains("exclusive channel"))
+        assertTrue("Guide must document the gapless loop", en.contains("gapless"))
+        assertTrue("Guide must document the mirrored cadence", en.contains("fires at exactly your own rate"))
+        assertTrue("Guide must document the coverless press", en.contains("never waits longer than one second"))
+        assertTrue("Guide must document the round one sniper mirror", en.contains("you buy is mirrored to him"))
+        assertTrue("Guide must document the enemy gloo walls", en.contains("two gloo walls per game"))
+        assertTrue("Guide must document Max Speed", en.contains("Max Speed for 300 coins"))
         assertTrue("Guide must document no stray gun on a tap", en.contains("never fires a stray gun"))
         assertTrue("Guide must document no vibration", en.contains("battle screen never vibrates"))
     }

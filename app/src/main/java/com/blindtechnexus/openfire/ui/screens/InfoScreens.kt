@@ -464,6 +464,10 @@ fun ChangelogScreen(viewModel: GameViewModel) {
                 "The final round keeps its seven minute limit: if Robert survives that long you lose the game. A defeat still costs 20 coins unless you have none, and the timer bomb picker still freezes all enemy fire until you confirm or cancel it.",
                 "Wall sound fixed: the dedicated wall-sound.mp3 is the one and only boundary impact, it belongs to the player alone and it plays once when a run is first stopped, so holding a finger against a wall can no longer smear it into a continuous, stretched noise.",
                 "Robert never touches a wall again. Every one of his steps is simulated against the four boundaries before he takes it: the moment a heading would bring him near a boundary he cuts sideways, turns back or runs at the open middle of the zone, silently. The repeated and stretched wall sound on the enemy side is gone for good.",
+                "Machine gun and MP40 fire is now one truly gapless loop: the gun sound starts on the very instant of the hold, it never breaks between two repeats and no enemy shot can cut it. Lifting the hand pauses it in the same millisecond and the next hold resumes it instantly; a held burst now lasts as long as the trigger and the magazine allow.",
+                "Robert now answers with your own trigger speed: face to face with no cover, with only a cover, or with only a gloo wall between you, he fires at exactly your cadence - half a second, a quarter of a second, whatever he hears. Coverless against a covered player he never waits longer than one second and matches any faster rate at once. A gloo wall is always detected and answered with his sniper rifle.",
+                "Round one mirrors you: a sniper rifle you buy is handed to Robert as well, and a gloo wall of yours allows him one gloo wall per game. From round two he always carries two gloo walls per game.",
+                "Weapon powers were rebalanced upward by capacity and now reach the full 40 point ceiling: knife 0, 8, 12 and 14; shotgun 0, 6, 11 and 16; assault rifle 0, 8, 13 and 18; pistol 0, 9, 14 and 20; sniper rifle 0, 10, 16 and 22; sword 0, 10, 16 and 22; AWM 14, 16, 26 and 40; MP40 0, 5, 8 and 11; machine gun 0, 7, 11 and 15. The AWM long range hit is 14 health points and the new Max Speed extension for 300 coins makes you run 30 percent faster than the speed level you selected.",
                 "Enemy combat rebuilt: one hit and Robert fires straight back at once; two hits in a row, or simply out-firing him, and he sprints right across the 100 metre zone at twice your own top running speed before flanking you from a new angle. Raise a gloo wall he cannot break and he refuses the fight entirely and runs away until the wall drops. The 'the enemy holds his fire while you choose the timer' prompt is no longer spoken over the timer itself."
             )
             latestNotes.forEach { note ->
@@ -485,7 +489,7 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             )
             Spacer(modifier = Modifier.height(14.dp))
             Text(
-                text = "Version 2.3 (Current)",
+                text = "Version 2.4 (Current)",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = WarnBright

@@ -75,7 +75,8 @@ class RobertTest {
     fun roundTwoAddsKnifeSwordAndHisMp40() {
         val roundTwo = RobertRules.profile(2, 1)
         assertEquals(3, roundTwo.medikits)
-        assertEquals(1, roundTwo.glueWalls)
+        // Two gloo walls per game from round two on.
+        assertEquals(2, roundTwo.glueWalls)
         assertEquals(2, roundTwo.covers)
         assertTrue(roundTwo.weapons.contains(Weapon.KNIFE))
         assertTrue(roundTwo.weapons.contains(Weapon.SWORD))
@@ -679,10 +680,11 @@ class RobertTest {
     }
 
     @Test
-    fun lockedSniperNeedsAGlueWallAndHealthUnderOneHundred() {
+    fun lockedSniperIsAlwaysUnlockedAgainstAGlueWall() {
         val profile = RobertRules.profile(1, 1)
         assertFalse(RobertRules.sniperAllowed(profile, false, 50))
-        assertFalse(RobertRules.sniperAllowed(profile, true, 150))
+        // A gloo wall is always detected and answered with the sniper rifle.
+        assertTrue(RobertRules.sniperAllowed(profile, true, 150))
         assertTrue(RobertRules.sniperAllowed(profile, true, 99))
         assertTrue(RobertRules.sniperAllowed(profile, true, 1))
 
@@ -690,6 +692,49 @@ class RobertTest {
         assertFalse(withoutWall.contains(Weapon.SNIPER))
         val situationMet = RobertRules.allowedWeapons(profile, true, 90)
         assertTrue(situationMet.contains(Weapon.SNIPER))
+    }
+
+    @Test
+    fun roundOneMirrorsThePlayersSniperRifleAndGlooWall() {
+        // Without the player's sniper the rifle stays locked in round one.
+        assertTrue(RobertRules.profile(1, 1).sniperLocked)
+        // Buying one hands Robert an unlocked sniper rifle as well.
+        assertFalse(RobertRules.profile(1, 1, playerOwnsSniper = true).sniperLocked)
+        // The mirror only exists in round one; from round three it is free.
+        assertFalse(RobertRules.profile(3, 1, playerOwnsSniper = true).sniperLocked)
+
+        // A player gloo wall gives him exactly one of his own in round one.
+        assertEquals(0, RobertRules.profile(1, 1, playerGlueWalls = 0).glueWalls)
+        assertEquals(1, RobertRules.profile(1, 1, playerGlueWalls = 2).glueWalls)
+        // From round two he always carries two per game.
+        for (round in 2..3) {
+            assertEquals(
+                "round $round gloo walls",
+                RobertRules.ENEMY_GLUE_WALLS_FROM_ROUND_TWO,
+                RobertRules.profile(round, 1, playerGlueWalls = 0).glueWalls
+            )
+        }
+    }
+
+    @Test
+    fun theEnemyMirrorsThePlayersOwnFiringCadence() {
+        // Face to face with no cover: exactly the player's rhythm.
+        assertEquals(500L, RobertRules.mirroredFireInterval(500L, false, false))
+        assertEquals(250L, RobertRules.mirroredFireInterval(250L, false, false))
+        // Only a gloo wall, or only a cover: still exactly the player's rhythm.
+        assertEquals(500L, RobertRules.mirroredFireInterval(500L, true, false))
+        assertEquals(500L, RobertRules.mirroredFireInterval(500L, false, true))
+        assertEquals(500L, RobertRules.mirroredFireInterval(500L, true, true))
+        // Coverless against a covered player: never slower than one second.
+        assertEquals(1_000L, RobertRules.mirroredFireInterval(2_000L, false, true))
+        // ... and any faster cadence is matched at once.
+        assertEquals(400L, RobertRules.mirroredFireInterval(400L, false, true))
+        // A coverless enemy against a coverless player keeps the slow rhythm.
+        assertEquals(2_000L, RobertRules.mirroredFireInterval(2_000L, false, false))
+
+        assertTrue(RobertRules.mirrorsPlayerCadence(true, true, true))
+        assertTrue(RobertRules.mirrorsPlayerCadence(false, false, true))
+        assertFalse(RobertRules.mirrorsPlayerCadence(false, false, false))
     }
 
     @Test

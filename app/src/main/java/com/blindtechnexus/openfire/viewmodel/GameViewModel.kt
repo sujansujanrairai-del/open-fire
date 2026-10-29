@@ -139,6 +139,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** Start of the player's current fire burst (continuous fire detection). */
     private var playerBurstStartedAtMs: Long = 0L
 
+    /** Wall-clock moment of the player's most recent shot. */
+    private var lastPlayerShotAtMs = 0L
+
+    /** Last time the enemy hit report was spoken out loud. */
+    private var lastHitSpeechAtMs = 0L
+
+    /**
+     * The player's own firing rhythm, in milliseconds, averaged over the
+     * shots of the current exchange. Robert fires at exactly this cadence
+     * whenever the two fighters are trading shots.
+     */
+    private var playerShotIntervalMs = RobertRules.DEFAULT_PLAYER_INTERVAL_MS
+
     /** Last voice-related settings applied, to avoid resetting TTS while dragging volume. */
     private var syncedVoiceSignature: String? = null
 
@@ -153,7 +166,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var lastExplicitActionAt = 0L
 
     private val robertProfile: RobertProfile
-        get() = RobertRules.profile(_stats.value.round, _stats.value.level)
+        get() = RobertRules.profile(
+            round = _stats.value.round,
+            level = _stats.value.level,
+            // Round one mirrors the player's sniper rifle, and the enemy may
+            // answer a player gloo wall with one of his own.
+            playerOwnsSniper = _inventory.value.ownsWeapon(Weapon.SNIPER),
+            playerGlueWalls = _inventory.value.glueWalls
+        )
 
     private companion object {
         /** Fast retreat: metres gained per flee tick, and the tick length. */
@@ -210,6 +230,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         /** Robert stops walking once he is this close to his band distance. */
         const val BAND_TOLERANCE_M = 1.5f
+
+        /**
+         * In a fast exchange the enemy hits land much faster than a sentence
+         * can be spoken. The report is then kept on screen and read out at
+         * most once per this window, so the speech never chops itself into
+         * silence while the gunfire stays clear.
+         */
+        const val FAST_EXCHANGE_SPEECH_MS = 1_200L
 
         /**
          * Pressure mode. While the weapon in the player's hands is damaged the
@@ -845,11 +873,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         playerAtWall = false
         menuProtectUntilMs = 0L
         playerBurstStartedAtMs = 0L
+        lastPlayerShotAtMs = 0L
+        playerShotIntervalMs = RobertRules.DEFAULT_PLAYER_INTERVAL_MS
+        lastHitSpeechAtMs = 0L
         lastFireAt = 0L
 
         val round = _stats.value.round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
         val level = _stats.value.level.coerceIn(1, Progression.LEVELS_PER_ROUND)
-        val profile = RobertRules.profile(round, level)
+        val profile = RobertRules.profile(
+            round = round,
+            level = level,
+            playerOwnsSniper = _inventory.value.ownsWeapon(Weapon.SNIPER),
+            playerGlueWalls = _inventory.value.glueWalls
+        )
         val hp = Progression.hpFor(round, level)
         // Weapons handed out for free in this round are issued before the
         // battle rotation is built (the MP40 and the AWM from round two, the
@@ -1030,6 +1066,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         RobertRules.enemyFastSpeedMps(_gameState.value.round)
 
     /**
+     * The Max Speed extension: while it is owned and enabled every running
+     * direction is 30 percent faster than the level chosen with the
+     * three-finger gesture. It is exactly 1.0 while it is missing, disabled
+     * or removed, so the three running levels stay untouched for everybody
+     * who does not own it.
+     */
+    private fun maxSpeedFactor(): Float =
+        if (_inventory.value.extensionEnabled(Extension.MAX_SPEED)) {
+            Extension.MAX_SPEED_GAIN
+        } else {
+            1.0f
+        }
+
+    /**
      * The three-finger running speed gesture: swiping right steps one level
      * faster, swiping left one level slower, cycling slow / normal / fast.
      * The fast level matches Robert's own fast (fleeing) speed for the round
@@ -1053,10 +1103,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Apply the new level to the live footstep loop immediately.
         val held = moveDirection
         if (held != null) {
-            val speedMps = next.speedMps(RunPressure.speedFactor(movePressure), enemyFastSpeedMps())
+            val speedMps = next.speedMps(
+                RunPressure.speedFactor(movePressure),
+                enemyFastSpeedMps()
+            ) * maxSpeedFactor()
             audioManager.updatePlayerWalkAudio(speedMps, next.volumeGain())
         }
-        msg("${t("runSpeed")}: ${t(next.nameKey)}")
+        val maxSpeedNote = if (_inventory.value.extensionEnabled(Extension.MAX_SPEED)) {
+            " ${t("maxSpeedOn")}"
+        } else {
+            ""
+        }
+        msg("${t("runSpeed")}: ${t(next.nameKey)}.$maxSpeedNote")
     }
 
     /**
@@ -1085,7 +1143,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 if (state.playerHp <= 0 || state.robertHp <= 0) break
 
                 val speed = state.runSpeedLevel
-                val factor = speed.factor(RunPressure.speedFactor(movePressure), enemyFastSpeedMps())
+                val factor = speed.factor(RunPressure.speedFactor(movePressure), enemyFastSpeedMps()) *
+                    maxSpeedFactor()
                 val speedMps = RunPressure.BASE_SPEED_MPS * factor
                 val tickMs = (PLAYER_MOVE_TICK_MS * (RunPressure.BASE_SPEED_MPS / speedMps))
                     .toLong()
@@ -1688,10 +1747,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      *
      *  - while the timer picker is open he holds his fire completely (a short
      *    internal tick keeps the loop alive without shooting);
-     *  - he presses continuously only when the player's weapon is damaged or
-     *    the player is extremely weak;
-     *  - in every other case he waits a random 2 s, 2.5 s or 3 s, and a bit
-     *    longer while he is running.
+     *  - while he is fleeing he keeps a tactical 1.5 s or 2 s beat;
+     *  - while an exchange is running - or while he is coverless against a
+     *    covered player - he answers at exactly the player's own cadence,
+     *    never slower than one second in the coverless case;
+     *  - in every other case he presses only when the player's weapon is
+     *    damaged or the player is extremely weak, and otherwise waits a
+     *    random 1.5 s to 2 s, a bit longer while he is running.
      */
     private fun robertFireInterval(): Long {
         val state = _gameState.value
@@ -1703,6 +1765,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             state.robertState == "bombFlee" ||
             state.robertState == "avoid"
         if (fleeing) return RobertRules.normalTacticalInterval(Random)
+        // The enemy answers with the player's own rhythm. Face to face with
+        // no cover, only a gloo wall, or only a cover, he fires exactly as
+        // fast as the player; coverless against a covered player he never
+        // fires slower than once a second and matches any faster cadence.
+        if (mirrorDuelActive(state)) {
+            return RobertRules.mirroredFireInterval(
+                playerIntervalMs = playerShotIntervalMs,
+                enemyHasCover = state.robertCoverActive,
+                playerHasCover = state.coverActive
+            )
+        }
         val situation = RobertRules.assessSituation(
             state.robertHp, state.robertMaxHp, state.playerHp, state.playerMaxHp,
             isPlayerWeaponLocked(state)
@@ -1721,7 +1794,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun playerHpFraction(state: GameState): Float =
         if (state.playerMaxHp <= 0) 0f else state.playerHp.toFloat() / state.playerMaxHp.toFloat()
 
-
     /** True while the player's health went down inside the current burst. */
     private fun playerHealthDropping(state: GameState): Boolean =
         state.playerBurstShots > 0 && state.playerHp < state.playerBurstPlayerHp
@@ -1729,6 +1801,47 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** True while Robert's health went down inside the current burst. */
     private fun robertHealthDropping(state: GameState): Boolean =
         state.playerBurstShots > 0 && state.robertHp < state.playerBurstRobertHp
+
+    /**
+     * Learns the player's real firing rhythm.
+     *
+     * Every shot is timed and folded into a running average, so Robert can
+     * answer a 0.5 second burst, a 0.25 second burst or any other cadence
+     * with exactly the same rhythm instead of a fixed clock. Gaps below
+     * [RobertRules.MIN_PLAYER_INTERVAL_MS] (one tap producing two events) and
+     * above [RobertRules.MAX_MIRRORED_INTERVAL_MS] (two unrelated single
+     * shots) are ignored, so a stray event can never wreck the average.
+     */
+    private fun recordPlayerShotCadence(now: Long) {
+        val previous = lastPlayerShotAtMs
+        lastPlayerShotAtMs = now
+        if (previous <= 0L) return
+        val gap = now - previous
+        if (gap < RobertRules.MIN_PLAYER_INTERVAL_MS) return
+        if (gap > RobertRules.MAX_MIRRORED_INTERVAL_MS) {
+            // A long pause starts a fresh rhythm on the next shot.
+            playerShotIntervalMs = RobertRules.DEFAULT_PLAYER_INTERVAL_MS
+            return
+        }
+        playerShotIntervalMs = (playerShotIntervalMs + gap) / 2L
+    }
+
+    /** True while the player is still inside his current firing exchange. */
+    private fun playerFiringNow(): Boolean =
+        lastPlayerShotAtMs > 0L &&
+            System.currentTimeMillis() - lastPlayerShotAtMs <= RobertRules.MIRROR_EXCHANGE_WINDOW_MS
+
+    /**
+     * True while Robert must trade shots at the player's own cadence: while
+     * an exchange is running, or whenever he is coverless and the player is
+     * standing behind a cover (he then presses at one second or faster).
+     */
+    private fun mirrorDuelActive(state: GameState): Boolean =
+        RobertRules.mirrorsPlayerCadence(
+            playerFiringNow = playerFiringNow(),
+            enemyHasCover = state.robertCoverActive,
+            playerHasCover = state.coverActive
+        )
 
     /**
      * Registers one player shot in the burst counter that Robert reads. Shots
@@ -1739,6 +1852,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun registerPlayerBurstShot() {
         val now = System.currentTimeMillis()
+        recordPlayerShotCadence(now)
         var shouldRetreat = false
         _gameState.update { state ->
             val fresh = now - playerBurstStartedAtMs > RobertRules.PLAYER_BURST_WINDOW_MS
@@ -1798,6 +1912,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // The same holds for a bomb counting down towards him: he only runs.
         if (state.bombInFlight && state.bombFromPlayer) return
         expirePlayerBurstIfStale()
+        // An exchange is running (or he is coverless against a covered
+        // player): he trades shots at the player's own cadence instead of
+        // pausing after one or two bullets or running away.
+        val mirrorDuel = mirrorDuelActive(state)
 
         val situation = RobertRules.assessSituation(
             robertHp = state.robertHp,
@@ -1812,7 +1930,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (!retaliate &&
             state.robertState in setOf("retreat", "avoid", "missileFlee", "bombFlee")
         ) return
-        if (!retaliate &&
+        if (!retaliate && !mirrorDuel &&
             state.robertState == "turnBack" &&
             !RobertRules.isContinuousPlayerFire(state.playerBurstShots)
         ) return
@@ -1823,7 +1941,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Robert in this exchange (two against one, for example) Robert runs
         // away immediately. A protected Robert is the one exception - he
         // keeps firing from behind his barrier.
-        if (!retaliate && !pressing && (
+        if (!retaliate && !pressing && !mirrorDuel && (
                 RobertRules.shouldFleeFight(state.fightPlayerHits, state.fightRobertHits) ||
                     (situation == RobertRules.CombatSituation.DISADVANTAGE &&
                         (state.robertState == "advance" || state.robertState == "flank"))
@@ -1836,7 +1954,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // A finished burst is never extended: he fired one or two shots, so
         // now he pauses and very often repositions instead of shooting again.
         // Only the pressing situations are allowed to fire continuously.
-        if (!retaliate && !pressing &&
+        if (!retaliate && !pressing && !mirrorDuel &&
             RobertRules.burstFinished(state.robertSuccessiveShots, state.robertBurstLimit)
         ) {
             _gameState.update {
@@ -1856,7 +1974,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         // He runs as readily as he shoots: unless the player is pinned down,
         // a good share of his decisions is a reposition instead of a shot.
-        if (!retaliate && !pressing && RobertRules.shouldRepositionInsteadOfFiring(
+        if (!retaliate && !pressing && !mirrorDuel && RobertRules.shouldRepositionInsteadOfFiring(
                 situation = situation,
                 playerWeaponDamaged = isPlayerWeaponLocked(state),
                 playerHpFraction = playerWeakFraction,
@@ -1929,7 +2047,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         // Smart weapon selection based on health bands: 40-70%, 90-100%, 20-40%
         // If enemy feels unsafe (low health or heavy damage streak) he retreats.
-        if (!retaliate && RobertRules.shouldRetreatUnsafe(
+        if (!retaliate && !mirrorDuel && RobertRules.shouldRetreatUnsafe(
                 state.robertHp,
                 state.robertMaxHp,
                 state.robertConsecutiveHits,
@@ -2164,6 +2282,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         text += applyAutomaticDefences()
         ensureRobertPositioned()
+        announceEnemyHit(text, mirrorDuel)
+    }
+
+    /**
+     * Speaks the enemy hit report, keeping a fast exchange readable: the
+     * sentence is always shown, but it is only read out loud at most once per
+     * [FAST_EXCHANGE_SPEECH_MS] while the shots arrive faster than that.
+     */
+    private fun announceEnemyHit(text: String, fastExchange: Boolean) {
+        val now = System.currentTimeMillis()
+        if (fastExchange && now - lastHitSpeechAtMs < FAST_EXCHANGE_SPEECH_MS) {
+            setLog(text)
+            return
+        }
+        lastHitSpeechAtMs = now
         msg(text)
     }
 
@@ -2263,7 +2396,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
             return
         }
-        if (RobertRules.shouldFleeFromPlayerFire(
+        // While he is trading shots at the player's own cadence he stands
+        // his ground: breaking contact here would silence the answer the
+        // player is hearing back.
+        if (!mirrorDuelActive(state) && RobertRules.shouldFleeFromPlayerFire(
                 hitsTakenInRow = state.robertConsecutiveHits,
                 playerHits = state.fightPlayerHits,
                 robertHits = state.fightRobertHits
@@ -2372,7 +2508,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val protectedPress = robertPressing(state) &&
             state.robertHasActiveDefence &&
             !state.playerHasActiveDefence
-        if (!protectedPress &&
+        // An exchange Robert is answering at the player's exact cadence
+        // keeps him in the fight; only a genuine lull lets him reposition.
+        val answeringExchange = mirrorDuelActive(state)
+        if (!protectedPress && !answeringExchange &&
             RobertRules.shouldFleeFight(state.fightPlayerHits, state.fightRobertHits)
         ) {
             beginRobertSprint()
@@ -2409,7 +2548,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertHealthDropping = robertHealthDropping(state),
             playerHealthDropping = playerHealthDropping(state)
         )
-        if ((state.robertState == "advance" || state.robertState == "flank") &&
+        if (!answeringExchange &&
+            (state.robertState == "advance" || state.robertState == "flank") &&
             (mustFlee || sustained)
         ) {
             beginRobertSprint()
@@ -3305,10 +3445,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Holding the up-swipe with a submachine gun (MP40 or machine gun)
-     * selected keeps firing: one bullet per [Weapon.burstIntervalMs] for at
-     * most [Weapon.maxBurstMs], with the weapon's own sound on loop for the
-     * whole burst. Releasing the swipe stops the bullets and the sound at
-     * once, and the player may hold or release at any moment.
+     * selected keeps firing: one bullet per [Weapon.burstIntervalMs] for as
+     * long as the trigger is held, with the weapon's own sound on a truly
+     * gapless loop.
+     *
+     * The loop is started on the very same gesture that registers the hold,
+     * before the first bullet is even resolved, and it is played on the
+     * dedicated hold channel of [AudioManager]. That channel is pre-prepared
+     * and never cut by the enemy's answering shot, so no silence can appear
+     * between two repeats of the gun sound. Lifting the finger pauses it in
+     * the same millisecond and the next hold resumes it instantly.
      */
     fun startHoldFire() {
         if (_currentScreen.value != Screen.BATTLE) return
@@ -3324,24 +3470,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         markExplicitAction()
         _gameState.update { it.copy(autoFireActive = true) }
-        // The held weapon's own sound loops stably until the trigger is
-        // released, and it takes the exclusive weapon channel so nothing else
-        // mixes with it while the burst runs.
-        try {
-            audioManager.playWeaponLoop(
-                weapon.fireSoundKey,
-                volume = 1.0f,
-                posZ = -_gameState.value.distance
-            )
-        } catch (_: Exception) {
-            audioManager.playLoop(weapon.fireSoundKey)
-        }
+        // Sound first, bullets second: the gun is already firing the moment
+        // the hand goes down.
+        audioManager.startWeaponLoop(
+            weapon.fireSoundKey,
+            volume = 1.0f,
+            posZ = -state.distance
+        )
         autoFireJob?.cancel()
         autoFireJob = viewModelScope.launch {
-            val deadline = System.currentTimeMillis() + weapon.maxBurstMs
             // The first bullet leaves at once, the rest follow the interval.
             fireOneAutomaticShot()
-            while (System.currentTimeMillis() < deadline) {
+            while (holdFireAllowed()) {
                 delay(weapon.burstIntervalMs)
                 if (!holdFireAllowed()) break
                 fireOneAutomaticShot()
@@ -3350,21 +3490,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Releasing the swipe: the burst and its looped sound both stop — handled properly. */
+    /**
+     * Releasing the swipe: bullets and the looped gun sound stop together and
+     * immediately, with no tail and no silence in between.
+     */
     fun stopHoldFire() {
         autoFireJob?.cancel()
         autoFireJob = null
         val state = _gameState.value
+        // The sound is cut first, so lifting the hand is heard as silence at
+        // once. Both automatic loops are paused, whatever the current weapon
+        // is, which also covers a weapon switch during a burst.
+        audioManager.stopWeaponLoop(state.activeWeapon.fireSoundKey)
+        audioManager.stopMp40Loop()
         if (!state.autoFireActive) return
         _gameState.update { it.copy(autoFireActive = false) }
-        try {
-            audioManager.stopMp40Loop()
-        } catch (_: Exception) {}
-        audioManager.stopLoop(state.activeWeapon.fireSoundKey)
-        audioManager.stopSound(state.activeWeapon.fireSoundKey)
-        // Ensure any streamed MP40 loop is fully stopped and not leaking
-        audioManager.stopSound("mp40")
-        audioManager.stopSound("machineGun")
     }
 
     /** One bullet of a held automatic burst. */
@@ -3372,15 +3512,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (!holdFireAllowed()) return
         val state = _gameState.value
         val weapon = state.activeWeapon
-        // An enemy shot owns the exclusive weapon channel too and may have
-        // cut our loop. Restore it before the next bullet so a held burst is
-        // never left silent while the trigger is still down.
-        if (state.autoFireActive && !audioManager.isTrackActive(weapon.fireSoundKey)) {
-            audioManager.playWeaponLoop(
+        // Watchdog: the trigger is still down, so the loop must be audible.
+        // Re-arming it here restores a burst that a stalled stream or a
+        // paused player may have interrupted, and refreshes the distance
+        // gain while the fighters move.
+        if (!audioManager.isWeaponLoopActive(weapon.fireSoundKey)) {
+            audioManager.startWeaponLoop(
                 weapon.fireSoundKey,
                 volume = 1.0f,
                 posZ = -state.distance
             )
+        } else {
+            audioManager.refreshWeaponLoop(weapon.fireSoundKey, volume = 1.0f, posZ = -state.distance)
         }
         lastFireAt = 0L
         fire()
@@ -3395,7 +3538,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (state.activeWeaponDamaged) return false
         if (!state.activeWeapon.autoFire) return false
         if (state.timerSelectActive) return false
-        return state.activeAmmo > 0
+        // An empty magazine only ends the burst when nothing can refill it:
+        // the automatic reload extension keeps a held burst alive.
+        if (state.activeAmmo > 0) return true
+        return _inventory.value.extensionEnabled(Extension.AUTO_RELOAD)
     }
 
     /** True while the selected weapon is a hold-to-fire submachine gun. */
@@ -3452,6 +3598,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun switchWeapon(direction: Int) {
         if (_currentScreen.value != Screen.BATTLE) return
         markExplicitAction()
+        // Switching weapons always ends a held burst first: the old gun's
+        // loop must never bleed into the new weapon.
+        if (_gameState.value.autoFireActive) stopHoldFire()
         val state = _gameState.value
         // While the timer bomb picker is open the same left / right swipe
         // walks through the durations instead of changing weapon.
@@ -3874,7 +4023,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
             // The three-finger running speed and the position inside the
             // 100 metre zone belong to the own status too.
-            val speedText = "${t("runSpeed")} ${t(state.runSpeedLevel.nameKey)}."
+            val speedText = "${t("runSpeed")} ${t(state.runSpeedLevel.nameKey)}." +
+                if (inv.extensionEnabled(Extension.MAX_SPEED)) " ${t("maxSpeedOn")}" else ""
             val positionText = "${t("yourPosition")} ${state.playerX.roundToInt()}, " +
                 "${state.playerY.roundToInt()} ${t("meters")}."
             val bombText = if (state.bombInFlight) {
@@ -4214,7 +4364,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // the next screen or the next battle.
         audioManager.stopBattleProjectiles()
         audioManager.stopWeaponSounds()
+        audioManager.stopWeaponLoops()
         audioManager.stopFootsteps()
+        // A held burst never survives a screen change or an app pause.
+        if (_gameState.value.autoFireActive) {
+            _gameState.update { it.copy(autoFireActive = false) }
+        }
     }
 
     override fun onCleared() {

@@ -16,16 +16,21 @@ import kotlin.math.roundToInt
  *
  *  | weapon          | 0-40% | 40-70% | 70-90% | 90-100% |
  *  |-----------------|-------|--------|--------|---------|
- *  | knife           |   0   |    5   |    8   |    10   |
- *  | shotgun         |   0   |    5   |    8   |    12   |
- *  | assault rifle   |   0   |    7   |   10   |    14   |
- *  | pistol          |   0   |    7   |   11   |    15   |
- *  | sniper rifle    |   0   |    8   |   12   |    16   |
- *  | sword           |   0   |    8   |   12   |    16   |
- *  | AWM             |  10 * |   12   |   18   |    24   |
- *  | MP40            |   0   |    4   |    6   |     8   |
- *  | machine gun     |   0   |    5   |    8   |    11   |
+ *  | knife           |   0   |    8   |   12   |    14   |
+ *  | shotgun         |   0   |    6   |   11   |    16   |
+ *  | assault rifle   |   0   |    8   |   13   |    18   |
+ *  | pistol          |   0   |    9   |   14   |    20   |
+ *  | sniper rifle    |   0   |   10   |   16   |    22   |
+ *  | sword           |   0   |   10   |   16   |    22   |
+ *  | AWM             |  14 * |   16   |   26   |    40   |
+ *  | MP40            |   0   |    5   |    8   |    11   |
+ *  | machine gun     |   0   |    7   |   11   |    15   |
  *  | explosives      |  kill |  kill  |  kill  |   kill  |
+ *
+ * The table is laid out by capacity: the cheaper the weapon, the smaller its
+ * row, and the AWM - the most expensive rifle - is the only normal weapon
+ * that reaches the full [MAX_WEAPON_DAMAGE_HP] cap of 40 health points, which
+ * is exactly the maximum 40 percent health reduction of the game.
  *
  *  * The AWM is a long-range precision rifle: inside the 20% to 40%
  *    proximity band - where every other weapon misses completely - it still
@@ -50,7 +55,7 @@ object DamageTable {
     const val AWM_LONG_RANGE_MAX_PROXIMITY = 40f
 
     /** AWM long-range hit: exactly this many health points. */
-    const val AWM_LONG_RANGE_DAMAGE_HP = 10
+    const val AWM_LONG_RANGE_DAMAGE_HP = 14
 
     /** Legacy name of the flat AWM long-range hit. */
     const val AWM_LONG_RANGE_MIN_HP = AWM_LONG_RANGE_DAMAGE_HP
@@ -70,15 +75,15 @@ object DamageTable {
 
     /** One row per weapon, indexed by [HitZone.ordinal]. Values are HP. */
     private val table: Map<Weapon, IntArray> = mapOf(
-        Weapon.KNIFE to intArrayOf(0, 5, 8, 10),
-        Weapon.SHORT_GUN to intArrayOf(0, 5, 8, 12),
-        Weapon.ASSAULT_GUN to intArrayOf(0, 7, 10, 14),
-        Weapon.PISTOL to intArrayOf(0, 7, 11, 15),
-        Weapon.SNIPER to intArrayOf(0, 8, 12, 16),
-        Weapon.SWORD to intArrayOf(0, 8, 12, 16),
-        Weapon.AWM to intArrayOf(0, 12, 18, 24),
-        Weapon.MP40 to intArrayOf(0, 4, 6, 8),
-        Weapon.MACHINE_GUN to intArrayOf(0, 5, 8, 11),
+        Weapon.KNIFE to intArrayOf(0, 8, 12, 14),
+        Weapon.SHORT_GUN to intArrayOf(0, 6, 11, 16),
+        Weapon.ASSAULT_GUN to intArrayOf(0, 8, 13, 18),
+        Weapon.PISTOL to intArrayOf(0, 9, 14, 20),
+        Weapon.SNIPER to intArrayOf(0, 10, 16, 22),
+        Weapon.SWORD to intArrayOf(0, 10, 16, 22),
+        Weapon.AWM to intArrayOf(0, 16, 26, 40),
+        Weapon.MP40 to intArrayOf(0, 5, 8, 11),
+        Weapon.MACHINE_GUN to intArrayOf(0, 7, 11, 15),
         Weapon.GRENADE to intArrayOf(
             EXPLOSIVE_PERCENT, EXPLOSIVE_PERCENT, EXPLOSIVE_PERCENT, EXPLOSIVE_PERCENT
         ),

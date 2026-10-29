@@ -124,7 +124,7 @@ object Combat {
     const val GLUE_WALL_BREAK_PROXIMITY = 90f
 
     /** Close-range shotgun power retained as a named combat constant. */
-    const val SHORT_GUN_CLOSE_POWER_PERCENT = 12
+    const val SHORT_GUN_CLOSE_POWER_PERCENT = 16
 
     /** Converts a distance (50 = far edge, 0 = point-blank) into 0..100% proximity. */
     fun proximityOf(distance: Float): Float =

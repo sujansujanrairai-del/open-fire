@@ -1,5 +1,6 @@
 package com.blindtechnexus.openfire
 
+import com.blindtechnexus.openfire.data.Strings
 import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
@@ -11,6 +12,7 @@ import com.blindtechnexus.openfire.model.Shop
 import com.blindtechnexus.openfire.model.Weapon
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -237,6 +239,53 @@ class ShopTest {
         assertEquals(190, Extension.AUTO_MEDKIT.price)
         assertEquals(250, Extension.AUTO_COVER.price)
         assertEquals(250, Extension.AUTO_GLUE_WALL.price)
+    }
+
+    @Test
+    fun maxSpeedIsTheFifthExtension() {
+        assertEquals(5, Extension.entries.size)
+        assertEquals(300, Extension.MAX_SPEED.price)
+        assertEquals("maxSpeed", Extension.MAX_SPEED.id)
+        assertEquals("extMaxSpeed", Extension.MAX_SPEED.nameKey)
+        assertEquals("extMaxSpeedInfo", Extension.MAX_SPEED.descriptionKey)
+        assertNotEquals(
+            Extension.MAX_SPEED.nameKey,
+            Strings.get(Extension.MAX_SPEED.nameKey, "en")
+        )
+        assertNotEquals(
+            Extension.MAX_SPEED.descriptionKey,
+            Strings.get(Extension.MAX_SPEED.descriptionKey, "en")
+        )
+        for (lang in listOf("hi", "ne")) {
+            assertNotEquals(
+                Extension.MAX_SPEED.nameKey,
+                Strings.get(Extension.MAX_SPEED.nameKey, lang)
+            )
+            assertNotEquals(
+                Extension.MAX_SPEED.descriptionKey,
+                Strings.get(Extension.MAX_SPEED.descriptionKey, lang)
+            )
+        }
+        // The speed gain is a real multiplier on top of the selected level.
+        assertEquals(1.30f, Extension.MAX_SPEED_GAIN, 0.0001f)
+    }
+
+    @Test
+    fun maxSpeedCanBeBoughtAndChanged() {
+        val bought = Shop.buyExtension(Inventory(), 300, Extension.MAX_SPEED)
+        assertTrue(bought.success)
+        assertEquals(0, bought.coins)
+        assertTrue(bought.inventory.extensionEnabled(Extension.MAX_SPEED))
+        val disabled = Shop.toggleExtension(bought.inventory, 0, Extension.MAX_SPEED)
+        assertTrue(disabled.success)
+        assertFalse(disabled.inventory.extensionEnabled(Extension.MAX_SPEED))
+    }
+
+    @Test
+    fun buyingMaxSpeedWithoutEnoughCoinsFails() {
+        val result = Shop.buyExtension(Inventory(), 299, Extension.MAX_SPEED)
+        assertFalse(result.success)
+        assertEquals("notEnoughCoins", result.reasonKey)
     }
 
     @Test

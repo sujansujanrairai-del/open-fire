@@ -36,10 +36,10 @@ class GameplayUpgradeTest {
                 )
             }
         }
-        // The exact bug that was reported: 14 must never become 140.
-        assertEquals(14, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 1000))
-        assertEquals(14, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
-        assertEquals(14, RobertRules.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
+        // The exact bug that was reported: 18 must never become 180.
+        assertEquals(18, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 1000))
+        assertEquals(18, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
+        assertEquals(18, RobertRules.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
     }
 
     @Test

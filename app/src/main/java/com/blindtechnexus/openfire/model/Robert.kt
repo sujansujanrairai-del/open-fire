@@ -65,6 +65,12 @@ object RobertRules {
     /** Robert's sniper is usable under this health while it is locked. */
     const val LOCKED_SNIPER_MAX_HP = 100
 
+    /** Round one: one gloo wall of his own, only while the player has one. */
+    const val ENEMY_GLUE_WALLS_ROUND_ONE = 1
+
+    /** From round two every game gives him two gloo walls. */
+    const val ENEMY_GLUE_WALLS_FROM_ROUND_TWO = 2
+
     /** Chance that a relocation is a deception trip into the miss band. */
     const val DECEPTION_CHANCE = 0.22f
 
@@ -105,6 +111,64 @@ object RobertRules {
     /** Player shots inside one burst window that count as continuous fire. */
     const val COUNTER_FIRE_BURST_SHOTS = 3
 
+    // ------------------------------------------------------------------
+    // The player's real firing rhythm, mirrored back at him
+    // ------------------------------------------------------------------
+
+    /** Cadence Robert uses until the player has fired at least twice. */
+    const val DEFAULT_PLAYER_INTERVAL_MS = 1_500L
+
+    /** Fastest cadence that is ever mirrored (a 0.25 s burst is answered alike). */
+    const val MIN_MIRRORED_INTERVAL_MS = 250L
+
+    /** Slower gaps than this are treated as separate taps, not as a rhythm. */
+    const val MAX_MIRRORED_INTERVAL_MS = 3_000L
+
+    /** Two player shots closer than this are still the same rhythm sample. */
+    const val MIN_PLAYER_INTERVAL_MS = 120L
+
+    /**
+     * Robert never trades slower than this while he is coverless and the
+     * player is standing behind a cover: even a slow player is then answered
+     * once a second, and a faster player is answered faster still.
+     */
+    const val COVERLESS_PRESS_INTERVAL_MS = 1_000L
+
+    /**
+     * The cadence Robert answers with, which is simply the player's own.
+     *
+     *  - both fighters coverless, only a cover, or only a gloo wall: he fires
+     *    at exactly the player's rate (0.5 s, 0.25 s, whatever was heard);
+     *  - a coverless Robert against a covered player: at most one second
+     *    between shots, faster while the player fires faster.
+     *
+     * A glue wall of the player is handled by the sniper duel and uses the
+     * same mirrored rate. The result is clamped so an accidental double tap
+     * can never turn the enemy into an unplayable machine gun.
+     */
+    fun mirroredFireInterval(
+        playerIntervalMs: Long,
+        enemyHasCover: Boolean,
+        playerHasCover: Boolean
+    ): Long {
+        val mirrored = playerIntervalMs.coerceIn(MIN_MIRRORED_INTERVAL_MS, MAX_MIRRORED_INTERVAL_MS)
+        return if (!enemyHasCover && playerHasCover) {
+            minOf(mirrored, COVERLESS_PRESS_INTERVAL_MS)
+        } else {
+            mirrored
+        }
+    }
+
+    /**
+     * True while Robert must answer at the player's own cadence instead of
+     * pausing, repositioning or running after one or two shots.
+     */
+    fun mirrorsPlayerCadence(
+        playerFiringNow: Boolean,
+        enemyHasCover: Boolean,
+        playerHasCover: Boolean
+    ): Boolean = playerFiringNow || (!enemyHasCover && playerHasCover)
+
     /**
      * The moment Robert answers a hit with a shot of his own: one hit and he
      * fires straight back, so trading single shots with him is never free.
@@ -137,6 +201,14 @@ object RobertRules {
 
     /** Window in which player shots are counted as one continuous burst. */
     const val PLAYER_BURST_WINDOW_MS = 2_500L
+
+    /**
+     * How long after his last shot the player still counts as firing. The
+     * enemy keeps answering at the mirrored cadence inside this short window,
+     * so an exchange stays continuous without turning him into a machine gun
+     * against an idle opponent.
+     */
+    const val MIRROR_EXCHANGE_WINDOW_MS = 1_200L
 
     /** Health fraction below which Robert panics and deploys defences instantly. */
     const val PANIC_FRACTION = 0.65f
@@ -281,20 +353,39 @@ object RobertRules {
         }
     }
 
-    fun profile(round: Int, level: Int = 1): RobertProfile {
+    fun profile(
+        round: Int,
+        level: Int = 1,
+        /**
+         * True when the player owns the sniper rifle. Round one mirrors it:
+         * buying a sniper rifle hands Robert one too, unlocked, so he never
+         * fights a scoped player with a locked rifle.
+         */
+        playerOwnsSniper: Boolean = false,
+        /** Gloo walls the player carries; round one mirrors one of them. */
+        playerGlueWalls: Int = 0
+    ): RobertProfile {
         val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
         val safeLevel = level.coerceIn(1, Progression.LEVELS_PER_ROUND)
         val maxHp = Progression.hpFor(safeRound, safeLevel)
         val weapons = weaponsForRound(safeRound)
         return when (safeRound) {
-            1 -> if (safeLevel <= 2) {
-                // Levels 1 and 2: two medkits and one cover, no glue walls.
-                RobertProfile(1, maxHp, 2, 0, 1, weapons, true, fleeAfterHits(1))
-            } else {
-                // Levels 3, 4 and 5: two medkits and two covers, no glue walls.
-                RobertProfile(1, maxHp, 2, 0, 2, weapons, true, fleeAfterHits(1))
+            1 -> {
+                // Round one: the sniper rifle is locked unless the player
+                // bought one - then Robert carries it unlocked as well - and
+                // he may answer the player's gloo wall with one of his own.
+                val roundOneWalls = if (playerGlueWalls > 0) ENEMY_GLUE_WALLS_ROUND_ONE else 0
+                val sniperLocked = !playerOwnsSniper
+                if (safeLevel <= 2) {
+                    // Levels 1 and 2: two medkits and one cover.
+                    RobertProfile(1, maxHp, 2, roundOneWalls, 1, weapons, sniperLocked, fleeAfterHits(1))
+                } else {
+                    // Levels 3, 4 and 5: two medkits and two covers.
+                    RobertProfile(1, maxHp, 2, roundOneWalls, 2, weapons, sniperLocked, fleeAfterHits(1))
+                }
             }
-            2 -> RobertProfile(2, maxHp, 3, 1, 2, weapons, true, fleeAfterHits(2))
+            // From round two on he always carries two gloo walls per game.
+            2 -> RobertProfile(2, maxHp, 3, ENEMY_GLUE_WALLS_FROM_ROUND_TWO, 2, weapons, true, fleeAfterHits(2))
             3 -> RobertProfile(
                 3, maxHp, 3, 2, 4, weapons, false, fleeAfterHits(3),
                 bombs = BombRules.enemyBombsForRound(3),
@@ -387,13 +478,17 @@ object RobertRules {
         allowedWeapons.contains(Weapon.SNIPER) && !sniperDamaged
 
     /**
-     * The sniper rifle is locked in rounds one and two. While locked it can
-     * only be used when the player has raised a glue wall AND Robert's health
-     * is below 100.
+     * The sniper rifle is locked in rounds one and two, and round one
+     * unlocks it completely as soon as the player owns one himself. While it
+     * is still locked it is used anyway the moment the player raises a gloo
+     * wall: a gloo wall is always detected and always answered with the
+     * sniper rifle. [robertHp] is kept for the callers that used to gate the
+     * locked rifle on health.
      */
     fun sniperAllowed(profile: RobertProfile, playerGlueWallActive: Boolean, robertHp: Int): Boolean =
-        !profile.sniperLocked ||
-            (playerGlueWallActive && robertHp in 1 until LOCKED_SNIPER_MAX_HP)
+        // A raised gloo wall is always detected and always answered with the
+        // sniper rifle, even in the rounds where it is otherwise locked.
+        !profile.sniperLocked || playerGlueWallActive
 
     /** Every weapon Robert may use right now. */
     fun allowedWeapons(

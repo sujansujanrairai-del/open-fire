@@ -18,7 +18,8 @@ package com.blindtechnexus.openfire.model
  *  - classic firearms and melee weapons fire one shot per swipe up;
  *  - automatic weapons ([autoFire]: the MP40 and the machine gun) keep firing
  *    while the up-swipe is held, one bullet per [burstIntervalMs], with their
- *    sound looped for at most [maxBurstMs];
+ *    sound on a gapless loop for as long as the trigger and the magazine
+ *    allow ([maxBurstMs] is only the legacy reference length of one burst);
  *  - launchers ([missileLauncher] and [bomb]) start a tracked flight instead
  *    of a shot and are resolved by [MissileRules] and [BombRules].
  *
@@ -64,11 +65,13 @@ enum class Weapon(
     val issuedFreeFromRound: Int = 0,
     /**
      * True for submachine guns: holding the up-swipe keeps firing one bullet
-     * per [burstIntervalMs] for at most [maxBurstMs], and the fire sound is
-     * looped for the whole burst.
+     * per [burstIntervalMs] for as long as the trigger is held, and the fire
+     * sound runs on one gapless loop that starts with the hold and stops the
+     * instant it is released.
      */
     val autoFire: Boolean = false,
     val burstIntervalMs: Long = 0L,
+    /** Legacy length of one burst; a held trigger is no longer cut by it. */
     val maxBurstMs: Long = 0L,
     /** True when the timer bomb needs its duration picker before it fires. */
     val needsTimerSelection: Boolean = false
@@ -76,8 +79,8 @@ enum class Weapon(
     SHORT_GUN(
         id = "shortGun",
         nameKey = "gunShotgun",
-        powerPercent = 5,
-        closeRangePowerPercent = 12,
+        powerPercent = 6,
+        closeRangePowerPercent = 16,
         magazine = 6,
         price = 0,
         ownedByDefault = true,
@@ -90,8 +93,8 @@ enum class Weapon(
     ASSAULT_GUN(
         id = "assaultGun",
         nameKey = "gunAssault",
-        powerPercent = 7,
-        closeRangePowerPercent = 14,
+        powerPercent = 8,
+        closeRangePowerPercent = 18,
         magazine = 6,
         price = 0,
         ownedByDefault = true,
@@ -104,8 +107,8 @@ enum class Weapon(
     PISTOL(
         id = "pistol",
         nameKey = "gunPistol",
-        powerPercent = 7,
-        closeRangePowerPercent = 15,
+        powerPercent = 9,
+        closeRangePowerPercent = 20,
         magazine = 6,
         price = 550,
         ownedByDefault = false,
@@ -118,8 +121,8 @@ enum class Weapon(
     SNIPER(
         id = "sniper",
         nameKey = "gunSniper",
-        powerPercent = 8,
-        closeRangePowerPercent = 16,
+        powerPercent = 10,
+        closeRangePowerPercent = 22,
         magazine = 6,
         price = 1000,
         ownedByDefault = false,
@@ -132,8 +135,8 @@ enum class Weapon(
     KNIFE(
         id = "knife",
         nameKey = "gunKnife",
-        powerPercent = 5,
-        closeRangePowerPercent = 10,
+        powerPercent = 8,
+        closeRangePowerPercent = 14,
         magazine = 0,
         price = 300,
         ownedByDefault = false,
@@ -146,8 +149,8 @@ enum class Weapon(
     SWORD(
         id = "sword",
         nameKey = "gunSword",
-        powerPercent = 8,
-        closeRangePowerPercent = 16,
+        powerPercent = 10,
+        closeRangePowerPercent = 22,
         magazine = 0,
         price = 750,
         ownedByDefault = false,
@@ -159,14 +162,14 @@ enum class Weapon(
     ),
     /**
      * The MP40 submachine gun: it fires continuously while the up-swipe is
-     * held, one bullet every half second, for a four second burst, and its
-     * sound loops for the whole burst.
+     * held, one bullet every half second for as long as the trigger is down,
+     * and its sound runs on one gapless loop for the whole burst.
      */
     MP40(
         id = "mp40",
         nameKey = "gunMp40",
-        powerPercent = 4,
-        closeRangePowerPercent = 8,
+        powerPercent = 5,
+        closeRangePowerPercent = 11,
         magazine = 20,
         price = 900,
         ownedByDefault = false,
@@ -183,14 +186,15 @@ enum class Weapon(
     ),
     /**
      * The AWM long-range rifle. Inside the 20% to 40% proximity band, where
-     * every other weapon misses, it still lands a precision hit worth ten
-     * percent of the victim's maximum health (see [DamageTable]).
+     * every other weapon misses, it still lands a precision hit worth
+     * [DamageTable.AWM_LONG_RANGE_DAMAGE_HP] health points, and its heavy
+     * close-range row is the full 40 point ceiling of the damage table.
      */
     AWM(
         id = "awm",
         nameKey = "gunAwm",
-        powerPercent = 12,
-        closeRangePowerPercent = 24,
+        powerPercent = 16,
+        closeRangePowerPercent = 40,
         magazine = 5,
         price = 1400,
         ownedByDefault = false,
@@ -211,8 +215,8 @@ enum class Weapon(
     MACHINE_GUN(
         id = "machineGun",
         nameKey = "gunMachineGun",
-        powerPercent = 5,
-        closeRangePowerPercent = 11,
+        powerPercent = 7,
+        closeRangePowerPercent = 15,
         magazine = 30,
         price = 1900,
         ownedByDefault = false,
@@ -420,9 +424,20 @@ enum class Extension(
     AUTO_RELOAD("autoReload", "extAutoReload", 100, "extAutoReloadInfo"),
     AUTO_MEDKIT("autoMedkit", "extAutoMedkit", 190, "extAutoMedkitInfo"),
     AUTO_COVER("autoCover", "extAutoCover", 250, "extAutoCoverInfo"),
-    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 250, "extAutoGlueWallInfo");
+    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 250, "extAutoGlueWallInfo"),
+
+    /**
+     * Max Speed: the only extension that changes movement instead of items.
+     * While it is enabled the player runs [MAX_SPEED_GAIN] times faster than
+     * the running-speed level chosen with the three-finger gesture, in every
+     * direction, for the whole battle.
+     */
+    MAX_SPEED("maxSpeed", "extMaxSpeed", 300, "extMaxSpeedInfo");
 
     companion object {
+        /** Extra running speed of the Max Speed extension, as a multiplier. */
+        const val MAX_SPEED_GAIN = 1.30f
+
         fun fromId(id: String?): Extension? = Extension.entries.firstOrNull { it.id == id }
     }
 }
