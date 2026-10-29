@@ -156,7 +156,7 @@ class StringsAndGunRulesTest {
         assertTrue("Guide must document the completion sounds", en.contains("level complete sound"))
         assertTrue("Guide must document the reward being spoken", en.contains("exactly what you received"))
         // The arena, the walls and the movement.
-        assertTrue("Guide must document the 100 meter zone", en.contains("real 100 meter zone with four boundaries"))
+        assertTrue("Guide must document the 25 metre square", en.contains("real 25 metre by 25 metre square arena with four boundaries"))
         assertTrue("Guide must document the wall sound", en.contains("the wall impact sound plays"))
         assertTrue("Guide must document the spoken wall", en.contains("the word Wall is spoken"))
         assertTrue("Guide must document Robert turning back", en.contains("turns back towards the open middle"))
