@@ -118,6 +118,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var robertNextShotAtMs = 0L
 
     /**
+     * The automatic weapon Robert is firing right now, or null while no
+     * continuous-fire burst of his is open. His burst is cut the moment this
+     * changes - to another weapon, to a single shot, or to nothing at all when
+     * he stops firing - so his gun is only ever heard while he really is
+     * firing it.
+     */
+    private var robertFireWeaponKey: String? = null
+
+    /**
      * The player's recent shot timestamps (oldest first). [EnemyFireStrategy]
      * reads the gaps between them to answer the player's real firing rhythm.
      */
@@ -227,6 +236,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         /** Bullets per second of a held automatic weapon come from the weapon. */
         const val AUTO_FIRE_FIRST_SHOT_DELAY_MS = 0L
+
+        /**
+         * The longest an enemy automatic burst may ever ring on its own. One
+         * answer of Robert's is a single shot, so only the first stretch of his
+         * weapon's firing recording is heard; anything beyond this belongs to a
+         * fighter who stopped firing and must be silent.
+         */
+        const val MAX_ENEMY_BURST_MS = 1_600L
 
         /** Advance tick length. */
         const val ADVANCE_TICK_MS = 550L
@@ -587,10 +604,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 audioManager.stopScreenAudio()
                 // Footsteps start only when a fighter is actually running.
                 audioManager.stopFootsteps()
-                // The three automatic weapon loops are prepared, paused, so
-                // the first hold of the trigger is gapless. Nothing is played
-                // until a trigger is really down.
-                audioManager.primeWeaponLoops()
+                // Deliberately no weapon-loop warm-up here. A firing loop of
+                // the submachine gun, the AK-47 or the machine gun is created
+                // by the hold itself and destroyed by its release, so the
+                // battle can never own a gun player that nobody is firing.
+                // The few milliseconds a loop needs to prepare are paid on the
+                // audio thread and never delay a bullet: the hold starts the
+                // sound before the first shot is resolved.
             }
             Screen.RESULT -> {
                 // The result screen is still part of the match: no vibration
@@ -1265,6 +1285,58 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    /**
+     * The sound of one of Robert's shots, fired exactly like the player's:
+     *
+     *  - a single-shot weapon is one clip of its own recording;
+     *  - an automatic weapon (submachine gun, AK-47, machine gun) is a burst
+     *    on his own firing channel that stays open for exactly the beat he
+     *    fired on. While he keeps answering with the same gun those bursts
+     *    join into one continuous, gapless fire - and the moment he switches
+     *    weapon, throws something or stops firing, his channel is destroyed
+     *    and his gun is silent in the same millisecond.
+     *
+     * Before this, one enemy automatic answer played the whole recorded clip -
+     * the AK-47 alone runs for three seconds - so a shot of half a second kept
+     * roaring over the weapon he switched to, over the player's own fire and
+     * over the end of the exchange, and several of those overlapping clips were
+     * heard as one unbroken, disturbing burst.
+     */
+    private fun playEnemyFireSound(chosen: Weapon, beatMs: Long) {
+        val key = chosen.fireSoundKey
+        if (!chosen.autoFire) {
+            // Any burst he held before ends the instant he fires something else.
+            stopEnemyFireSound()
+            playEnemyWeaponSound(key, volume = 0.9f)
+            return
+        }
+        val held = robertFireWeaponKey
+        if (held != null && held != key) {
+            audioManager.stopEnemyWeaponLoop(held)
+        }
+        val (lateral, depth) = enemyAudioOffsets()
+        audioManager.playAutomaticBurst(
+            key,
+            // At least one bullet of this very gun, never more than the beat
+            // he answers on and never the whole recording: his burst is as
+            // long as his firing and not one sample longer.
+            holdMs = beatMs.coerceAtMost(MAX_ENEMY_BURST_MS)
+                .coerceAtLeast(chosen.burstIntervalMs),
+            owner = AudioManager.LOOP_OWNER_ENEMY,
+            volume = 0.9f,
+            posX = lateral,
+            posY = 0f,
+            posZ = -depth
+        )
+        robertFireWeaponKey = key
+    }
+
+    /** Cuts any automatic burst Robert was firing. His single shots are never looped. */
+    private fun stopEnemyFireSound() {
+        robertFireWeaponKey = null
+        audioManager.stopEnemyWeaponLoops()
+    }
+
     /** True while Robert still has a Gloo Wall Breaker charge for a wall. */
     private fun robertHasBreaker(state: GameState = _gameState.value): Boolean =
         RobertRules.hasUsableGlueBreaker(state.glueWallActive, state.robertGlueBreakers)
@@ -1536,6 +1608,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * greater number of hits.
      */
     private fun beginRobertSprint() {
+        // Running away ends his burst: no enemy gun may keep firing while he
+        // is already sprinting out of reach.
+        stopEnemyFireSound()
         _gameState.update {
             it.copy(
                 robertState = "retreat",
@@ -1916,6 +1991,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val shouldAvoid = RobertRules.shouldAvoidGlueWall(state.glueWallActive, hasBreaker) && !state.robertHasActiveDefence
         val avoiding = state.robertState == "avoid"
         if (shouldAvoid && !avoiding && state.robertState != "turnBack") {
+            stopEnemyFireSound()
             _gameState.update {
                 it.copy(robertState = "avoid", robertDeceptionShots = 0, robertTurnBackTicks = 0)
             }
@@ -1944,6 +2020,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 battleClock.awaitDelay(robertFireInterval())
             }
+            // The exchange is over - he died, the fight ended or the screen
+            // changed. Whatever beat his last shot was fired on, his gun is
+            // silent from here on.
+            stopEnemyFireSound()
         }
     }
 
@@ -2230,13 +2310,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         if (!chosen.melee) {
-            playEnemyWeaponSound(
-                chosen.fireSoundKey,
-                volume = 0.9f,
-                // Automatic recordings are longer than a single beat; a
-                // slightly faster playback keeps each answer a distinct shot.
-                rate = if (chosen.autoFire) 1.35f else 1.0f
-            )
+            playEnemyFireSound(chosen, answerInterval)
+        } else {
+            // A melee attack owns no firing channel either: cut any burst that
+            // was still sounding before his swing.
+            stopEnemyFireSound()
         }
         _gameState.update { s ->
             val nextAmmo = if (chosen.needsReload && !unlimitedAmmo) {
@@ -2481,6 +2559,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (state.robertState == "missileFlee" || state.robertState == "bombFlee") return false
 
         val proxPercent = Combat.proximityOf(state.distance)
+        stopEnemyFireSound()
         playEnemyWeaponSound(Weapon.GLUE_BREAKER.fireSoundKey, volume = 0.95f)
         val breaks = Combat.canBreakGlueWall(Weapon.GLUE_BREAKER, proxPercent)
         val progress = if (breaks) state.robertBreakerHits + 1 else 0
@@ -2678,6 +2757,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** Robert's one desperation missile per game (rounds four and five). */
     private fun launchEnemyMissile() {
         val state = _gameState.value
+        // His gun goes silent the moment he launches: a burst of it must never
+        // be heard while he is already spending a missile.
+        stopEnemyFireSound()
         _gameState.update {
             it.copy(
                 robertMissilePowers = (it.robertMissilePowers - 1).coerceAtLeast(0),
@@ -3017,6 +3099,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun launchEnemyBomb() {
         val state = _gameState.value
         if (state.robertBombs <= 0 || state.bombInFlight || state.missileInFlight) return
+        // Throwing ends his burst, exactly like his missile: the explosion and
+        // his gun are never heard as one continuous fire.
+        stopEnemyFireSound()
         // Round three: grenades only, twice per game. Round four: all three
         // bombs, three times each. Round five: unlimited bombs of every kind.
         val kind = BombRules.chooseEnemyBomb(
@@ -3347,8 +3432,26 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // A held automatic burst already has its sound on loop, so the single
         // shot sound is only played for taps and for every other weapon.
         if (!weapon.melee && !(weapon.autoFire && state.autoFireActive)) {
-            // Every shot is independent and mixes with all other effects.
-            audioManager.playWeaponSound(weapon.fireSoundKey, volume = 1.0f)
+            if (weapon.autoFire) {
+                // One shot of an automatic weapon is one bullet of sound - as
+                // long as this beat and not as long as the recording. Its clip
+                // is a multi-second burst, and letting it finish is what made a
+                // single tap ring on and on, over the next tap and over the
+                // enemy, until the whole battlefield sounded like one
+                // unbroken firefight. A tap is therefore a bounded burst on the
+                // player's own firing channel.
+                audioManager.playAutomaticBurst(
+                    weapon.fireSoundKey,
+                    holdMs = weapon.burstIntervalMs,
+                    owner = AudioManager.LOOP_OWNER_PLAYER,
+                    volume = 1.0f,
+                    posZ = -state.distance
+                )
+            } else {
+                // Every other shot is independent and mixes with all other
+                // effects.
+                audioManager.playWeaponSound(weapon.fireSoundKey, volume = 1.0f)
+            }
         }
 
         val proxPercent = Combat.proximityOf(state.distance)
@@ -3480,16 +3583,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Holding the up-swipe with an automatic weapon (submachine gun, AK-47
      * or machine gun) selected keeps firing: one bullet per
-     * [Weapon.burstIntervalMs] for as
-     * long as the trigger is held, with the weapon's own sound on a truly
-     * gapless loop.
+     * [Weapon.burstIntervalMs] for as long as the trigger is held, with the
+     * weapon's own sound on the player's firing channel.
      *
-     * The loop is started on the very same gesture that registers the hold,
-     * before the first bullet is even resolved, and it is played on the
-     * dedicated hold channel of [AudioManager]. That channel is pre-prepared
-     * and never cut by the enemy's answering shot, so no silence can appear
-     * between two repeats of the gun sound. Lifting the finger pauses it in
-     * the same millisecond and the next hold resumes it instantly.
+     * The channel is opened on the very same gesture that registers the hold,
+     * before the first bullet is even resolved, and it belongs to the player
+     * alone: Robert's answer is mixed on his own channel and can never cut or
+     * restart this one. Lifting the finger destroys the channel in the same
+     * millisecond, so "held" and "audible" are one and the same fact - a burst
+     * that keeps firing after the hand went up is not a state this game can be
+     * in, because nothing is kept alive between two bursts any more.
      */
     fun startHoldFire() {
         if (battlePaused.value) return
@@ -3508,11 +3611,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _gameState.update { it.copy(autoFireActive = true) }
         // Sound first, bullets second: the gun is already firing the moment
         // the hand goes down.
-        audioManager.startWeaponLoop(
-            weapon.fireSoundKey,
-            volume = 1.0f,
-            posZ = -state.distance
-        )
+        startPlayerHoldLoop()
         autoFireJob?.cancel()
         autoFireJob = viewModelScope.launch {
             while (holdFireAllowed()) {
@@ -3524,7 +3623,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Releasing the swipe: bullets and the looped gun sound stop together and
+     * Opens (or keeps) the player's own firing loop for the weapon that is
+     * currently selected. Called by the hold itself and by the watchdog of
+     * every bullet, so a held burst is audible from the first millisecond.
+     */
+    private fun startPlayerHoldLoop() {
+        val state = _gameState.value
+        audioManager.startWeaponLoop(
+            state.activeWeapon.fireSoundKey,
+            volume = 1.0f,
+            posZ = -state.distance,
+            owner = AudioManager.LOOP_OWNER_PLAYER
+        )
+    }
+
+    /**
+     * Releasing the swipe: bullets and the gun sound stop together and
      * immediately, with no tail and no silence in between.
      */
     fun stopHoldFire() {
@@ -3532,13 +3646,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         autoFireJob = null
         val state = _gameState.value
         // The sound is cut first, so lifting the hand is heard as silence at
-        // once. Every automatic loop is paused, not just the one of the weapon
-        // currently selected: after a weapon switch during a burst the old
-        // loop would otherwise be left running on its own channel, which is
-        // exactly the phantom burst that used to be heard with no trigger
-        // held. Each loop only pauses, so the next hold still resumes
-        // instantly.
-        audioManager.stopWeaponLoops()
+        // once. Every loop of the *player* is destroyed - not only the one of
+        // the weapon that is selected now: after a weapon switch during a
+        // burst the old channel would otherwise be left running, which is
+        // exactly the phantom gunfire that used to be heard with no trigger
+        // held. Robert keeps his own bursts: the player's finger never stops
+        // the enemy's gun.
+        audioManager.stopPlayerWeaponLoops()
         if (!state.autoFireActive) return
         _gameState.update { it.copy(autoFireActive = false) }
     }
@@ -3549,15 +3663,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val state = _gameState.value
         val weapon = state.activeWeapon
         // Watchdog: the trigger is still down, so the loop must be audible.
-        // Re-arming it here restores a burst that a stalled stream or a
-        // paused player may have interrupted, and refreshes the distance
-        // gain while the fighters move.
+        // Re-arming it here restores a burst that a stalled stream may have
+        // interrupted, and refreshes the distance gain while the fighters
+        // move. A loop that is not held is never re-armed by anything.
         if (!audioManager.isWeaponLoopActive(weapon.fireSoundKey)) {
-            audioManager.startWeaponLoop(
-                weapon.fireSoundKey,
-                volume = 1.0f,
-                posZ = -state.distance
-            )
+            startPlayerHoldLoop()
         } else {
             audioManager.refreshWeaponLoop(weapon.fireSoundKey, volume = 1.0f, posZ = -state.distance)
         }
@@ -4447,6 +4557,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         audioManager.stopWeaponLoops()
         audioManager.stopFootsteps()
         // A held burst never survives a screen change or an app pause.
+        robertFireWeaponKey = null
         if (_gameState.value.autoFireActive) {
             _gameState.update { it.copy(autoFireActive = false) }
         }
