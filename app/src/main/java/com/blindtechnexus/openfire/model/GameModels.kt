@@ -62,6 +62,13 @@ data class GameSettings(
     val name: String = "",
     val lang: String = "en", // "en", "hi", "ne"
     val ttsEnginePackage: String = "",
+    /**
+     * Language of the speech engine voice, independent of the interface
+     * language. Empty means "follow the interface language", which is the
+     * default for every existing profile. The voice list in Settings is
+     * always populated from this language, and both values are saved.
+     */
+    val ttsLanguage: String = "",
     val voiceName: String = "",
     val ttsRate: Float = 1.0f,
     val ttsVolume: Float = 1.0f,
@@ -69,8 +76,19 @@ data class GameSettings(
     val sfxVolume: Float = 1.0f,
     val soundTheme: SoundTheme = SoundTheme.TACTICAL,
     val hapticsEnabled: Boolean = true,
-    val keepScreenOn: Boolean = false
-)
+    val keepScreenOn: Boolean = false,
+    /**
+     * Voice guidance: every spoken battle feedback ("missed", "deployed",
+     * damage reports, countdowns) is muted while this is off. Menu, guide,
+     * shop and result announcements keep speaking, so the interface stays
+     * fully usable for a blind player.
+     */
+    val voiceGuidance: Boolean = true
+) {
+    /** The language the speech engine voice must speak. */
+    val effectiveTtsLanguage: String
+        get() = ttsLanguage.ifBlank { lang }
+}
 
 data class GameStats(
     val games: Int = 0,

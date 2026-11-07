@@ -87,8 +87,8 @@ android {
     applicationId = "com.blindtechnexus.openfire"
     minSdk = 24
     targetSdk = 36
-    versionCode = 9
-    versionName = "2.5"
+    versionCode = 10
+    versionName = "2.6"
 
     multiDexEnabled = true
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

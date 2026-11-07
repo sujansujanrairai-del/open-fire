@@ -8,6 +8,7 @@ import com.blindtechnexus.openfire.model.RobertRules
 import com.blindtechnexus.openfire.model.RunPressure
 import com.blindtechnexus.openfire.model.RunSpeed
 import com.blindtechnexus.openfire.model.Screen
+import com.blindtechnexus.openfire.model.SwipeClassifier
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -177,5 +178,70 @@ class GestureRouterTest {
         assertEquals(RunPressure.DEFAULT_SPEED_FACTOR, RunPressure.speedFactor(-1f), 0.0001f)
         assertEquals(RunPressure.DEFAULT_SPEED_FACTOR, RunPressure.speedFactor(Float.NaN), 0.0001f)
         assertEquals(1.0f, RunPressure.DEFAULT_SPEED_FACTOR, 0.0001f)
+    }
+
+    @Test
+    fun threeFingerVerticalSwipesRouteLikeTheHorizontalOnes() {
+        assertEquals(GameAction.TOGGLE_PAUSE, GestureRouter.route(Screen.BATTLE, "down", 3))
+        assertEquals(GameAction.EXIT_BATTLE, GestureRouter.route(Screen.BATTLE, "up", 3))
+        assertEquals(GameAction.SPEED_FASTER, GestureRouter.route(Screen.BATTLE, "right", 3))
+        assertEquals(GameAction.SPEED_SLOWER, GestureRouter.route(Screen.BATTLE, "left", 3))
+        // Four fingers behave like three.
+        assertEquals(GameAction.TOGGLE_PAUSE, GestureRouter.route(Screen.BATTLE, "down", 4))
+    }
+
+    @Test
+    fun theSwipeClassifierReadsEveryDirection() {
+        assertEquals("up", SwipeClassifier.direction(0f, -80f))
+        assertEquals("down", SwipeClassifier.direction(0f, 80f))
+        assertEquals("right", SwipeClassifier.direction(80f, 0f))
+        assertEquals("left", SwipeClassifier.direction(-80f, 0f))
+        // A vertical swipe with a little sideways drift is still vertical.
+        assertEquals("up", SwipeClassifier.direction(9f, -70f))
+        assertEquals("down", SwipeClassifier.direction(-12f, 75f))
+        // A horizontal three-finger swipe is still horizontal.
+        assertEquals("right", SwipeClassifier.direction(70f, 8f))
+        assertTrue(SwipeClassifier.isVertical(4f, -30f))
+        assertFalse(SwipeClassifier.isVertical(40f, 4f))
+    }
+
+    @Test
+    fun threeFingerSwipesNeedLessTravelThanOneFingerOnes() {
+        assertTrue(
+            SwipeClassifier.threshold(3) < SwipeClassifier.threshold(2)
+        )
+        assertTrue(
+            SwipeClassifier.threshold(2) < SwipeClassifier.threshold(1)
+        )
+        assertEquals(SwipeClassifier.THREE_FINGER_THRESHOLD, SwipeClassifier.threshold(3))
+        // A three-finger vertical swipe of 30 pixels is a real swipe while a
+        // one-finger movement of the same length is not.
+        assertTrue(SwipeClassifier.isSwipe(0f, -30f, 3))
+        assertTrue(SwipeClassifier.isSwipe(0f, 30f, 3))
+        assertFalse(SwipeClassifier.isSwipe(0f, -30f, 1))
+        assertFalse(SwipeClassifier.isSwipe(0f, -20f, 3))
+        assertTrue(SwipeClassifier.isTap(3f, -4f))
+    }
+
+    @Test
+    fun theAverageMovementOfAllFingersDecidesAThreeFingerGesture() {
+        // A finger that never moves cannot decide the direction on its own.
+        val (dx, dy) = SwipeClassifier.average(
+            listOf(Pair(2f, -40f), Pair(-3f, -38f), Pair(1f, -42f))
+        )
+        assertEquals(0f, dx, 0.01f)
+        assertEquals(-40f, dy, 0.01f)
+        assertEquals("up", SwipeClassifier.direction(dx, dy))
+
+        val (downX, downY) = SwipeClassifier.average(
+            listOf(Pair(-2f, 44f), Pair(4f, 40f), Pair(0f, 41f))
+        )
+        assertEquals("down", SwipeClassifier.direction(downX, downY))
+        assertTrue(SwipeClassifier.isSwipe(downX, downY, 3))
+
+        // Degenerate input never crashes or invents a direction.
+        assertEquals(Pair(0f, 0f), SwipeClassifier.average(emptyList()))
+        assertEquals(0f, SwipeClassifier.distance(Float.NaN, 0f), 0.0001f)
+        assertEquals("down", SwipeClassifier.direction(Float.NaN, 12f))
     }
 }

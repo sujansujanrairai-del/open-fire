@@ -448,7 +448,23 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "Version 2.5",
+                text = "Version 2.6",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            listOf(
+                "release26Audio", "release26Loops", "release26Damage",
+                "release26Feints", "release26Gestures", "release26Voices",
+                "release26Settings", "release26Guide"
+            ).forEach { key ->
+                Text(text = "• ${viewModel.t(key)}", color = Color.White, modifier = Modifier.padding(vertical = 3.dp))
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = "Version 2.5 (historical)",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = WarnBright,

@@ -31,7 +31,7 @@ class PreferencesManager(context: Context) {
         const val FILE_SETTINGS = "settings"
         const val FILE_PROFILE = "profile"
         const val FILE_INVENTORY = "inventory"
-        const val SCHEMA_VERSION = 6
+        const val SCHEMA_VERSION = 7
 
         const val KEY_SCHEMA = "schema"
 
@@ -63,6 +63,9 @@ class PreferencesManager(context: Context) {
             name = map["name"] ?: "",
             lang = map["lang"] ?: "en",
             ttsEnginePackage = map["ttsEngine"] ?: "",
+            // Older profiles only stored the interface language: an empty TTS
+            // language keeps following it, which is the previous behaviour.
+            ttsLanguage = map["ttsLanguage"] ?: "",
             voiceName = map["voice"] ?: "",
             ttsRate = map["rate"]?.toFloatOrNull() ?: 1.0f,
             ttsVolume = map["ttsVolume"]?.toFloatOrNull() ?: 1.0f,
@@ -70,7 +73,8 @@ class PreferencesManager(context: Context) {
             sfxVolume = map["sfxVolume"]?.toFloatOrNull() ?: 1.0f,
             soundTheme = theme,
             hapticsEnabled = map["haptics"]?.toBooleanStrictOrNull() ?: true,
-            keepScreenOn = map["keepScreenOn"]?.toBooleanStrictOrNull() ?: false
+            keepScreenOn = map["keepScreenOn"]?.toBooleanStrictOrNull() ?: false,
+            voiceGuidance = map["voiceGuidance"]?.toBooleanStrictOrNull() ?: true
         )
     }
 
@@ -82,6 +86,7 @@ class PreferencesManager(context: Context) {
                 "name" to s.name,
                 "lang" to s.lang,
                 "ttsEngine" to s.ttsEnginePackage,
+                "ttsLanguage" to s.ttsLanguage,
                 "voice" to s.voiceName,
                 "rate" to s.ttsRate.toString(),
                 "ttsVolume" to s.ttsVolume.toString(),
@@ -89,7 +94,8 @@ class PreferencesManager(context: Context) {
                 "sfxVolume" to s.sfxVolume.toString(),
                 "soundTheme" to s.soundTheme.name,
                 "haptics" to s.hapticsEnabled.toString(),
-                "keepScreenOn" to s.keepScreenOn.toString()
+                "keepScreenOn" to s.keepScreenOn.toString(),
+                "voiceGuidance" to s.voiceGuidance.toString()
             )
         )
     }

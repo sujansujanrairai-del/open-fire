@@ -18,11 +18,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import com.blindtechnexus.openfire.model.MoveDirection
 import com.blindtechnexus.openfire.model.RunPressure
 import com.blindtechnexus.openfire.model.Screen
+import com.blindtechnexus.openfire.model.SwipeClassifier
 import com.blindtechnexus.openfire.ui.screens.AboutScreen
 import com.blindtechnexus.openfire.ui.screens.BattleScreen
 import com.blindtechnexus.openfire.ui.screens.ChangelogScreen
@@ -46,9 +48,9 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 /** A movement smaller than this is treated as a tap instead of a swipe. */
-private const val TAP_SLOP = 24f
-private const val SWIPE_THRESHOLD_ONE_FINGER = 60f
-private const val SWIPE_THRESHOLD_TWO_FINGERS = 36f
+private const val TAP_SLOP = SwipeClassifier.TAP_SLOP
+private const val SWIPE_THRESHOLD_ONE_FINGER = SwipeClassifier.ONE_FINGER_THRESHOLD
+private const val SWIPE_THRESHOLD_TWO_FINGERS = SwipeClassifier.TWO_FINGER_THRESHOLD
 
 @Composable
 fun OpenFireApp(viewModel: GameViewModel) {
@@ -111,19 +113,35 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             val isRunZone = isBattle && moveDirection != null
 
                             // Every finger is tracked from its own touch-down point,
-                            // so a two-finger swipe never reports a bogus direction.
+                            // so a two- or three-finger swipe never reports a bogus
+                            // direction. Both the largest single movement and the
+                            // average movement of all fingers are kept:
+                            //  - one and two fingers decide on the largest movement;
+                            //  - three fingers decide on the average, so a finger
+                            //    that drifts sideways can no longer win the
+                            //    comparison and turn a vertical swipe into a
+                            //    horizontal one.
                             val startPositions = mutableMapOf(firstDown.id to firstDown.position)
                             var maxFingers = 1
                             var bestDx = 0f
                             var bestDy = 0f
                             var maxDelta = 0f
+                            var averageDx = 0f
+                            var averageDy = 0f
+                            var maxAverageDelta = 0f
                             var longPressActive = false
                             var longPressCancelled = false
                             // The delayed hold task must not outlive a quick tap/release.
                             var touchHeld = true
-                            // A held up-swipe with a submachine gun keeps
+                            // A held up-swipe with an automatic weapon keeps
                             // firing until the finger is lifted again.
                             var holdFireStarted = false
+                            // A three-finger swipe is dispatched as soon as it is
+                            // recognised, exactly once, while the fingers are
+                            // still down. Waiting for every finger to lift is
+                            // what used to lose the vertical three-finger
+                            // swipes completely.
+                            var multiFingerDispatched = false
 
                             // Sample the touch pressure from the very first
                             // sample so the run can start at the pressed
@@ -160,14 +178,19 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                                 viewModel.stopPlayerMove()
                                                 longPressActive = false
                                             }
-                                            if (holdFireStarted) viewModel.stopHoldFire()
+                                            if (holdFireStarted) {
+                                                viewModel.stopHoldFire()
+                                                holdFireStarted = false
+                                            }
                                         }
                                     }
 
+                                    val displacements = ArrayList<Pair<Float, Float>>(event.changes.size)
                                     for (change in event.changes) {
                                         val start = startPositions.getOrPut(change.id) { change.position }
                                         val dx = change.position.x - start.x
                                         val dy = change.position.y - start.y
+                                        displacements.add(Pair(dx, dy))
                                         val distance = sqrt(dx * dx + dy * dy)
                                         if (distance > maxDelta) {
                                             maxDelta = distance
@@ -183,12 +206,46 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                             viewModel.updateMovePressure(change.pressure)
                                         }
                                     }
+                                    val (avgDx, avgDy) = SwipeClassifier.average(displacements)
+                                    averageDx = avgDx
+                                    averageDy = avgDy
+                                    val averageDistance = SwipeClassifier.distance(avgDx, avgDy)
+                                    if (averageDistance > maxAverageDelta) maxAverageDelta = averageDistance
 
-                                    // Holding an up-swipe with the MP40 or the
-                                    // machine gun selected starts the
-                                    // continuous burst right away: one bullet
-                                    // per interval with the gun sound on loop.
+                                    // Three-finger swipes fire immediately, in
+                                    // every direction: up (exit), down (pause),
+                                    // right and left (running speed).
+                                    if (maxFingers >= 3 && !multiFingerDispatched &&
+                                        SwipeClassifier.isSwipe(avgDx, avgDy, maxFingers)
+                                    ) {
+                                        multiFingerDispatched = true
+                                        longPressCancelled = true
+                                        longPressJob?.cancel()
+                                        if (longPressActive) {
+                                            viewModel.stopPlayerMove()
+                                            longPressActive = false
+                                        }
+                                        if (holdFireStarted) {
+                                            viewModel.stopHoldFire()
+                                            holdFireStarted = false
+                                        }
+                                        viewModel.handleGesture(
+                                            SwipeClassifier.direction(avgDx, avgDy),
+                                            maxFingers
+                                        )
+                                        // Consume the movement so the battle
+                                        // zones underneath do not run as well.
+                                        event.changes.forEach {
+                                            if (it.positionChanged()) it.consume()
+                                        }
+                                    }
+
+                                    // Holding an up-swipe with an automatic
+                                    // weapon selected starts the continuous
+                                    // burst right away: one bullet per
+                                    // interval with the gun sound on loop.
                                     if (isBattle && !holdFireStarted && !longPressActive &&
+                                        !multiFingerDispatched &&
                                         maxFingers == 1 &&
                                         bestDy < 0f && abs(bestDy) > abs(bestDx) &&
                                         abs(bestDy) >= SWIPE_THRESHOLD_ONE_FINGER &&
@@ -228,11 +285,16 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                 }
                             }
 
+                            // The three-finger swipe already did its work.
+                            if (multiFingerDispatched) return@awaitEachGesture
                             // The burst already fired every bullet it had, so
                             // the same swipe must not fire another one.
                             if (holdFireStarted && maxFingers == 1) {
                                 return@awaitEachGesture
                             }
+                            // Three fingers that never crossed the threshold are
+                            // not a gesture: never guess a one-finger one.
+                            if (maxFingers >= 3) return@awaitEachGesture
 
                             val threshold = if (maxFingers >= 2) {
                                 SWIPE_THRESHOLD_TWO_FINGERS
@@ -240,16 +302,13 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                 SWIPE_THRESHOLD_ONE_FINGER
                             }
                             if (maxDelta >= threshold) {
-                                val direction = if (abs(bestDx) >= abs(bestDy)) {
-                                    if (bestDx > 0) "right" else "left"
-                                } else {
-                                    if (bestDy > 0) "down" else "up"
-                                }
-                                viewModel.handleGesture(direction, maxFingers)
+                                viewModel.handleGesture(
+                                    SwipeClassifier.direction(bestDx, bestDy),
+                                    maxFingers
+                                )
                                 return@awaitEachGesture
                             }
-
-                            if (maxDelta < TAP_SLOP && maxFingers == 1) {
+                            if (maxAverageDelta < TAP_SLOP && maxDelta < TAP_SLOP && maxFingers == 1) {
                                 if (isCenter) {
                                     viewModel.handleCenterTap()
                                 } else if (!isBattle) {

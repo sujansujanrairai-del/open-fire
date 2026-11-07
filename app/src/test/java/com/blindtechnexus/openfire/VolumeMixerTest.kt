@@ -12,10 +12,14 @@ import org.junit.Test
 class VolumeMixerTest {
 
     @Test
-    fun musicOutputAppliesTheBackgroundGainOnce() {
-        assertEquals(0.28f, VolumeMixer.music(0.8f), 0.0001f)
-        assertEquals(0.35f, VolumeMixer.music(1.0f), 0.0001f)
+    fun theMusicSliderIsTheRealOutputLevel() {
+        // There is no hidden background gain any more: a slider at 20 percent
+        // really plays at 20 percent, which is what the player selected.
+        assertEquals(0.8f, VolumeMixer.music(0.8f), 0.0001f)
+        assertEquals(1.0f, VolumeMixer.music(1.0f), 0.0001f)
+        assertEquals(0.2f, VolumeMixer.music(0.2f), 0.0001f)
         assertEquals(0.0f, VolumeMixer.music(0.0f), 0.0001f)
+        assertEquals(1.0f, VolumeMixer.MUSIC_BACKGROUND_GAIN, 0.0001f)
     }
 
     @Test
@@ -27,9 +31,38 @@ class VolumeMixerTest {
         var playback = VolumeMixer.music(setting)
         repeat(20) {
             playback = VolumeMixer.music(setting)
-            assertEquals(0.28f, playback, 0.0001f)
+            assertEquals(0.8f, playback, 0.0001f)
         }
         assertEquals(0.8f, setting, 0.0001f)
+    }
+
+    @Test
+    fun impactsAreAlwaysLouderThanTheWeaponThatCausedThem() {
+        // The weapon bus sits under the impact bus, so a hit marker is clearly
+        // audible over the gunfire at every slider position, too.
+        assertTrue(VolumeMixer.WEAPON_BUS_GAIN < VolumeMixer.HIT_BUS_GAIN)
+        for (setting in listOf(0.1f, 0.2f, 0.5f, 1.0f)) {
+            val shot = VolumeMixer.mix("ak47", setting, 1.0f, 1.0f)
+            val hit = VolumeMixer.mix("enemyHit", setting, 1.0f, 1.0f)
+            val playerHit = VolumeMixer.mix("playerHit", setting, 1.0f, 1.0f)
+            assertTrue("hit must be louder than the shot at $setting", hit > shot)
+            assertTrue("player hit must be louder than the shot at $setting", playerHit > shot)
+            assertEquals(VolumeMixer.clamp(setting), hit, 0.0001f)
+        }
+        // The gun trim is applied once and never to the impacts.
+        assertEquals(0.6f * 0.2f, VolumeMixer.mix("machineGun", 0.2f, 1.0f, 1.0f), 0.0001f)
+        assertEquals(0.2f, VolumeMixer.mix("explosion", 0.2f, 1.0f, 1.0f), 0.0001f)
+        assertEquals(1f, VolumeMixer.busGainFor("click"), 0.0001f)
+    }
+
+    @Test
+    fun everyAutomaticWeaponAndEveryImpactIsOnTheRightBus() {
+        for (key in listOf("submachineGun", "ak47", "machineGun", "submachineGunShot", "ak47Shot", "machineGunShot")) {
+            assertEquals(key, VolumeMixer.WEAPON_BUS_GAIN, VolumeMixer.busGainFor(key), 0.0001f)
+        }
+        for (key in listOf("playerHit", "enemyHit", "gunHit", "explosion", "knifeHit", "swordHit")) {
+            assertEquals(key, VolumeMixer.HIT_BUS_GAIN, VolumeMixer.busGainFor(key), 0.0001f)
+        }
     }
 
     @Test

@@ -843,4 +843,51 @@ class RobertTest {
         assertTrue(proximity >= Combat.HEAVY_ZONE_MIN)
         assertTrue(proximity <= Combat.FULL_PROXIMITY)
     }
+
+    @Test
+    fun feintsNeverUseAContinuousFireWeapon() {
+        // The deception band exists only for fake shots. A feint that used the
+        // submachine gun, the AK-47 or the machine gun played a long automatic
+        // burst recording, so one fake shot sounded like a real attack.
+        for (weapon in Weapon.entries) {
+            if (weapon.autoFire) {
+                assertFalse("${weapon.id} must never fake a shot", RobertRules.isFeintWeapon(weapon))
+            }
+        }
+        for (weapon in listOf(Weapon.M10, Weapon.PISTOL, Weapon.SNIPER)) {
+            assertTrue("${weapon.id} may fake a shot", RobertRules.isFeintWeapon(weapon))
+            assertTrue(weapon in RobertRules.FEINT_WEAPONS)
+        }
+        // Melee weapons and launchers have their own sounds and rules.
+        assertFalse(RobertRules.isFeintWeapon(Weapon.KNIFE))
+        assertFalse(RobertRules.isFeintWeapon(Weapon.SWORD))
+        assertFalse(RobertRules.isFeintWeapon(Weapon.MISSILE))
+        assertFalse(RobertRules.isFeintWeapon(Weapon.GRENADE))
+    }
+
+    @Test
+    fun aFeintWeaponIsAlwaysDrawnFromTheSingleShotPool() {
+        val random = Random(7)
+        // Only automatic weapons available: no feint is possible at all.
+        val automaticOnly = listOf(Weapon.SUBMACHINE_GUN, Weapon.AK47, Weapon.MACHINE_GUN)
+        assertTrue(RobertRules.feintWeaponsFrom(automaticOnly).isEmpty())
+        assertEquals(null, RobertRules.feintWeapon(automaticOnly, random))
+
+        // A mixed loadout always yields a single-shot weapon.
+        val mixed = automaticOnly + listOf(Weapon.PISTOL, Weapon.SNIPER)
+        repeat(40) {
+            val chosen = RobertRules.feintWeapon(mixed, random)
+            assertTrue("a feint must use a single-shot weapon", chosen != null)
+            assertTrue(chosen!! in RobertRules.FEINT_WEAPONS)
+            assertFalse(chosen.autoFire)
+        }
+        assertEquals(
+            listOf(Weapon.PISTOL, Weapon.M10),
+            RobertRules.feintWeaponsFrom(listOf(Weapon.AK47, Weapon.PISTOL, Weapon.M10))
+        )
+        assertEquals(
+            listOf(Weapon.M10, Weapon.PISTOL, Weapon.SNIPER),
+            RobertRules.feintWeaponsFrom(RobertRules.FEINT_WEAPONS)
+        )
+    }
 }

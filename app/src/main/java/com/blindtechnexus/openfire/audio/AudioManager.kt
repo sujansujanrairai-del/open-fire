@@ -28,6 +28,8 @@ import java.util.concurrent.atomic.AtomicLong
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -83,16 +85,39 @@ class AudioManager(private val context: Context) {
         )
 
         /**
-         * The automatic weapons whose firing sound is a real, gapless loop.
+         * The three continuous-fire weapons whose firing sound is a real,
+         * gapless loop.
          *
-         * Each of them owns one permanent, pre-prepared looping MediaPlayer:
-         * holding the trigger starts it at once (no prepare delay, so no
-         * silence before the first shot) and lifting the finger pauses it in
-         * the same millisecond. Pausing instead of releasing is what removes
-         * the silence that used to appear between two repeats: the next hold
-         * resumes the already decoded loop instantly.
+         * Each of them owns exactly one looping MediaPlayer: holding the
+         * trigger starts it at once (no prepare delay, because it is prepared,
+         * paused, when the battle opens) and lifting the finger pauses *that*
+         * player in the same millisecond. Pausing instead of releasing is what
+         * removes the silence that used to appear between two repeats: the
+         * next hold resumes the already decoded loop.
+         *
+         * Only a weapon that is really held ever starts its own loop. Nothing
+         * here is shared with the other two, so one burst can never start,
+         * restart or mask another weapon.
          */
-        val AUTO_LOOP_KEYS: Set<String> = setOf("submachineGun", "ak47", "machineGun")
+        val AUTO_LOOP_WEAPONS: Set<String> = setOf("submachineGun", "ak47", "machineGun")
+
+        /** The one-shot copies of the three automatic weapons. */
+        val AUTO_SHOT_KEYS: Set<String> = setOf(
+            "submachineGunShot",
+            "ak47Shot",
+            "machineGunShot"
+        )
+
+        /**
+         * Every key an automatic weapon can be heard with: the loop channels
+         * and their single-shot copies. Exclusivity, stopping and screen
+         * clean-up all use this set, so no automatic weapon sound can ever be
+         * orphaned.
+         */
+        val AUTO_WEAPON_KEYS: Set<String> = AUTO_LOOP_WEAPONS + AUTO_SHOT_KEYS
+
+        /** The canonical loop channels (kept as the documented public name). */
+        val AUTO_LOOP_KEYS: Set<String> = AUTO_LOOP_WEAPONS
 
         /**
          * The one-shot recording of an automatic weapon. It is the very same
@@ -161,6 +186,14 @@ class AudioManager(private val context: Context) {
             "swordGlide",
             "swordMiss"
         )
+
+        /**
+         * How long a player may wait for the single `prepare()` slot. Local
+         * assets prepare in a few milliseconds, so this only ever matters
+         * under extreme load, where dropping a late sound is better than
+         * preparing a dozen of them at once and freezing playback.
+         */
+        private const val PRESENTATION_WAIT_MS = 400L
 
         /** Delay before a refused stream is retried once. */
         private const val STREAM_RETRY_DELAY_MS = 90L
@@ -275,9 +308,15 @@ class AudioManager(private val context: Context) {
     /** Keys whose loop player is still being prepared in the background. */
     private val preparingWeaponLoops = ConcurrentHashMap.newKeySet<String>()
 
-    /** Launch / start of the loop on the pre-warmed channel. */
-    @Volatile
-    private var weaponLoopPrewarmStarted = false
+    /**
+     * Serializes `prepare()` of every MediaPlayer of the app (loops, streamed
+     * tracks and one-shots). Android allows only a handful of players to be
+     * prepared at the same time and answers the surplus with MEDIA_ERROR_*,
+     * which is exactly what used to cut sounds off: the player was released
+     * before it had played a single sample. Preparing one player at a time
+     * removes that failure mode completely.
+     */
+    private val presentationLock = ReentrantLock()
 
     /**
      * User settings. These are the single source of truth and are NEVER
@@ -453,9 +492,9 @@ class AudioManager(private val context: Context) {
             }
         }
         preloadShortSounds()
-        // The two automatic weapons are prepared once, up front, so the very
-        // first hold of the trigger already has an instant, gapless loop.
-        prewarmWeaponLoops()
+        // Deliberately no weapon-loop warm-up here: a looping player exists
+        // only while an automatic weapon is really being held, so the app can
+        // never render a gun loop that nobody asked for.
     }
 
     private fun preloadShortSounds() {
@@ -614,7 +653,8 @@ class AudioManager(private val context: Context) {
         x: Float = 0f,
         y: Float = 0f,
         z: Float = 0f,
-        baseVol: Float = 1.0f
+        baseVol: Float = 1.0f,
+        key: String = ""
     ): Pair<Float, Float> {
         val dist = sqrt(x * x + y * y + z * z)
         // Smooth inverse distance attenuation
@@ -623,7 +663,10 @@ class AudioManager(private val context: Context) {
 
         val (leftGain, rightGain) = VolumeMixer.panGains(VolumeMixer.panFor(x, dist))
 
-        val totalVol = VolumeMixer.sfx(sfxVolume, baseVol, clampedDistGain)
+        // [VolumeMixer.mix] applies the player's SFX setting, the distance
+        // gain and the mixer trim of this sound: weapon fire sits below the
+        // impacts, so every hit is audibly louder than the shot it belongs to.
+        val totalVol = VolumeMixer.mix(key, sfxVolume, baseVol, clampedDistGain)
         val left = (totalVol * leftGain).coerceIn(0f, 1f)
         val right = (totalVol * rightGain).coerceIn(0f, 1f)
         return Pair(left, right)
@@ -693,7 +736,7 @@ class AudioManager(private val context: Context) {
         }
 
         val soundId = soundMap[playKey] ?: return -1
-        val (left, right) = calculate3dVolume(posX, posY, posZ, volume)
+        val (left, right) = calculate3dVolume(posX, posY, posZ, volume, playKey)
         val pitch = when (soundTheme) {
             SoundTheme.CYBER -> rate * 1.10f
             SoundTheme.STEALTH -> rate * 0.92f
@@ -788,7 +831,13 @@ class AudioManager(private val context: Context) {
         posZ: Float = 0f
     ) {
         if (released) return
-        // The two automatic weapons own a dedicated, gapless channel.
+        // The single-shot copy of an automatic weapon is never looped: an
+        // enemy answer plays one shot and can never start a permanent burst.
+        if (key in AUTO_SHOT_KEYS) {
+            playSound(key, volume = volume, rate = rate, posX = posX, posY = posY, posZ = posZ)
+            return
+        }
+        // The three automatic weapons own a dedicated, gapless channel.
         if (key in AUTO_LOOP_KEYS) {
             startWeaponLoop(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
             return
@@ -802,7 +851,7 @@ class AudioManager(private val context: Context) {
                 if (player != null) {
                     try {
                         val (l, r) = if (key == "music") Pair(VolumeMixer.music(musicVolume), VolumeMixer.music(musicVolume))
-                        else calculate3dVolume(posX, posY, posZ, volume)
+                        else calculate3dVolume(posX, posY, posZ, volume, key)
                         player.setVolume(l.coerceIn(0f, 1f), r.coerceIn(0f, 1f))
                         if (key == "enemyWalk" || key == "playerWalk" || key == "walk") {
                             // walking loops manage rate separately
@@ -824,7 +873,7 @@ class AudioManager(private val context: Context) {
         }
 
         val soundId = soundMap[key] ?: return
-        val (left, right) = calculate3dVolume(posX, posY, posZ, volume)
+        val (left, right) = calculate3dVolume(posX, posY, posZ, volume, key)
         val pitch = rate.coerceIn(0.5f, 2.0f)
         val streamId = synchronized(playerLock) {
             if (soundsPaused) {
@@ -877,8 +926,9 @@ class AudioManager(private val context: Context) {
      * The whole point of this channel is that no silence can ever appear
      * between two repeats of the gun sound:
      *
-     *  - the looping player is prepared once, ahead of time, on the audio
-     *    thread and stays prepared for the whole session;
+     *  - the looping player is prepared on the audio thread when the battle
+     *    starts (paused, so it is silent) and kept prepared until the battle
+     *    screen closes; if it is still missing it is built here;
      *  - the very first hold of the trigger starts it immediately (and, when
      *    the preparation is still running, the moment preparation finishes -
      *    never one bullet later);
@@ -886,6 +936,9 @@ class AudioManager(private val context: Context) {
      *    instantaneous operation on an already decoded stream;
      *  - a request while it is already playing only refreshes the volume, so
      *    the loop is never restarted and never doubles up.
+     *
+     * Only the weapon that is really being held can start its own loop: a
+     * call for another weapon never resumes, restarts or masks this one.
      */
     fun startWeaponLoop(
         key: String,
@@ -895,13 +948,45 @@ class AudioManager(private val context: Context) {
         posZ: Float = 0f
     ) {
         if (released) return
+        // A single-shot copy is never looped (an enemy or a feint shot must
+        // not leave a permanent burst behind).
+        if (key in AUTO_SHOT_KEYS) {
+            playSound(key, volume = volume, rate = 1.0f, posX = posX, posY = posY, posZ = posZ)
+            return
+        }
         if (key !in AUTO_LOOP_KEYS) {
             playLoop(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
             return
         }
-        val (left, right) = calculate3dVolume(posX, posY, posZ, volume)
+        val (left, right) = calculate3dVolume(posX, posY, posZ, volume, key)
         trackGains[key] = Pair(left, right)
-        activeWeaponLoops.add(key)
+        val newlyWanted = activeWeaponLoops.add(key)
+        if (!newlyWanted) {
+            // The trigger is already down for this weapon: refresh the level
+            // and make sure the loop is really running (watchdog path).
+            val existing = synchronized(weaponLoopLock) { weaponLoopPlayers[key] }
+            if (existing != null) {
+                try {
+                    existing.setVolume(left, right)
+                    if (soundsPaused) {
+                        if (pausedMedia.add(existing)) existing.pause()
+                    } else if (!existing.isPlaying) {
+                        existing.start()
+                    }
+                    return
+                } catch (_: Exception) {
+                    synchronized(weaponLoopLock) {
+                        if (weaponLoopPlayers[key] === existing) weaponLoopPlayers.remove(key)
+                    }
+                    safeRelease(existing)
+                }
+            }
+            // No player at all (it was never built, or the previous attempt
+            // failed): build it now, the trigger really is still down.
+            if (preparingWeaponLoops.contains(key)) return
+            buildWeaponLoopPlayer(key, left, right)
+            return
+        }
         synchronized(playerLock) {
             val existing = synchronized(weaponLoopLock) { weaponLoopPlayers[key] }
             if (existing != null) {
@@ -919,17 +1004,39 @@ class AudioManager(private val context: Context) {
             }
         }
         if (preparingWeaponLoops.contains(key)) return
+        // Built on the first real hold only: no idle loop player ever exists.
         buildWeaponLoopPlayer(key, left, right)
     }
 
     /**
-     * Stops the firing loop the instant the trigger is released. The player
-     * is only paused, never released, so the next hold resumes with zero
-     * delay and zero silence.
+     * Prepares the three automatic weapon loops, paused, when a battle screen
+     * opens, so the very first hold of the trigger is already gapless.
+     *
+     * Nothing is started here: a loop player only ever renders while its own
+     * weapon is really held, which is what keeps the game free of phantom
+     * gunfire. Priming only removes the one-off preparation delay of the first
+     * burst of a battle.
+     */
+    fun primeWeaponLoops() {
+        if (released) return
+        for (key in AUTO_LOOP_KEYS) {
+            if (synchronized(weaponLoopLock) { weaponLoopPlayers.containsKey(key) }) continue
+            if (preparingWeaponLoops.contains(key)) continue
+            val (left, right) = calculate3dVolume(0f, 0f, 0f, 1.0f, key)
+            trackGains[key] = Pair(left, right)
+            buildWeaponLoopPlayer(key, left, right)
+        }
+    }
+
+    /**
+     * Stops the firing loop the instant the trigger is released. Only this
+     * weapon is stopped - the other automatic weapons keep their own state -
+     * and the player is only paused, never released, so the next hold resumes
+     * with zero delay and zero silence.
      */
     fun stopWeaponLoop(key: String) {
-        if (key !in AUTO_LOOP_KEYS) {
-            stopSound(key)
+        if (key !in AUTO_LOOP_WEAPONS) {
+            stopSoundInternal(key)
             return
         }
         synchronized(playerLock) {
@@ -959,7 +1066,10 @@ class AudioManager(private val context: Context) {
      */
     fun isWeaponLoopActive(key: String): Boolean {
         if (key !in AUTO_LOOP_KEYS) return isTrackActive(key)
-        if (key in preparingWeaponLoops && key in activeWeaponLoops) return true
+        // A loop that nobody is holding is never active, even if the player
+        // still exists in a paused state.
+        if (key !in activeWeaponLoops) return false
+        if (key in preparingWeaponLoops) return true
         val player = synchronized(weaponLoopLock) { weaponLoopPlayers[key] } ?: return false
         return try {
             player.isPlaying
@@ -971,7 +1081,7 @@ class AudioManager(private val context: Context) {
     /** Live volume of a running loop (the distance to the enemy can change). */
     fun refreshWeaponLoop(key: String, volume: Float = 1.0f, posZ: Float = 0f) {
         if (key !in AUTO_LOOP_KEYS) return
-        val (left, right) = calculate3dVolume(0f, 0f, posZ, volume)
+        val (left, right) = calculate3dVolume(0f, 0f, posZ, volume, key)
         trackGains[key] = Pair(left, right)
         val player = synchronized(weaponLoopLock) { weaponLoopPlayers[key] } ?: return
         try {
@@ -980,8 +1090,14 @@ class AudioManager(private val context: Context) {
     }
 
     /**
-     * Prepares the permanent looping player of one automatic weapon. The
-     * prepared stream is kept, paused, for the whole session.
+     * Prepares the looping player of one automatic weapon.
+     *
+     * It is created only when the weapon is really held, and the preparation
+     * runs under [presentationLock] so it can never collide with another
+     * player's `prepare()` - Android refuses the surplus and releases the
+     * player, which is exactly what used to cut a burst off at its first
+     * milliseconds. If the trigger was released while the preparation was
+     * running, the player is created and immediately paused (never started).
      */
     private fun buildWeaponLoopPlayer(key: String, left: Float, right: Float) {
         preparingWeaponLoops.add(key)
@@ -1022,7 +1138,21 @@ class AudioManager(private val context: Context) {
                     preparingWeaponLoops.remove(key)
                     true
                 }
-                player.prepare()
+                if (!acquirePresentationSlot()) {
+                    safeRelease(player)
+                    created = null
+                    return@launch
+                }
+                try {
+                    if (released) {
+                        safeRelease(player)
+                        created = null
+                        return@launch
+                    }
+                    player.prepare()
+                } finally {
+                    presentationLock.unlock()
+                }
                 synchronized(playerLock) {
                     synchronized(weaponLoopLock) {
                         if (released || weaponLoopPlayers.containsKey(key)) {
@@ -1030,6 +1160,10 @@ class AudioManager(private val context: Context) {
                             return@launch
                         }
                         weaponLoopPlayers[key] = player
+                        val gains = trackGains[key] ?: Pair(left, right)
+                        try {
+                            player.setVolume(gains.first, gains.second)
+                        } catch (_: Exception) {}
                         if (key in activeWeaponLoops && !released) {
                             if (soundsPaused) pausedMedia.add(player) else player.start()
                         }
@@ -1050,7 +1184,20 @@ class AudioManager(private val context: Context) {
         }
     }
 
-    /** Drops the two permanent loop players (full shutdown only). */
+    /**
+     * Releases every loop player that is not being held right now. Called on
+     * a screen change, so a match that is over leaves no idle gun player
+     * behind: the next battle rebuilds the loop of the weapon it needs.
+     */
+    private fun releaseIdleWeaponLoops() {
+        for (key in AUTO_LOOP_WEAPONS) {
+            if (key in activeWeaponLoops) continue
+            val player = synchronized(weaponLoopLock) { weaponLoopPlayers.remove(key) } ?: continue
+            safeRelease(player)
+        }
+    }
+
+    /** Drops every loop player (full shutdown). */
     private fun releaseWeaponLoops() {
         activeWeaponLoops.clear()
         for (key in weaponLoopPlayers.keys.toList()) {
@@ -1059,20 +1206,13 @@ class AudioManager(private val context: Context) {
         }
     }
 
-    /** Warms both automatic weapon loops right after the first load pass. */
-    private fun prewarmWeaponLoops() {
-        if (weaponLoopPrewarmStarted) return
-        weaponLoopPrewarmStarted = true
-        for (key in AUTO_LOOP_KEYS) {
-            val (left, right) = calculate3dVolume(0f, 0f, 0f, 1.0f)
-            buildWeaponLoopPlayer(key, left, right)
-        }
-    }
-
     /** Cuts every weapon sound that is still playing, loops included. */
     fun stopWeaponSounds() {
-        for (weaponKey in WEAPON_SOUND_KEYS) {
-            stopSound(weaponKey)
+        // Loops first: they own a dedicated channel and are only paused, so
+        // they have to be stopped explicitly.
+        for (weaponKey in AUTO_LOOP_KEYS) stopWeaponLoop(weaponKey)
+        for (weaponKey in WEAPON_SOUND_KEYS + AUTO_WEAPON_KEYS) {
+            stopSoundInternal(weaponKey)
         }
     }
 
@@ -1238,7 +1378,7 @@ class AudioManager(private val context: Context) {
             val v = VolumeMixer.clamp(volume)
             Pair(v, v)
         } else {
-            calculate3dVolume(posX, posY, posZ, volume)
+            calculate3dVolume(posX, posY, posZ, volume, key)
         }
         trackGains[key] = Pair(left, right)
 
@@ -1291,7 +1431,21 @@ class AudioManager(private val context: Context) {
                     preparingTracks.remove(key)
                     true
                 }
-                created.prepare()
+                // Preparing two players at the same time is what made Android
+                // reject one of them and release it before it ever played.
+                // One prepare at a time, but the wait is bounded: a track that
+                // cannot get its turn is dropped, never left half-prepared.
+                val acquired = acquirePresentationSlot()
+                if (!acquired) {
+                    safeRelease(created)
+                    player = null
+                    return@launch
+                }
+                try {
+                    created.prepare()
+                } finally {
+                    presentationLock.unlock()
+                }
                 // Both fighters share the walk recording. Starting each
                 // footstep channel at its own point of the clip breaks the
                 // phase lock that made two walkers sound like one source.
@@ -1340,7 +1494,7 @@ class AudioManager(private val context: Context) {
     ) {
         val id = shotIds.incrementAndGet()
         val generation = synchronized(playerLock) { playerGeneration[key] ?: 0 }
-        val (left, right) = calculate3dVolume(posX, posY, posZ, volume)
+        val (left, right) = calculate3dVolume(posX, posY, posZ, volume, key)
         audioScope.launch {
             var player: MediaPlayer? = null
             try {
@@ -1374,7 +1528,16 @@ class AudioManager(private val context: Context) {
                     safeRelease(created)
                     true
                 }
-                created.prepare()
+                if (!acquirePresentationSlot()) {
+                    safeRelease(created)
+                    player = null
+                    return@launch
+                }
+                try {
+                    created.prepare()
+                } finally {
+                    presentationLock.unlock()
+                }
                 val accepted = synchronized(playerLock) {
                     if (released || (playerGeneration[key] ?: 0) != generation) false
                     else {
@@ -1440,6 +1603,18 @@ class AudioManager(private val context: Context) {
         keys.forEach { if (isReady(it)) flushPendingPlays(it) }
     }
 
+    /**
+     * Takes the single preparation slot, waiting at most
+     * [PRESENTATION_WAIT_MS] for it. Returns true when the caller owns the
+     * lock and must unlock it after `prepare()`; false when the slot stayed
+     * busy, in which case the request is dropped instead of failing noisily.
+     */
+    private fun acquirePresentationSlot(): Boolean = try {
+        presentationLock.tryLock(PRESENTATION_WAIT_MS, TimeUnit.MILLISECONDS)
+    } catch (_: InterruptedException) {
+        false
+    }
+
     /** Releases a player without ever throwing into the audio pipeline. */
     private fun safeRelease(player: MediaPlayer) {
         pausedMedia.remove(player)
@@ -1493,7 +1668,10 @@ class AudioManager(private val context: Context) {
      * single stray burst behind.
      */
     fun stopSound(key: String) {
-        if (key in AUTO_LOOP_KEYS) {
+        if (key in AUTO_LOOP_WEAPONS) {
+            // Stops this weapon's own loop channel and its one-shot copy. It
+            // never touches another weapon's loop: the other automatic
+            // weapons keep playing exactly as they were.
             stopWeaponLoop(key)
             AUTO_LOOP_SHOT_KEYS[key]?.let { stopSoundInternal(it) }
         }
@@ -1546,8 +1724,11 @@ class AudioManager(private val context: Context) {
      * This fixes the issue where victory, defeat, or parachute sounds continue playing after navigating away.
      */
     fun stopScreenAudio() {
-        // Both automatic weapon loops are paused the moment a screen changes.
+        // Every automatic weapon loop is paused the moment a screen changes,
+        // and the idle loop players are released: outside a battle the app
+        // holds no playing gun channel at all.
         stopWeaponLoops()
+        releaseIdleWeaponLoops()
         stopSound("win")
         stopSound("lose")
         stopSound("parachute")
