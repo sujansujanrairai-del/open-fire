@@ -325,6 +325,48 @@ object RobertRules {
     /** Defensive assets may only be used while alive and below 150 HP, in every round. */
     fun defenceThresholdHp(round: Int, maxHp: Int): Int = DEFENCE_THRESHOLD_HP
 
+    // ------------------------------------------------------------------
+    // Feint (deception) fire
+    //
+    // Robert sometimes walks into the 0%-40% band and fires one or two shots
+    // that always miss, purely to make the real player look for an attack
+    // that is not coming. Those feints must never use a continuous-fire
+    // weapon: the submachine gun, the AK-47 and the machine gun play a long
+    // automatic burst recording, so a single feint shot used to sound like a
+    // full held burst and confused the player about what is really
+    // happening. Feints are therefore restricted to single-shot weapons.
+    // ------------------------------------------------------------------
+
+    /** The single-shot weapons a feint may use, cheapest first. */
+    val FEINT_WEAPONS: List<Weapon> = listOf(Weapon.M10, Weapon.PISTOL, Weapon.SNIPER)
+
+    /**
+     * True when [weapon] fires one round per trigger pull, so it can be used
+     * for a feint. Automatic weapons are excluded explicitly, and so are
+     * melee weapons and launchers (they have their own sounds and rules).
+     */
+    fun isFeintWeapon(weapon: Weapon): Boolean =
+        !weapon.autoFire && !weapon.melee && !weapon.missileLauncher && !weapon.bomb
+
+    /** Every single-shot weapon of [allowed] that may be used for a feint. */
+    fun feintWeaponsFrom(allowed: List<Weapon>): List<Weapon> =
+        allowed.filter { isFeintWeapon(it) }
+
+    /**
+     * The weapon of one feint shot, or null when Robert owns no single-shot
+     * weapon at all. A null result means the feint must be cancelled instead
+     * of being fired with an automatic weapon.
+     */
+    fun feintWeapon(allowed: List<Weapon>, random: Random): Weapon? {
+        val candidates = feintWeaponsFrom(allowed)
+        if (candidates.isEmpty()) return null
+        // Prefer the documented feint guns (M10, pistol, sniper) when they are
+        // part of his loadout; otherwise any single-shot weapon is fine.
+        val documented = candidates.filter { it in FEINT_WEAPONS }
+        val pool = if (documented.isNotEmpty()) documented else candidates
+        return pool[random.nextInt(pool.size)]
+    }
+
     /** Every standard battle weapon (bombs and the missile are separate). */
     val ALL_STANDARD_WEAPONS: List<Weapon> =
         Weapon.entries.filter {

@@ -67,12 +67,12 @@ class ExampleRobolectricTest {
         org.junit.Assert.assertNotNull(pistol)
         assertEquals(6, pistol?.magazine)
         // Pistol damage is fixed HP, never a share of maximum health.
-        assertEquals(18, pistol?.powerPercent)
-        assertEquals(36, pistol?.closeRangePowerPercent)
+        assertEquals(25, pistol?.powerPercent)
+        assertEquals(50, pistol?.closeRangePowerPercent)
         assertEquals(0, DamageTable.percentOf(pistol!!, HitZone.MISS))
-        assertEquals(18, DamageTable.percentOf(pistol, HitZone.LIGHT))
-        assertEquals(28, DamageTable.percentOf(pistol, HitZone.STRONG))
-        assertEquals(36, DamageTable.percentOf(pistol, HitZone.HEAVY))
+        assertEquals(25, DamageTable.percentOf(pistol, HitZone.LIGHT))
+        assertEquals(40, DamageTable.percentOf(pistol, HitZone.STRONG))
+        assertEquals(50, DamageTable.percentOf(pistol, HitZone.HEAVY))
     }
 
     @Test

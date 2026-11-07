@@ -131,9 +131,10 @@ class StringsAndGunRulesTest {
         val en = Strings.getGuide("en").joinToString(" ")
         for (required in listOf(
             "Five wins complete one level", "five levels complete one round", "2600",
-            "25 by 25 metre", "centre left", "Swipe left with three fingers", "sound",
-            "pause", "resume", "1.5 seconds", "every 0.5 seconds", "60 HP",
-            "knife 0/12/18/26", "AWM 0/28/44/60", "60, 68 or 75 percent",
+            "25 by 25 metre", "centre left", "Swipe down with three fingers", "sound",
+            "pause", "resume", "1.5 seconds", "every 0.5 seconds", "80 HP",
+            "knife 0/16/26/32", "AWM 0/40/64/80", "60, 68 or 75 percent",
+            "Voice guidance", "single-shot weapon",
             "M10", "AK-47", "submachine gun", "instantly",
             "three quick shots", "unlock and can be bought from round 1",
             "heavy hit or repeated", "500, 1000 or 1500", "fewer than 500",
@@ -156,7 +157,7 @@ class StringsAndGunRulesTest {
                 assertFalse("Guide entry $index was not translated into $lang", guide[index] == en[index])
             }
             val text = guide.joinToString(" ")
-            for (number in listOf("25", "12", "60", "200", "2600", "1500", "1100", "400", "2200", "1800")) {
+            for (number in listOf("25", "16", "26", "40", "64", "80", "200", "2600", "1500", "1100", "400", "2200", "1800")) {
                 assertTrue("$lang must document $number", text.contains(digitsOf(lang, number)))
             }
         }
@@ -212,7 +213,7 @@ class StringsAndGunRulesTest {
             assertTrue(Strings.get("itemMissingTail", lang).isNotBlank())
             assertTrue(Strings.get("robertFled", lang).isNotBlank())
             assertTrue(Strings.get("matchWon", lang).isNotBlank())
-            assertTrue(Strings.get("version", lang).contains("2.5") || Strings.get("version", lang).contains("२.५"))
+            assertTrue(Strings.get("version", lang).contains("2.6") || Strings.get("version", lang).contains("२.६"))
             for (key in listOf(
                 "unlockAfterRound1", "unlockAfterRound2", "unlockAfterRound3",
                 "unlockAfterRound4", "antiMissileReward", "flatDamageInfo"

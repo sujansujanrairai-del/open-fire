@@ -42,7 +42,33 @@ class TtsManager(private val context: Context) {
 
     var currentVoiceName: String = ""
     var currentEnginePackage: String = ""
+
+    /**
+     * The language of the text that is spoken (the interface language). It
+     * feeds the speech sanitizer, never the voice choice on its own.
+     */
     var currentLanguage: String = "en"
+
+    /**
+     * The language the engine voice must speak. It is chosen in Settings on
+     * its own ("Language" next to "Voice") and an empty value means "follow
+     * the interface language", which is the default for older profiles. The
+     * voice list is always rebuilt from this language, so the two settings
+     * can no longer be confused with each other.
+     */
+    var currentTtsLanguage: String = ""
+
+    /** The language that really decides the engine voice and the voice list. */
+    val voiceLanguage: String
+        get() = currentTtsLanguage.ifBlank { currentLanguage }
+
+    /**
+     * Signature of the voice configuration that is really applied right now.
+     * Re-applying the voice, the language or the rate on every single
+     * utterance made some engines flush (cut off) the sentence they were
+     * speaking, so a configuration is only ever applied when it changes.
+     */
+    private var appliedVoiceSignature: String? = null
 
     /** Speech requested while the engine was still initialising. */
     private var pendingSpeech: String? = null
@@ -76,6 +102,7 @@ class TtsManager(private val context: Context) {
                 })
                 refreshEngines()
                 refreshVoices()
+                appliedVoiceSignature = null
                 applyVoiceSettings()
                 pendingSpeech?.let { queued ->
                     pendingSpeech = null
@@ -113,14 +140,12 @@ class TtsManager(private val context: Context) {
             Log.e(TAG, "Error fetching TTS voices", e)
         }
 
-        // Only offer voices that can actually speak the selected app language.
-        // Picking a voice from another language family is what garbles English
-        // pronunciation (and vice versa).
-        val wanted = when (currentLanguage) {
-            "hi" -> setOf("hi")
-            "ne" -> setOf("ne", "hi") // Hindi voices read Devanagari as fallback
-            else -> setOf("en")
-        }
+        // Only offer voices that can actually speak the selected TTS
+        // language. Picking a voice from another language family is what
+        // garbles English pronunciation (and vice versa), and the list was
+        // previously built from the interface language even when the player
+        // had chosen a different voice language.
+        val wanted = wantedLanguages(voiceLanguage)
         val filtered = voiceList.filter { it.language.lowercase() in wanted }
         _availableVoices.value = if (filtered.isNotEmpty()) filtered else voiceList
     }
@@ -133,18 +158,50 @@ class TtsManager(private val context: Context) {
      * Devanagari characters.
      */
     private fun resolveTargetLocale(currentTts: TextToSpeech): Locale {
-        var targetLocale = when (currentLanguage) {
+        val language = voiceLanguage
+        var targetLocale = when (language) {
             "hi" -> Locale("hi", "IN")
             "ne" -> Locale("ne", "NP")
             else -> Locale.US
         }
         val avail = currentTts.isLanguageAvailable(targetLocale)
-        if (currentLanguage == "ne" &&
+        if (language == "ne" &&
             (avail == TextToSpeech.LANG_MISSING_DATA || avail == TextToSpeech.LANG_NOT_SUPPORTED)
         ) {
             targetLocale = Locale("hi", "IN")
         }
         return targetLocale
+    }
+
+    /**
+     * The engine languages that may voice [language]. Nepali falls back to
+     * Hindi, which shares the Devanagari script, so a device without a Nepali
+     * voice still has a usable list instead of English entries.
+     */
+    private fun wantedLanguages(language: String): Set<String> = when (language) {
+        "hi" -> setOf("hi")
+        "ne" -> setOf("ne", "hi")
+        else -> setOf("en")
+    }
+
+    /**
+     * Rebuilds the voice list for a newly selected TTS language and drops a
+     * previously saved voice that cannot speak it, so the Settings screen
+     * always shows voices that really work.
+     */
+    fun setVoiceLanguage(language: String) {
+        currentTtsLanguage = language
+        val wanted = wantedLanguages(voiceLanguage)
+        val savedLanguage = _availableVoices.value
+            .find { it.name == currentVoiceName }
+            ?.language
+            ?.lowercase()
+        val savedIsUsable = currentVoiceName.isNotEmpty() &&
+            savedLanguage != null && savedLanguage in wanted
+        if (!savedIsUsable) currentVoiceName = ""
+        appliedVoiceSignature = null
+        refreshVoices()
+        applyVoiceSettings()
     }
 
     /**
@@ -159,9 +216,15 @@ class TtsManager(private val context: Context) {
         if (!isInitialized || tts == null) return
         val currentTts = tts ?: return
 
-        currentTts.setSpeechRate(speechRate.coerceIn(0.5f, 2.0f))
-
         val targetLocale = resolveTargetLocale(currentTts)
+        // Applying the very same configuration again is what used to cut an
+        // announcement off in the middle of a sentence, so it is skipped.
+        val signature = "${currentEnginePackage}|${voiceLanguage}|$currentVoiceName|" +
+            "${speechRate}_${targetLocale.toLanguageTag()}"
+        if (signature == appliedVoiceSignature) return
+        appliedVoiceSignature = signature
+
+        currentTts.setSpeechRate(speechRate.coerceIn(0.5f, 2.0f))
         val avail = currentTts.isLanguageAvailable(targetLocale)
         if (avail >= TextToSpeech.LANG_AVAILABLE) {
             currentTts.language = targetLocale
@@ -264,6 +327,8 @@ class TtsManager(private val context: Context) {
             pendingSpeech = sanitized
             return
         }
+        // Only applies the voice when it really changed: re-applying it here
+        // flushed the utterance that was still being spoken.
         applyVoiceSettings()
 
         val queueMode = if (interrupt) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
@@ -315,6 +380,9 @@ class TtsManager(private val context: Context) {
         if (sanitized.isNotBlank()) {
             currentTts.speak(sanitized, TextToSpeech.QUEUE_FLUSH, params, "preview")
         }
+        // The preview temporarily changes the rate and the voice, so the real
+        // configuration has to be re-applied on the next announcement.
+        appliedVoiceSignature = null
     }
 
     fun shutdown() {

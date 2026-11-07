@@ -9,7 +9,7 @@ package com.blindtechnexus.openfire.model
  * firearms.
  *
  * Both fighters use [DamageTable] for ordinary weapons: every gunshot is
- * capped at 60 flat health points and proximity controls its band. Bombs
+ * capped at 80 flat health points and proximity controls its band. Bombs
  * take 60 to 75 percent of the victim's remaining health and a direct
  * missile hit destroys its target (see [BombRules] and [MissileRules]).
  *
@@ -81,8 +81,8 @@ enum class Weapon(
     SHORT_GUN(
         id = "shortGun",
         nameKey = "gunShotgun",
-        powerPercent = 14,
-        closeRangePowerPercent = 30,
+        powerPercent = 19,
+        closeRangePowerPercent = 38,
         magazine = 6,
         price = 0,
         ownedByDefault = true,
@@ -95,8 +95,8 @@ enum class Weapon(
     ASSAULT_GUN(
         id = "assaultGun",
         nameKey = "gunAssault",
-        powerPercent = 16,
-        closeRangePowerPercent = 34,
+        powerPercent = 22,
+        closeRangePowerPercent = 44,
         magazine = 6,
         price = 0,
         ownedByDefault = true,
@@ -109,8 +109,8 @@ enum class Weapon(
     PISTOL(
         id = "pistol",
         nameKey = "gunPistol",
-        powerPercent = 18,
-        closeRangePowerPercent = 36,
+        powerPercent = 25,
+        closeRangePowerPercent = 50,
         magazine = 6,
         price = 450,
         ownedByDefault = false,
@@ -123,8 +123,8 @@ enum class Weapon(
     SNIPER(
         id = "sniper",
         nameKey = "gunSniper",
-        powerPercent = 22,
-        closeRangePowerPercent = 48,
+        powerPercent = 32,
+        closeRangePowerPercent = 64,
         magazine = 6,
         price = 850,
         ownedByDefault = false,
@@ -146,8 +146,8 @@ enum class Weapon(
     GLUE_BREAKER(
         id = "glueBreaker",
         nameKey = "gunGlueBreaker",
-        powerPercent = 12,
-        closeRangePowerPercent = 28,
+        powerPercent = 17,
+        closeRangePowerPercent = 34,
         magazine = 6,
         price = 750,
         ownedByDefault = false,
@@ -160,8 +160,8 @@ enum class Weapon(
     KNIFE(
         id = "knife",
         nameKey = "gunKnife",
-        powerPercent = 12,
-        closeRangePowerPercent = 26,
+        powerPercent = 16,
+        closeRangePowerPercent = 32,
         magazine = 0,
         price = 220,
         ownedByDefault = false,
@@ -174,8 +174,8 @@ enum class Weapon(
     SWORD(
         id = "sword",
         nameKey = "gunSword",
-        powerPercent = 20,
-        closeRangePowerPercent = 42,
+        powerPercent = 27,
+        closeRangePowerPercent = 54,
         magazine = 0,
         price = 650,
         ownedByDefault = false,
@@ -193,8 +193,8 @@ enum class Weapon(
     MP40(
         id = "mp40",
         nameKey = "gunMp40",
-        powerPercent = 14,
-        closeRangePowerPercent = 28,
+        powerPercent = 18,
+        closeRangePowerPercent = 36,
         magazine = 20,
         price = 800,
         ownedByDefault = false,
@@ -214,8 +214,8 @@ enum class Weapon(
     M10(
         id = "m10",
         nameKey = "gunM10",
-        powerPercent = 17,
-        closeRangePowerPercent = 34,
+        powerPercent = 21,
+        closeRangePowerPercent = 42,
         magazine = 8,
         price = 600,
         ownedByDefault = false,
@@ -235,8 +235,8 @@ enum class Weapon(
     SUBMACHINE_GUN(
         id = "submachineGun",
         nameKey = "gunSubmachineGun",
-        powerPercent = 10,
-        closeRangePowerPercent = 22,
+        powerPercent = 13,
+        closeRangePowerPercent = 26,
         magazine = 40,
         price = 900,
         ownedByDefault = false,
@@ -258,8 +258,8 @@ enum class Weapon(
     AK47(
         id = "ak47",
         nameKey = "gunAk47",
-        powerPercent = 20,
-        closeRangePowerPercent = 44,
+        powerPercent = 29,
+        closeRangePowerPercent = 58,
         magazine = 30,
         price = 1250,
         ownedByDefault = false,
@@ -277,13 +277,13 @@ enum class Weapon(
      * The AWM long-range rifle. Inside the 20% to 40% proximity band, where
      * every other weapon misses, it still lands a precision hit worth
      * [DamageTable.AWM_LONG_RANGE_DAMAGE_HP] health points, and its heavy
-     * close-range row is the full 60 point ceiling of the damage table.
+     * close-range row is the full 80 point ceiling of the damage table.
      */
     AWM(
         id = "awm",
         nameKey = "gunAwm",
-        powerPercent = 28,
-        closeRangePowerPercent = 60,
+        powerPercent = 40,
+        closeRangePowerPercent = 80,
         magazine = 5,
         price = 1200,
         ownedByDefault = false,
@@ -304,8 +304,8 @@ enum class Weapon(
     MACHINE_GUN(
         id = "machineGun",
         nameKey = "gunMachineGun",
-        powerPercent = 26,
-        closeRangePowerPercent = 50,
+        powerPercent = 35,
+        closeRangePowerPercent = 70,
         magazine = 50,
         price = 1700,
         ownedByDefault = false,

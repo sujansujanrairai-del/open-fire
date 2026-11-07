@@ -198,6 +198,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         )
 
     private companion object {
+        /** The screens that count as "in game" for Voice Guidance. */
+        val IN_GAME_SCREENS: Set<Screen> =
+            setOf(Screen.JUMP, Screen.PARA, Screen.LAND, Screen.BATTLE)
+
+        /** The languages the speech voice can be set to. */
+        val VOICE_LANGUAGES: Set<String> = setOf("en", "hi", "ne")
+
         /** Fast retreat: metres gained per flee tick, and the tick length. */
         const val FLEE_STEP = RobertRules.FLEE_STEP_M
         const val FLEE_TICK_MS = RobertRules.FLEE_TICK_MS
@@ -306,25 +313,49 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         ttsManager.speechRate = s.ttsRate
         ttsManager.speechVolume = s.ttsVolume
+        // Two independent values: the interface language of the text and the
+        // language of the engine voice. Both are saved and both are applied,
+        // so opening Settings can never load one in place of the other.
         ttsManager.currentLanguage = s.lang
+        ttsManager.currentTtsLanguage = s.effectiveTtsLanguage
         ttsManager.currentVoiceName = s.voiceName
         if (s.ttsEnginePackage != ttsManager.currentEnginePackage) {
             ttsManager.initTts(s.ttsEnginePackage.ifEmpty { null })
             syncedVoiceSignature = null
         } else {
-            val signature = "${s.lang}|${s.voiceName}|${s.ttsRate}|${s.ttsEnginePackage}"
+            val signature =
+                "${s.lang}|${s.effectiveTtsLanguage}|${s.voiceName}|${s.ttsRate}|${s.ttsEnginePackage}"
             if (signature != syncedVoiceSignature) {
+                // Rebuild the voice list for the selected voice language first,
+                // then apply the saved voice: the list the player sees in
+                // Settings is always the list that belongs to that language.
+                ttsManager.refreshVoices()
                 ttsManager.applyVoiceSettings()
                 syncedVoiceSignature = signature
             }
         }
     }
 
+    /**
+     * True while spoken game feedback is allowed. With voice guidance off the
+     * in-game flow (drop, parachute, landing and the battle itself) speaks
+     * nothing, while the menus, the guide, the shop and the result screen keep
+     * announcing everything, so the app stays blind-usable.
+     */
+    fun isSpeechAllowed(): Boolean =
+        _settings.value.voiceGuidance || _currentScreen.value !in IN_GAME_SCREENS
+
+
     fun t(key: String): String = Strings.get(key, _settings.value.lang)
 
+    /**
+     * Logs a line and announces it. The log line is always written; the
+     * spoken part follows the Voice Guidance setting, so the battle can be
+     * played silently while every menu still speaks.
+     */
     fun msg(text: String) {
         _gameState.update { it.copy(log = text) }
-        ttsManager.speak(text, interrupt = true)
+        if (isSpeechAllowed()) ttsManager.speak(text, interrupt = true)
     }
 
     private fun setLog(text: String) {
@@ -332,6 +363,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun speak(text: String, interrupt: Boolean = true) {
+        if (!isSpeechAllowed()) return
         ttsManager.speak(text, interrupt)
     }
 
@@ -403,8 +435,67 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setLanguage(lang: String) {
-        updateSettings(_settings.value.copy(lang = lang))
+        // The interface language also moves the voice language when the player
+        // left the voice language on "follow the app language".
+        val current = _settings.value
+        val updated = if (current.ttsLanguage.isBlank()) {
+            current.copy(lang = lang, voiceName = "")
+        } else {
+            current.copy(lang = lang)
+        }
+        updateSettings(updated)
         ttsManager.refreshVoices()
+    }
+
+    /**
+     * Chooses the language of the speech voice. An empty value means "follow
+     * the interface language". The voice list is rebuilt for the new
+     * language and a saved voice that cannot speak it is dropped, so the two
+     * Settings dropdowns always agree with each other.
+     */
+    fun setTtsLanguage(language: String) {
+        val chosen = if (language in VOICE_LANGUAGES) language else ""
+        val current = _settings.value
+        // A voice only survives when it speaks the newly chosen language.
+        val keepVoice = chosen.isNotBlank() && chosen == current.effectiveTtsLanguage
+        val updated = current.copy(
+            ttsLanguage = chosen,
+            voiceName = if (keepVoice) current.voiceName else ""
+        )
+        updateSettings(updated)
+        ttsManager.setVoiceLanguage(chosen)
+        ttsManager.refreshVoices()
+    }
+
+    /**
+     * Chooses the speech engine and saves it at once, so reopening Settings -
+     * or the next app start - loads the same engine with the same language and
+     * the same voice instead of falling back to the system default.
+     */
+    fun setTtsEngine(enginePackage: String) {
+        // [syncSettingsToManagers] notices the engine change, re-initialises
+        // the engine and rebuilds its language and voice once it is ready.
+        updateSettings(_settings.value.copy(ttsEnginePackage = enginePackage))
+        ttsManager.refreshEngines()
+    }
+
+    fun setTtsRate(rate: Float) {
+        updateSettings(_settings.value.copy(ttsRate = rate.coerceIn(0.5f, 2.0f)))
+    }
+
+    fun setVoice(voiceName: String) {
+        updateSettings(_settings.value.copy(voiceName = voiceName))
+        ttsManager.currentVoiceName = voiceName
+        ttsManager.applyVoiceSettings()
+    }
+
+    /** Voice Guidance: spoken in-game feedback on or off. */
+    fun setVoiceGuidance(enabled: Boolean) {
+        updateSettings(_settings.value.copy(voiceGuidance = enabled))
+        if (!enabled && _currentScreen.value in IN_GAME_SCREENS) {
+            // Stop the announcement that is playing right now as well.
+            ttsManager.stop()
+        }
     }
 
     fun setKeepScreenOn(enabled: Boolean) {
@@ -496,6 +587,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 audioManager.stopScreenAudio()
                 // Footsteps start only when a fighter is actually running.
                 audioManager.stopFootsteps()
+                // The three automatic weapon loops are prepared, paused, so
+                // the first hold of the trigger is gapless. Nothing is played
+                // until a trigger is really down.
+                audioManager.primeWeaponLoops()
             }
             Screen.RESULT -> {
                 // The result screen is still part of the match: no vibration
@@ -2056,9 +2151,30 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerGlueWallActive = state.glueWallActive,
             hasSniper = false
         )
+        // The 0%-40% band exists only for deception: every shot fired from it
+        // misses on purpose. A feint must never be fired with a continuous-
+        // fire weapon, because the submachine gun, the AK-47 and the machine
+        // gun play a long automatic burst recording - a single fake shot then
+        // sounds exactly like a genuine burst and the player cannot tell what
+        // is happening. Feints use a single-shot weapon only (pistol, sniper
+        // or M10), and if he owns none he drops the deception band instead of
+        // faking with the wrong sound.
+        val feintShot = currentFireRange(state) == FireRange.FAR && state.robertDeceptionShots > 0
+        var forcedFeint: Weapon? = null
+        if (feintShot) {
+            val feintPool = RobertRules.feintWeaponsFrom(pool)
+            if (feintPool.isEmpty()) {
+                _gameState.update { it.copy(robertDeceptionShots = 0) }
+                rollRobertFireRange(allowDeception = false)
+                ensureRobertPositioned()
+                state = _gameState.value
+            } else {
+                forcedFeint = RobertRules.feintWeapon(feintPool, Random)
+            }
+        }
         // Round 5 strategic logic: equal power — prioritize positioning over brute force
         val isStrategyRound = state.round == 5
-        val chosen = when {
+        val chosen = forcedFeint ?: when {
             smartChoice != null && (Random.nextFloat() < 0.75f || isStrategyRound) -> smartChoice
             else -> pool[Random.nextInt(pool.size)]
         }
@@ -3416,9 +3532,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         autoFireJob = null
         val state = _gameState.value
         // The sound is cut first, so lifting the hand is heard as silence at
-        // once. Both automatic loops are paused, whatever the current weapon
-        // is, which also covers a weapon switch during a burst.
-        audioManager.stopWeaponLoop(state.activeWeapon.fireSoundKey)
+        // once. Every automatic loop is paused, not just the one of the weapon
+        // currently selected: after a weapon switch during a burst the old
+        // loop would otherwise be left running on its own channel, which is
+        // exactly the phantom burst that used to be heard with no trigger
+        // held. Each loop only pauses, so the next hold still resumes
+        // instantly.
+        audioManager.stopWeaponLoops()
         if (!state.autoFireActive) return
         _gameState.update { it.copy(autoFireActive = false) }
     }

@@ -27,6 +27,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -67,6 +68,7 @@ fun SettingsScreen(viewModel: GameViewModel) {
     var nameState by remember { mutableStateOf(currentSettings.name) }
     var langState by remember { mutableStateOf(currentSettings.lang) }
     var engineState by remember { mutableStateOf(currentSettings.ttsEnginePackage) }
+    var ttsLangState by remember { mutableStateOf(currentSettings.ttsLanguage) }
     var voiceState by remember { mutableStateOf(currentSettings.voiceName) }
     var rateState by remember { mutableFloatStateOf(currentSettings.ttsRate) }
     var ttsVolState by remember { mutableFloatStateOf(currentSettings.ttsVolume) }
@@ -75,6 +77,28 @@ fun SettingsScreen(viewModel: GameViewModel) {
     var soundThemeState by remember { mutableStateOf(currentSettings.soundTheme) }
     var hapticsState by remember { mutableStateOf(currentSettings.hapticsEnabled) }
     var keepScreenOnState by remember { mutableStateOf(currentSettings.keepScreenOn) }
+    var voiceGuidanceState by remember { mutableStateOf(currentSettings.voiceGuidance) }
+
+    // The stored settings are the single source of truth: whenever they
+    // change (a saved value, a language switch, a voice that had to be
+    // dropped because it cannot speak the new language) the controls follow.
+    // Without this the screen kept showing the values it remembered from the
+    // first composition, which is what made a chosen volume appear to revert.
+    LaunchedEffect(currentSettings) {
+        nameState = currentSettings.name
+        langState = currentSettings.lang
+        engineState = currentSettings.ttsEnginePackage
+        ttsLangState = currentSettings.ttsLanguage
+        voiceState = currentSettings.voiceName
+        rateState = currentSettings.ttsRate
+        ttsVolState = currentSettings.ttsVolume
+        musicVolState = currentSettings.musicVolume
+        sfxVolState = currentSettings.sfxVolume
+        soundThemeState = currentSettings.soundTheme
+        hapticsState = currentSettings.hapticsEnabled
+        keepScreenOnState = currentSettings.keepScreenOn
+        voiceGuidanceState = currentSettings.voiceGuidance
+    }
 
     Column(
         modifier = Modifier
@@ -177,7 +201,42 @@ fun SettingsScreen(viewModel: GameViewModel) {
                 options = engineOptions,
                 onSelect = {
                     engineState = it
-                    viewModel.ttsManager.initTts(it.ifEmpty { null })
+                    // Saved immediately, so the engine is loaded again with the
+                    // right language and voice on the next start.
+                    viewModel.setTtsEngine(it)
+                }
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // TTS Language: the language the voice speaks. It is separate
+            // from the interface language above, both are saved, and the
+            // voice list below is always built for this language.
+            Text(
+                text = viewModel.t("ttsLanguage"),
+                fontSize = 14.sp,
+                color = TextAccent,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            val ttsLangLabel = when (ttsLangState) {
+                "en" -> "English"
+                "hi" -> "हिन्दी (Hindi)"
+                "ne" -> "नेपाली (Nepali)"
+                else -> viewModel.t("ttsLanguageAuto")
+            }
+            CustomDropdown(
+                selectedValue = ttsLangLabel,
+                options = listOf(
+                    "" to viewModel.t("ttsLanguageAuto"),
+                    "en" to "English",
+                    "hi" to "हिन्दी (Hindi)",
+                    "ne" to "नेपाली (Nepali)"
+                ),
+                onSelect = {
+                    ttsLangState = it
+                    voiceState = ""
+                    viewModel.setTtsLanguage(it)
                 }
             )
 
@@ -193,14 +252,25 @@ fun SettingsScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(6.dp))
             val voiceOptions = mutableListOf("" to viewModel.t("autoVoice"))
             voices.forEach { voiceOptions.add(it.name to it.displayName) }
-            val selectedVoiceLabel = voiceOptions.find { it.first == voiceState }?.second ?: viewModel.t("autoVoice")
+            val selectedVoiceLabel =
+                voiceOptions.find { it.first == voiceState }?.second ?: viewModel.t("autoVoice")
+            if (voices.isEmpty()) {
+                // Never leave the player with an empty, meaningless list: say
+                // that the engine has no voice for this language yet.
+                Text(
+                    text = viewModel.t("ttsNoVoices"),
+                    fontSize = 13.sp,
+                    color = TextMuted
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+            }
             CustomDropdown(
                 selectedValue = selectedVoiceLabel,
                 options = voiceOptions,
                 onSelect = {
                     voiceState = it
-                    viewModel.ttsManager.currentVoiceName = it
-                    viewModel.ttsManager.applyVoiceSettings()
+                    // Persisted at once and applied to the live engine.
+                    viewModel.setVoice(it)
                 }
             )
 
@@ -227,7 +297,10 @@ fun SettingsScreen(viewModel: GameViewModel) {
             }
             Slider(
                 value = rateState,
-                onValueChange = { rateState = it },
+                onValueChange = {
+                    rateState = it
+                    viewModel.setTtsRate(it)
+                },
                 valueRange = 0.5f..2.0f,
                 steps = 14,
                 colors = SliderDefaults.colors(
@@ -360,7 +433,10 @@ fun SettingsScreen(viewModel: GameViewModel) {
                 }
                 Switch(
                     checked = hapticsState,
-                    onCheckedChange = { hapticsState = it },
+                    onCheckedChange = {
+                        hapticsState = it
+                        viewModel.updateSettings(currentSettings.copy(hapticsEnabled = it))
+                    },
                     modifier = Modifier.testTag("haptics_switch"),
                     colors = SwitchDefaults.colors(checkedThumbColor = BtnPrimary, checkedTrackColor = Color(0xFF002B18))
                 )
@@ -388,6 +464,47 @@ fun SettingsScreen(viewModel: GameViewModel) {
                     colors = SwitchDefaults.colors(checkedThumbColor = BtnPrimary, checkedTrackColor = Color(0xFF002B18))
                 )
             }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Voice Guidance (new): the spoken feedback of the battle screen.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = viewModel.t("voiceGuidance"),
+                        fontSize = 15.sp,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = viewModel.t("voiceGuidanceDesc"),
+                        fontSize = 13.sp,
+                        color = TextMuted
+                    )
+                }
+                Switch(
+                    checked = voiceGuidanceState,
+                    onCheckedChange = {
+                        voiceGuidanceState = it
+                        // Applied at once and saved at once: the next battle
+                        // already obeys it.
+                        viewModel.setVoiceGuidance(it)
+                        viewModel.playSound("click")
+                        viewModel.speak(
+                            if (it) viewModel.t("voiceGuidanceOn") else viewModel.t("voiceGuidanceOff")
+                        )
+                    },
+                    modifier = Modifier.testTag("voice_guidance_switch"),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = BtnPrimary,
+                        checkedTrackColor = Color(0xFF002B18)
+                    )
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -399,6 +516,7 @@ fun SettingsScreen(viewModel: GameViewModel) {
                     name = if (nameState.trim().isNotEmpty()) nameState.trim() else currentSettings.name,
                     lang = langState,
                     ttsEnginePackage = engineState,
+                    ttsLanguage = ttsLangState,
                     voiceName = voiceState,
                     ttsRate = rateState,
                     ttsVolume = ttsVolState,
@@ -406,7 +524,8 @@ fun SettingsScreen(viewModel: GameViewModel) {
                     sfxVolume = sfxVolState,
                     soundTheme = soundThemeState,
                     hapticsEnabled = hapticsState,
-                    keepScreenOn = keepScreenOnState
+                    keepScreenOn = keepScreenOnState,
+                    voiceGuidance = voiceGuidanceState
                 )
                 viewModel.updateSettings(updated)
                 viewModel.playSound("click")

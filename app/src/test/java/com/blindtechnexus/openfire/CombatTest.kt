@@ -57,20 +57,23 @@ class CombatTest {
     @Test
     fun weaponPowersMatchTheSingleDamageTable() {
         // light band HP, strong band HP, heavy band HP
+        // The ladder: half of the point-blank power, 80 percent of it, then
+        // the full power. The ceiling is 80 HP (the AWM), the floor is the
+        // submachine gun at 26 HP point-blank.
         val expected = mapOf(
-            Weapon.KNIFE to Triple(12, 18, 26),
-            Weapon.SHORT_GUN to Triple(14, 22, 30),
-            Weapon.ASSAULT_GUN to Triple(16, 26, 34),
-            Weapon.PISTOL to Triple(18, 28, 36),
-            Weapon.SNIPER to Triple(22, 36, 48),
-            Weapon.GLUE_BREAKER to Triple(12, 20, 28),
-            Weapon.SWORD to Triple(20, 30, 42),
-            Weapon.AWM to Triple(28, 44, 60),
-            Weapon.MP40 to Triple(14, 21, 28),
-            Weapon.M10 to Triple(17, 26, 34),
-            Weapon.SUBMACHINE_GUN to Triple(10, 16, 22),
-            Weapon.AK47 to Triple(20, 32, 44),
-            Weapon.MACHINE_GUN to Triple(26, 38, 50)
+            Weapon.KNIFE to Triple(16, 26, 32),
+            Weapon.SHORT_GUN to Triple(19, 30, 38),
+            Weapon.ASSAULT_GUN to Triple(22, 35, 44),
+            Weapon.PISTOL to Triple(25, 40, 50),
+            Weapon.SNIPER to Triple(32, 51, 64),
+            Weapon.GLUE_BREAKER to Triple(17, 27, 34),
+            Weapon.SWORD to Triple(27, 43, 54),
+            Weapon.AWM to Triple(40, 64, 80),
+            Weapon.MP40 to Triple(18, 29, 36),
+            Weapon.M10 to Triple(21, 34, 42),
+            Weapon.SUBMACHINE_GUN to Triple(13, 21, 26),
+            Weapon.AK47 to Triple(29, 46, 58),
+            Weapon.MACHINE_GUN to Triple(35, 56, 70)
         )
         for ((weapon, row) in expected) {
             assertEquals("${weapon.id} light", row.first, weapon.powerPercent)
@@ -94,28 +97,51 @@ class CombatTest {
                 }
             }
         }
-        assertEquals(34, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
-        assertEquals(12, Combat.weaponDamage(Weapon.KNIFE, 50f, 200))
+        assertEquals(44, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
+        assertEquals(16, Combat.weaponDamage(Weapon.KNIFE, 50f, 200))
     }
 
     @Test
-    fun theAwmReachesTheSixtyPointCeiling() {
-        assertEquals(60, DamageTable.percentOf(Weapon.AWM, HitZone.HEAVY))
-        assertEquals(60, Combat.weaponDamage(Weapon.AWM, 100f, 200))
+    fun theAwmReachesTheEightyPointCeiling() {
+        assertEquals(80, DamageTable.percentOf(Weapon.AWM, HitZone.HEAVY))
+        assertEquals(80, Combat.weaponDamage(Weapon.AWM, 100f, 200))
         assertTrue(RobertRules.ALL_STANDARD_WEAPONS.filter { it != Weapon.AWM }
-            .all { DamageTable.percentOf(it, HitZone.HEAVY) < 60 })
+            .all { DamageTable.percentOf(it, HitZone.HEAVY) < 80 })
     }
 
     @Test
-    fun noWeaponCanTakeMoreThanSixtyHealthPointsInOneHit() {
-        assertEquals(60, DamageTable.MAX_WEAPON_DAMAGE_HP)
+    fun noWeaponCanTakeMoreThanEightyHealthPointsInOneHit() {
+        assertEquals(80, DamageTable.MAX_WEAPON_DAMAGE_HP)
         assertTrue(DamageTable.isValid())
         for (weapon in Weapon.entries) {
             for (zone in HitZone.entries) {
-                assertTrue("${weapon.id} ${zone.name}", DamageTable.percentOf(weapon, zone) in 0..60)
+                assertTrue("${weapon.id} ${zone.name}", DamageTable.percentOf(weapon, zone) in 0..80)
             }
-            assertTrue(Combat.weaponDamage(weapon, 100f, 2600) <= 60)
+            assertTrue(Combat.weaponDamage(weapon, 100f, 2600) <= 80)
         }
+    }
+
+    @Test
+    fun theWeaponTableIsARealPowerLadder() {
+        // Every weapon is placed on the ladder by its own power: light hits
+        // are half of the point-blank power, strong hits 80 percent of it, and
+        // the weakest automatic is the only weapon under 30 HP point-blank.
+        for (weapon in RobertRules.ALL_STANDARD_WEAPONS) {
+            val heavy = weapon.closeRangePowerPercent
+            assertEquals("${weapon.id} light", heavy / 2, DamageTable.percentOf(weapon, HitZone.LIGHT))
+            assertEquals(
+                "${weapon.id} strong",
+                Math.round(heavy * Combat.STRONG_DAMAGE_FRACTION),
+                DamageTable.percentOf(weapon, HitZone.STRONG)
+            )
+            assertEquals("${weapon.id} heavy", heavy, DamageTable.percentOf(weapon, HitZone.HEAVY))
+        }
+        assertEquals(26, Weapon.SUBMACHINE_GUN.closeRangePowerPercent)
+        assertEquals(80, Weapon.AWM.closeRangePowerPercent)
+        assertEquals(
+            80,
+            RobertRules.ALL_STANDARD_WEAPONS.maxOf { it.closeRangePowerPercent }
+        )
     }
 
     @Test
@@ -138,9 +164,9 @@ class CombatTest {
         assertFalse(DamageTable.isAwmLongRangeBand(Weapon.AWM, 19.9f))
         assertFalse(DamageTable.isAwmLongRangeBand(Weapon.AWM, 40f))
         assertFalse(DamageTable.isAwmLongRangeBand(Weapon.SNIPER, 30f))
-        for (hp in listOf(200, 1000, 2600)) assertEquals(24, Combat.weaponDamage(Weapon.AWM, 30f, hp))
+        for (hp in listOf(200, 1000, 2600)) assertEquals(32, Combat.weaponDamage(Weapon.AWM, 30f, hp))
         assertEquals(0, Combat.weaponDamage(Weapon.AWM, 10f, 1000))
-        assertEquals(28, Combat.weaponDamage(Weapon.AWM, 50f, 1000))
+        assertEquals(40, Combat.weaponDamage(Weapon.AWM, 50f, 1000))
     }
 
     @Test

@@ -9,7 +9,9 @@ package com.blindtechnexus.openfire.model
  *  - Two fingers: up / down move the quick menu selection, right own status,
  *                 left enemy status.
  *  - Three fingers: up exits the game; down toggles pause/resume;
- *                 right / left change running speed.
+ *                 right / left change running speed. Vertical and horizontal
+ *                 three-finger swipes are both supported by
+ *                 [SwipeClassifier].
  *  - A single tap activates the highlighted quick-menu item (and confirms a
  *                 timer-bomb duration while the timer picker is open).
  */
@@ -98,6 +100,99 @@ object GestureRouter {
     /** A single tap only means something inside a battle. */
     fun tap(screen: Screen): GameAction =
         if (screen == Screen.BATTLE) GameAction.ACTIVATE_MENU else GameAction.NONE
+}
+
+/**
+ * Pure swipe arithmetic shared by the touch handler.
+ *
+ * The handler used to read the displacement of the single finger that moved
+ * the most and to wait for every finger to leave the screen before deciding
+ * anything. A vertical three-finger swipe therefore often lost its direction
+ * (one finger drifting sideways won the comparison) or was swallowed when the
+ * fingers were lifted one after the other, while a horizontal one worked.
+ *
+ * [SwipeClassifier] fixes that by working on the *average* displacement of
+ * every finger that is down, by using a dedicated, smaller threshold for
+ * three-finger swipes, and by letting the caller dispatch a three-finger
+ * swipe the moment the threshold is crossed instead of at the end of the
+ * gesture.
+ */
+object SwipeClassifier {
+    /** Movement below this is a tap, never a swipe. */
+    const val TAP_SLOP = 24f
+
+    /** Distance one finger must travel to count as a swipe. */
+    const val ONE_FINGER_THRESHOLD = 60f
+
+    /** Two fingers swipe with a shorter movement: the gesture is deliberate. */
+    const val TWO_FINGER_THRESHOLD = 36f
+
+    /**
+     * Three fingers need the shortest travel of all. The three-finger
+     * gestures are the accessibility shortcuts of the game, so they must be
+     * easy to perform in any direction: up and down (exit / pause) exactly
+     * like left and right (running speed).
+     */
+    const val THREE_FINGER_THRESHOLD = 28f
+
+    /** The swipe distance that applies to a gesture with [fingers] fingers. */
+    fun threshold(fingers: Int): Float = when {
+        fingers >= 3 -> THREE_FINGER_THRESHOLD
+        fingers == 2 -> TWO_FINGER_THRESHOLD
+        else -> ONE_FINGER_THRESHOLD
+    }
+
+    /** Euclidean length of a movement. */
+    fun distance(dx: Float, dy: Float): Float {
+        val x = if (dx.isNaN()) 0f else dx
+        val y = if (dy.isNaN()) 0f else dy
+        return kotlin.math.sqrt(x * x + y * y)
+    }
+
+    /** True when a movement this short is a tap instead of a swipe. */
+    fun isTap(dx: Float, dy: Float): Boolean = distance(dx, dy) < TAP_SLOP
+
+    /** True when the movement really is a swipe for this finger count. */
+    fun isSwipe(dx: Float, dy: Float, fingers: Int): Boolean =
+        distance(dx, dy) >= threshold(fingers)
+
+    /** True when the vertical component dominates this movement. */
+    fun isVertical(dx: Float, dy: Float): Boolean {
+        val x = if (dx.isNaN()) 0f else kotlin.math.abs(dx)
+        val y = if (dy.isNaN()) 0f else kotlin.math.abs(dy)
+        return y >= x
+    }
+
+    /**
+     * The direction id of a movement: "up", "down", "left" or "right".
+     * Vertical wins a tie, so a straight up or down swipe is never read as a
+     * sideways one.
+     */
+    fun direction(dx: Float, dy: Float): String {
+        val x = if (dx.isNaN()) 0f else dx
+        val y = if (dy.isNaN()) 0f else dy
+        return if (isVertical(x, y)) {
+            if (y > 0f) "down" else "up"
+        } else {
+            if (x > 0f) "right" else "left"
+        }
+    }
+
+    /**
+     * The average displacement of the fingers of one gesture, so a finger
+     * that never moves cannot decide the direction on its own.
+     */
+    fun average(displacements: List<Pair<Float, Float>>): Pair<Float, Float> {
+        if (displacements.isEmpty()) return Pair(0f, 0f)
+        var sumX = 0f
+        var sumY = 0f
+        for ((dx, dy) in displacements) {
+            sumX += if (dx.isNaN()) 0f else dx
+            sumY += if (dy.isNaN()) 0f else dy
+        }
+        val count = displacements.size.toFloat()
+        return Pair(sumX / count, sumY / count)
+    }
 }
 
 /**

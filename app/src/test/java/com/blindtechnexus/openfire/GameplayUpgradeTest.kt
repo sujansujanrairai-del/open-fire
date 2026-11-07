@@ -37,9 +37,9 @@ class GameplayUpgradeTest {
             }
         }
         // Damage must never be multiplied by the victim maximum health.
-        assertEquals(34, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 1000))
-        assertEquals(34, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
-        assertEquals(34, RobertRules.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
+        assertEquals(44, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 1000))
+        assertEquals(44, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
+        assertEquals(44, RobertRules.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
     }
 
     @Test

@@ -97,9 +97,9 @@ enum class Facing(val id: String, val dx: Float, val dy: Float, val nameKey: Str
  *
  * The exact health-point values per weapon and per zone live in one single
  * place, [DamageTable], and both fighters read their damage from it. Normal
- * weapons and explosives are flat HP values capped at 60 health points per
- * hit; they never scale with the victim's maximum health. The AWM is the one long-range exception: inside the 20% to 40% band
- * it still lands a precision hit.
+ * weapons are flat HP values capped at 80 health points per hit; they never
+ * scale with the victim's maximum health. The AWM is the one long-range
+ * exception: inside the 20% to 40% band it still lands a precision hit.
  *
  * There is no preset where a combatant loses after a fixed number of hits:
  * a combatant is defeated only when their health actually reaches zero.
@@ -156,7 +156,7 @@ object Combat {
     const val GLUE_WALL_BREAK_PROXIMITY = 90f
 
     /** Close-range shotgun power retained as a named combat constant. */
-    const val SHORT_GUN_CLOSE_POWER_PERCENT = 30
+    const val SHORT_GUN_CLOSE_POWER_PERCENT = DamageTable.SHORT_GUN_POWER_HP
 
     /** Converts a distance (50 = far edge, 0 = point-blank) into 0..100% proximity. */
     fun proximityOf(distance: Float): Float =
