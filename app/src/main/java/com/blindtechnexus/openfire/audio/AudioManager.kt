@@ -1297,7 +1297,7 @@ class AudioManager(private val context: Context) {
                 // phase lock that made two walkers sound like one source.
                 WALK_START_OFFSET_MS[key]?.let { offset ->
                     try {
-                        if (offset > 0L) created.seekTo(offset)
+                        if (offset > 0L) created.seekTo(offset.toInt())
                     } catch (_: Exception) {}
                 }
 

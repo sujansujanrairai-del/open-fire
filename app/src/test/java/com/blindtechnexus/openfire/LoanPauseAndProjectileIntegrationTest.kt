@@ -141,20 +141,21 @@ class LoanPauseAndProjectileIntegrationTest {
     }
 
     @Test
-    fun missileAndTimerBombImpactsDealCappedDamageToEachSide() = withViewModel { _, vm ->
+    fun missileAndTimerBombImpactsUseTheNewLethalRules() = withViewModel { _, vm ->
         flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
         val state = flow<GameState>(vm, "_gameState")
         state.value = GameState(playerHp = 200, robertHp = 200,
             missileInFlight = true, missileFromPlayer = true)
         invoke(vm, "onMissileImpact")
-        assertEquals(140, state.value.robertHp)
+        // A direct missile hit now destroys every remaining health point.
+        assertEquals(0, state.value.robertHp)
         assertEquals(200, state.value.playerHp)
         assertEquals(Screen.BATTLE, vm.currentScreen.value)
 
         state.value = GameState(playerHp = 200, robertHp = 200,
             missileInFlight = true, missileFromPlayer = false)
         invoke(vm, "onMissileImpact")
-        assertEquals(140, state.value.playerHp)
+        assertEquals(0, state.value.playerHp)
         assertEquals(200, state.value.robertHp)
 
         state.value = GameState(playerHp = 200, robertHp = 200,
@@ -162,8 +163,10 @@ class LoanPauseAndProjectileIntegrationTest {
             bombX = 11f, bombY = 10f, bombInFlight = true,
             bombFromPlayer = true, bombKind = BombKind.TIMER.id)
         invoke(vm, "onBombBlast")
-        assertEquals(150, state.value.robertHp)
-        assertEquals(150, state.value.playerHp)
+        // The timer bomb takes 68% of remaining health from both fighters
+        // inside its safety radius: 136 of 200, leaving 64 each.
+        assertEquals(64, state.value.robertHp)
+        assertEquals(64, state.value.playerHp)
         assertEquals(Screen.BATTLE, vm.currentScreen.value)
     }
 }
