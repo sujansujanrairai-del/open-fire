@@ -2757,6 +2757,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** Robert's one desperation missile per game (rounds four and five). */
     private fun launchEnemyMissile() {
         val state = _gameState.value
+        // His gun goes silent the moment he launches: a burst of it must never
+        // be heard while he is already spending a missile.
+        stopEnemyFireSound()
         _gameState.update {
             it.copy(
                 robertMissilePowers = (it.robertMissilePowers - 1).coerceAtLeast(0),
@@ -3096,6 +3099,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun launchEnemyBomb() {
         val state = _gameState.value
         if (state.robertBombs <= 0 || state.bombInFlight || state.missileInFlight) return
+        // Throwing ends his burst, exactly like his missile: the explosion and
+        // his gun are never heard as one continuous fire.
+        stopEnemyFireSound()
         // Round three: grenades only, twice per game. Round four: all three
         // bombs, three times each. Round five: unlimited bombs of every kind.
         val kind = BombRules.chooseEnemyBomb(
