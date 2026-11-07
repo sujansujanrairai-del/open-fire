@@ -219,11 +219,13 @@ class AudioLoopLifecycleTest {
         for (key in automatic) {
             val shot = AudioManager.AUTO_LOOP_SHOT_KEYS[key]
                 ?: error("$key owns no one-shot copy")
-            assertEquals(shot, AudioManager.AUTO_LOOP_OF[shot])
+            assertEquals("$shot must map back to $key", key, AudioManager.AUTO_LOOP_OF[shot])
             assertTrue(key in AudioManager.AUTO_LOOP_KEYS)
             assertTrue(key in AudioManager.WEAPON_SOUND_KEYS)
             assertFalse("$shot must never be a loop channel", shot in AudioManager.AUTO_LOOP_KEYS)
         }
+        // And the reverse table knows exactly those three copies, no more.
+        assertEquals(AudioManager.AUTO_LOOP_SHOT_KEYS.values.toSet(), AudioManager.AUTO_LOOP_OF.keys)
         assertEquals(
             AudioManager.LOOP_OWNERS.toSet(),
             setOf(AudioManager.LOOP_OWNER_PLAYER, AudioManager.LOOP_OWNER_ENEMY)
