@@ -89,8 +89,19 @@ object VolumeMixer {
     fun walkDistanceGain(distance: Float, maxRange: Float): Float {
         val safeRange = maxRange.coerceAtLeast(1f)
         val proximity = (1f - clamp(distance / safeRange)).coerceIn(0f, 1f)
-        return (0.15f + proximity * proximity * 0.85f).coerceIn(0.15f, 1f)
+        // A slightly steeper curve than before: a distant walker is clearly
+        // far away and a close one clearly close, which is what keeps the two
+        // footstep loops from ever sounding like one local source.
+        return (0.08f + proximity * proximity * 0.92f).coerceIn(0.08f, 1f)
     }
+
+    /**
+     * Playback rate of the enemy's footsteps. He uses the same recording as
+     * the player, so a small, deliberate rate difference keeps the two loops
+     * from ever locking into the same beat while both fighters walk.
+     */
+    fun enemyWalkRate(speedMps: Float): Float =
+        (walkRate(speedMps) * 0.93f).coerceIn(0.6f, MAX_WALK_RATE)
 
     /**
      * Walking-loop volume from the current distance. Kept for the general

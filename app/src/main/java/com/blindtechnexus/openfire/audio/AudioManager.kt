@@ -39,12 +39,12 @@ import kotlin.math.sqrt
  * 1. SoundPool engine for ultra-low latency short SFX (gunshots, reloads, hits, clicks, gloo wall).
  *    Enhanced with retry queue, TTL, load-attempt cap and starvation guard — never drops a requested effect.
  * 2. Managed MediaPlayer Channel Pool for streamed, long audio clips (win, lose, parachute, airplane, music, walk,
- *    MP40 / machine-gun loops). Completely prevents SoundPool native buffer starvation, freezing and premature cutoffs.
+ *    submachine-gun / AK-47 / machine-gun loops). Completely prevents SoundPool native buffer starvation, freezing and premature cutoffs.
  *    Every streamed track is generation-guarded and prepared off the UI thread, so a slow prepare never blocks gestures.
  * 3. 3D Positional Spatial Audio with realistic distance attenuation and azimuth stereo panning.
  * 4. Granular sound management: any sound or screen audio can be stopped instantly at any time.
  * 5. Stabilized mixer: synchronized player access, leak pruning, volume smoothing and rate adaptation ensure
- *    the mixer never glitches, even under rapid weapon swaps or continuous MP40 fire.
+ *    the mixer never glitches, even under rapid weapon swaps or continuous automatic fire.
  */
 class AudioManager(private val context: Context) {
     companion object {
@@ -74,9 +74,11 @@ class AudioManager(private val context: Context) {
             // Automatic weapons loop on their own dedicated, pre-warmed
             // channel (see [AUTO_LOOP_KEYS]) so a held burst is truly
             // gapless. Their one-shot recordings stream like the missile.
-            "mp40",
+            "submachineGun",
+            "ak47",
             "machineGun",
-            "mp40Shot",
+            "submachineGunShot",
+            "ak47Shot",
             "machineGunShot"
         )
 
@@ -90,7 +92,7 @@ class AudioManager(private val context: Context) {
          * the silence that used to appear between two repeats: the next hold
          * resumes the already decoded loop instantly.
          */
-        val AUTO_LOOP_KEYS: Set<String> = setOf("mp40", "machineGun")
+        val AUTO_LOOP_KEYS: Set<String> = setOf("submachineGun", "ak47", "machineGun")
 
         /**
          * The one-shot recording of an automatic weapon. It is the very same
@@ -98,8 +100,22 @@ class AudioManager(private val context: Context) {
          * can never cut - or restart - the loop the player is holding.
          */
         val AUTO_LOOP_SHOT_KEYS: Map<String, String> = mapOf(
-            "mp40" to "mp40Shot",
+            "submachineGun" to "submachineGunShot",
+            "ak47" to "ak47Shot",
             "machineGun" to "machineGunShot"
+        )
+
+        /**
+         * Start offsets of the two footstep loops. Both fighters use the same
+         * walk recording, so starting both at byte zero made them phase-lock
+         * into one single sound source. Seeking each channel to a different
+         * point of the clip keeps the two loops independent and lets the
+         * listener hear two separate walkers even when they move together.
+         */
+        val WALK_START_OFFSET_MS: Map<String, Long> = mapOf(
+            "playerWalk" to 0L,
+            "enemyWalk" to 3_600L,
+            "walk" to 7_200L
         )
 
         /**
@@ -128,13 +144,17 @@ class AudioManager(private val context: Context) {
             "glueWallBreaker",
             "awm",
             "mp40",
+            "m10",
+            "submachineGun",
+            "ak47",
             "machineGun",
-            // Single-shot copies of the two automatic weapons. The looping
+            // Single-shot copies of the three automatic weapons. The looping
             // hold channel ([AUTO_LOOP_KEYS]) is deliberately NOT part of the
             // exclusive set any more: a held burst must never be cut by the
             // enemy's answering shot, otherwise the firing goes silent
             // between two bullets.
-            "mp40Shot",
+            "submachineGunShot",
+            "ak47Shot",
             "machineGunShot",
             "knifeSwish",
             "knifeMiss",
@@ -159,7 +179,8 @@ class AudioManager(private val context: Context) {
             "atomBomb" to SoundDurations.ATOM_BOMB_MS,
             "grenade" to SoundDurations.GRENADE_MS,
             "timerLoop" to SoundDurations.TIMER_LOOP_MS,
-            "mp40" to SoundDurations.MP40_MS,
+            "submachineGun" to SoundDurations.SUBMACHINE_GUN_MS,
+            "ak47" to SoundDurations.AK47_MS,
             "machineGun" to SoundDurations.MACHINE_GUN_MS,
             "awm" to SoundDurations.AWM_MS,
             "levelComplete" to SoundDurations.LEVEL_COMPLETE_MS,
@@ -331,24 +352,30 @@ class AudioManager(private val context: Context) {
         // Firearms. Every alias is used by a real weapon: the decorative
         // "fire", "shotgun" and "reload" duplicates were removed so no stray
         // gunshot can be triggered by an unused key.
-        "assault" to listOf("assault-sound.mp3"),
-        "pistol" to listOf("pistol-sound.mp3"),
-        "shortGun" to listOf("short-gun.mp3"),
+        "assault" to listOf("assault-gun.mp3"),
+        "pistol" to listOf("pistol-gun.mp3"),
+        "shortGun" to listOf("shotgun.mp3"),
         "sniperRifle" to listOf("sniper-rifle.mp3"),
         // The dedicated Gloo Wall Breaker gun: the only sound that destroys a
         // gloo wall. Three consecutive shots from the 90%-100% band break it.
         "glueWallBreaker" to listOf("glue-wall-breaker.mp3"),
-        // Round two weapons: the MP40 submachine gun and the AWM long-range
-        // rifle, each with its own recorded shot.
-        "mp40" to listOf("mp-40-gun.mp3"),
-        // One-shot copies of the two automatic weapons: the same recordings,
-        // played as independently mixed single shots.
-        "mp40Shot" to listOf("mp-40-gun.mp3"),
-        "machineGunShot" to listOf("machine-gun.mp3"),
-        "awm" to listOf("AWM-sound.mp3"),
-        // Round four weapon: the machine gun, looped during a burst exactly
-        // like the MP40.
+        // The MP40 is a single-shot firearm now: it shares the submachine
+        // gun recording, but only ever plays one shot per swipe.
+        "mp40" to listOf("submachine-gun.mp3"),
+        // The M10 handgun, available from round one.
+        "m10" to listOf("m10-gun.mp3"),
+        // Long-range automatics: the submachine gun (0.5 s beat), the AK-47
+        // (1 s beat) and the machine gun (1.5 s beat). Their whole firing
+        // sound is one gapless loop, with no silence between two rounds.
+        "submachineGun" to listOf("submachine-gun.mp3"),
+        "ak47" to listOf("ak-47-gun.mp3"),
         "machineGun" to listOf("machine-gun.mp3"),
+        // One-shot copies of the three automatic weapons: the same recordings,
+        // played as independently mixed single shots for the enemy.
+        "submachineGunShot" to listOf("submachine-gun.mp3"),
+        "ak47Shot" to listOf("ak-47-gun.mp3"),
+        "machineGunShot" to listOf("machine-gun.mp3"),
+        "awm" to listOf("awm-rifle.mp3"),
         // Melee weapons.
         "knifeHit" to listOf("knife-hit.mp3"),
         "knifeMiss" to listOf("knife-miss.mp3"),
@@ -368,7 +395,7 @@ class AudioManager(private val context: Context) {
         // wall impact sound. It belongs to the player alone — only a manually
         // controlled fighter can ever run into a boundary, because Robert
         // detects the wall before he reaches it and changes heading instead.
-        "wall" to listOf("wall-sound.mp3"),
+        "wall" to listOf("wall-hit.mp3"),
         "cover" to listOf("cover.mp3"),
         "coverHit" to listOf("cover-hit.mp3"),
         "coverCrack" to listOf("cover-crack.mp3"),
@@ -378,7 +405,7 @@ class AudioManager(private val context: Context) {
         "enemyHit" to listOf("enemy-hit.mp3"),
         "playerHit" to listOf("player-hit.mp3"),
         "ammo" to listOf("ammo.mp3"),
-        "spend" to listOf("spend-sound.mp3"),
+        "spend" to listOf("spend.mp3"),
         // Flight and results.
         "jump" to listOf("jump.mp3"),
         "land" to listOf("jump.mp3"),
@@ -396,16 +423,16 @@ class AudioManager(private val context: Context) {
         // Guided missile: the launch flight sound (looped while the target
         // flees) and the impact explosion, always mixed with enemy-hit or
         // player-hit for the destroyed fighter.
-        "missile" to listOf("missile-sound.mp3"),
-        "explosion" to listOf("explosion-sound.mp3"),
+        "missile" to listOf("missile.mp3"),
+        "explosion" to listOf("explosion.mp3"),
         // Bombs: each bomb flies for exactly as long as its own sound, and
         // every blast - a hit, an intercepted bomb or a disposed one - uses
         // the explosion. The timer bomb counts down with a looped timer sound
         // and then explodes with the same explosion sound.
-        "atomBomb" to listOf("atom-bom-sound.mp3"),
-        "grenade" to listOf("grenade-sound.mp3"),
-        "timerLoop" to listOf("timer-sound.mp3"),
-        "timerBomb" to listOf("explosion-sound.mp3"),
+        "atomBomb" to listOf("atom-bomb.mp3"),
+        "grenade" to listOf("grenade.mp3"),
+        "timerLoop" to listOf("timer-countdown.mp3"),
+        "timerBomb" to listOf("explosion.mp3"),
         // Progression stings: one per completed level, one per completed round.
         "levelComplete" to listOf("level-complete.mp3"),
         "roundComplete" to listOf("round-complete.mp3")
@@ -1050,18 +1077,6 @@ class AudioManager(private val context: Context) {
     }
 
     /**
-     * Dedicated stable start/stop for the MP40 submachine gun loop.
-     * The MP40 loops until [stopMp40Loop] is called on trigger release — no leakage, no overlap.
-     */
-    fun startMp40Loop(volume: Float = 1.0f, posZ: Float = 0f) {
-        playWeaponLoop("mp40", volume = volume, posZ = posZ)
-    }
-    fun stopMp40Loop() {
-        stopSound("mp40")
-        stopSound("machineGun")
-    }
-
-    /**
      * Live footstep mix state: when each track last refreshed its volume
      * (every 0.5 s, or every 0.25 s while running fast) and the gains it
      * currently plays at, so approach / retreat swells stay smooth instead
@@ -1098,7 +1113,10 @@ class AudioManager(private val context: Context) {
             key = "enemyWalk",
             left = (base * panLeft).coerceIn(0f, 1f),
             right = (base * panRight).coerceIn(0f, 1f),
-            speedMps = effectiveSpeed
+            speedMps = effectiveSpeed,
+            // A small rate difference keeps his loop from ever locking onto
+            // the player's own footsteps while both are walking.
+            rateScale = 0.93f
         )
     }
 
@@ -1123,7 +1141,13 @@ class AudioManager(private val context: Context) {
         )
     }
 
-    private fun updateWalkingTrack(key: String, left: Float, right: Float, speedMps: Float) {
+    private fun updateWalkingTrack(
+        key: String,
+        left: Float,
+        right: Float,
+        speedMps: Float,
+        rateScale: Float = 1f
+    ) {
         if (released) return
         val player = managedPlayers[key]
         val targetLeft = left.coerceIn(0f, 1f)
@@ -1162,7 +1186,7 @@ class AudioManager(private val context: Context) {
             try {
                 player.setVolume(smoothed.first.coerceIn(0f, 1f), smoothed.second.coerceIn(0f, 1f))
             } catch (_: Exception) {}
-            applyWalkRate(player, speedMps)
+            applyWalkRate(player, speedMps, rateScale)
             walkCurrentGains[key] = smoothed
             walkLastApplyAt[key] = now
         }
@@ -1176,10 +1200,10 @@ class AudioManager(private val context: Context) {
     }
 
     /** Faster movement plays the steps faster; slow movement slows them. */
-    private fun applyWalkRate(player: MediaPlayer, speedMps: Float) {
+    private fun applyWalkRate(player: MediaPlayer, speedMps: Float, rateScale: Float = 1f) {
         try {
             player.playbackParams = PlaybackParams()
-                .setSpeed(VolumeMixer.walkRate(speedMps))
+                .setSpeed((VolumeMixer.walkRate(speedMps) * rateScale).coerceIn(0.5f, 2.0f))
         } catch (_: Exception) {}
     }
 
@@ -1268,6 +1292,14 @@ class AudioManager(private val context: Context) {
                     true
                 }
                 created.prepare()
+                // Both fighters share the walk recording. Starting each
+                // footstep channel at its own point of the clip breaks the
+                // phase lock that made two walkers sound like one source.
+                WALK_START_OFFSET_MS[key]?.let { offset ->
+                    try {
+                        if (offset > 0L) created.seekTo(offset)
+                    } catch (_: Exception) {}
+                }
 
                 val superseded = synchronized(playerLock) {
                     if (released || playerGeneration[key] != generation) {

@@ -8,15 +8,20 @@ package com.blindtechnexus.openfire.model
  * can still be damaged by three consecutive point-blank hits, exactly like
  * firearms.
  *
- * Both fighters use [DamageTable]. Every hit, including explosives, is
- * capped at 60 flat health points; proximity controls ordinary weapons.
+ * Both fighters use [DamageTable] for ordinary weapons: every gunshot is
+ * capped at 60 flat health points and proximity controls its band. Bombs
+ * take 60 to 75 percent of the victim's remaining health and a direct
+ * missile hit destroys its target (see [BombRules] and [MissileRules]).
  *
  * Three weapon families behave differently in battle:
- *  - classic firearms and melee weapons fire one shot per swipe up;
- *  - automatic weapons ([autoFire]: the MP40 and the machine gun) keep firing
- *    while the up-swipe is held, one bullet per [burstIntervalMs], with their
- *    sound on a gapless loop for as long as the trigger and the magazine
- *    allow ([maxBurstMs] is only the legacy reference length of one burst);
+ *  - classic firearms and melee weapons fire one shot per swipe up (the
+ *    MP40 is a single-shot firearm since the audio-game rebalance);
+ *  - automatic weapons ([autoFire]: the submachine gun, the AK-47 and the
+ *    machine gun) keep firing while the up-swipe is held, one bullet per
+ *    [burstIntervalMs] (0.5 s, 1 s or 1.5 s depending on the weapon's power),
+ *    with their sound on a gapless loop for as long as the trigger and the
+ *    magazine allow ([maxBurstMs] is only the legacy reference length of one
+ *    burst);
  *  - launchers ([missileLauncher] and [bomb]) start a tracked flight instead
  *    of a shot and are resolved by [MissileRules] and [BombRules].
  *
@@ -61,10 +66,10 @@ enum class Weapon(
      */
     val issuedFreeFromRound: Int = 0,
     /**
-     * True for submachine guns: holding the up-swipe keeps firing one bullet
-     * per [burstIntervalMs] for as long as the trigger is held, and the fire
-     * sound runs on one gapless loop that starts with the hold and stops the
-     * instant it is released.
+     * True for the automatic weapons (submachine gun, AK-47 and machine gun):
+     * holding the up-swipe keeps firing one bullet per [burstIntervalMs] for
+     * as long as the trigger is held, and the fire sound runs on one gapless
+     * loop that starts with the hold and stops the instant it is released.
      */
     val autoFire: Boolean = false,
     val burstIntervalMs: Long = 0L,
@@ -181,9 +186,9 @@ enum class Weapon(
         missSoundKey = "swordMiss"
     ),
     /**
-     * The MP40 submachine gun: it fires continuously while the up-swipe is
-     * held, one bullet every second for as long as the trigger is down,
-     * and its sound runs on one gapless loop for the whole burst.
+     * The MP40: a single-shot firearm exactly like the pistol and the sniper
+     * rifle. One swipe fires one bullet and the magazine holds twenty rounds.
+     * It unlocks in round two and is issued free at battle start.
      */
     MP40(
         id = "mp40",
@@ -199,10 +204,74 @@ enum class Weapon(
         hitSoundKey = "gunHit",
         missSoundKey = "click",
         unlockRound = 2,
-        issuedFreeFromRound = 2,
+        issuedFreeFromRound = 2
+    ),
+    /**
+     * The M10: a single-shot handgun in the pistol family. One swipe fires
+     * one round, so it behaves exactly like the pistol and the sniper rifle.
+     * It can be unlocked and bought from round one.
+     */
+    M10(
+        id = "m10",
+        nameKey = "gunM10",
+        powerPercent = 17,
+        closeRangePowerPercent = 34,
+        magazine = 8,
+        price = 600,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "m10",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "gunHit",
+        missSoundKey = "click",
+        unlockRound = 1
+    ),
+    /**
+     * The submachine gun: a long-range automatic weapon. Holding the
+     * up-swipe fires one bullet every half second, and its sound runs on a
+     * gapless loop with no silence between two rounds. Its forty-round
+     * magazine is the largest of the fast automatics; it unlocks in round two.
+     */
+    SUBMACHINE_GUN(
+        id = "submachineGun",
+        nameKey = "gunSubmachineGun",
+        powerPercent = 10,
+        closeRangePowerPercent = 22,
+        magazine = 40,
+        price = 900,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "submachineGun",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "gunHit",
+        missSoundKey = "click",
+        unlockRound = 2,
         autoFire = true,
-        burstIntervalMs = FireCadence.CONTINUOUS_MS,
-        maxBurstMs = 4_000L
+        burstIntervalMs = FireCadence.AUTO_FAST_MS,
+        maxBurstMs = 5_000L
+    ),
+    /**
+     * The AK-47: a long-range automatic rifle. It fires one bullet every
+     * second and holds thirty rounds, with its looped sound carrying straight
+     * from one shot into the next. It unlocks from round one.
+     */
+    AK47(
+        id = "ak47",
+        nameKey = "gunAk47",
+        powerPercent = 20,
+        closeRangePowerPercent = 44,
+        magazine = 30,
+        price = 1250,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "ak47",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "gunHit",
+        missSoundKey = "click",
+        unlockRound = 1,
+        autoFire = true,
+        burstIntervalMs = FireCadence.AUTO_MEDIUM_MS,
+        maxBurstMs = 5_000L
     ),
     /**
      * The AWM long-range rifle. Inside the 20% to 40% proximity band, where
@@ -227,17 +296,17 @@ enum class Weapon(
         issuedFreeFromRound = 2
     ),
     /**
-     * The machine gun: the same continuous-fire behaviour as the MP40 with a
-     * stronger health reduction at the same one-second bullet rate.
-     * It can be unlocked from round four, but it is never handed out as a
-     * reward.
+     * The machine gun: the heaviest automatic weapon. Its slower 1.5 second
+     * beat buys the hardest per-bullet damage of the three automatics, and its
+     * fifty-round magazine lets a held trigger keep the loop running longest.
+     * It can be unlocked from round three, but it is never handed out free.
      */
     MACHINE_GUN(
         id = "machineGun",
         nameKey = "gunMachineGun",
-        powerPercent = 18,
-        closeRangePowerPercent = 38,
-        magazine = 30,
+        powerPercent = 26,
+        closeRangePowerPercent = 50,
+        magazine = 50,
         price = 1700,
         ownedByDefault = false,
         melee = false,
@@ -245,9 +314,9 @@ enum class Weapon(
         switchSoundKey = "gunReload",
         hitSoundKey = "gunHit",
         missSoundKey = "click",
-        unlockRound = 4,
+        unlockRound = 3,
         autoFire = true,
-        burstIntervalMs = FireCadence.CONTINUOUS_MS,
+        burstIntervalMs = FireCadence.AUTO_SLOW_MS,
         maxBurstMs = 5_000L
     ),
     GRENADE(
@@ -303,7 +372,7 @@ enum class Weapon(
     MISSILE(
         id = "missile",
         nameKey = "gunMissile",
-        // A direct missile hit uses the same 60 HP ceiling as every weapon.
+        // A direct missile hit destroys every remaining health point.
         powerPercent = 60,
         closeRangePowerPercent = 60,
         magazine = 0,

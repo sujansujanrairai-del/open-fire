@@ -154,7 +154,8 @@ class GameplayUpgradeTest {
     fun weaponSoundKeysAreRecognisedAndNoStrayAliasesRemain() {
         for (key in listOf(
             "assault", "shortGun", "pistol", "sniperRifle", "awm",
-            "mp40", "machineGun", "knifeSwish", "knifeMiss", "swordGlide", "swordMiss",
+            "mp40", "m10", "submachineGun", "ak47", "machineGun",
+            "knifeSwish", "knifeMiss", "swordGlide", "swordMiss",
             "glueWallBreaker"
         )) {
             assertTrue("$key must be a recognised sound", key in AudioManager.WEAPON_SOUND_KEYS)

@@ -43,7 +43,7 @@ class RobertTest {
             assertEquals("level $level glueWalls", 0, profile.glueWalls)
             assertEquals("level $level covers", 1, profile.covers)
             assertEquals(
-                listOf(Weapon.ASSAULT_GUN, Weapon.SHORT_GUN, Weapon.SNIPER),
+                listOf(Weapon.ASSAULT_GUN, Weapon.SHORT_GUN, Weapon.SNIPER, Weapon.M10),
                 profile.weapons
             )
             assertTrue(profile.sniperLocked)
@@ -64,7 +64,7 @@ class RobertTest {
             assertEquals("level $level glueWalls", 0, profile.glueWalls)
             assertEquals("level $level covers", 2, profile.covers)
             assertEquals(
-                listOf(Weapon.ASSAULT_GUN, Weapon.SHORT_GUN, Weapon.SNIPER),
+                listOf(Weapon.ASSAULT_GUN, Weapon.SHORT_GUN, Weapon.SNIPER, Weapon.M10),
                 profile.weapons
             )
             assertTrue(profile.sniperLocked)
@@ -80,8 +80,11 @@ class RobertTest {
         assertEquals(2, roundTwo.covers)
         assertTrue(roundTwo.weapons.contains(Weapon.KNIFE))
         assertTrue(roundTwo.weapons.contains(Weapon.SWORD))
-        // The enemy also receives the MP40 in round two.
+        // The enemy also receives the MP40, the submachine gun and the
+        // AK-47 in round two.
         assertTrue(roundTwo.weapons.contains(Weapon.MP40))
+        assertTrue(roundTwo.weapons.contains(Weapon.SUBMACHINE_GUN))
+        assertTrue(roundTwo.weapons.contains(Weapon.AK47))
         assertFalse(roundTwo.weapons.contains(Weapon.AWM))
         assertFalse(roundTwo.weapons.contains(Weapon.MACHINE_GUN))
         assertFalse(roundTwo.weapons.contains(Weapon.PISTOL))
@@ -107,10 +110,11 @@ class RobertTest {
         // Round three: the enemy gets the AWM too.
         assertTrue(roundThree.weapons.contains(Weapon.AWM))
         assertTrue(roundThree.weapons.contains(Weapon.MP40))
-        // The machine gun only exists from round four.
-        assertFalse(roundThree.weapons.contains(Weapon.MACHINE_GUN))
+        // The machine gun joins in round three, exactly like the player's
+        // own round-three shop ladder.
+        assertTrue(roundThree.weapons.contains(Weapon.MACHINE_GUN))
         assertEquals(
-            RobertRules.ALL_STANDARD_WEAPONS.toSet() - Weapon.MACHINE_GUN,
+            RobertRules.ALL_STANDARD_WEAPONS.toSet(),
             roundThree.weapons.toSet()
         )
         assertFalse(roundThree.sniperLocked)

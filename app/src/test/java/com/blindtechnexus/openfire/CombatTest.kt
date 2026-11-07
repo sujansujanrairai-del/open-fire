@@ -67,7 +67,10 @@ class CombatTest {
             Weapon.SWORD to Triple(20, 30, 42),
             Weapon.AWM to Triple(28, 44, 60),
             Weapon.MP40 to Triple(14, 21, 28),
-            Weapon.MACHINE_GUN to Triple(18, 28, 38)
+            Weapon.M10 to Triple(17, 26, 34),
+            Weapon.SUBMACHINE_GUN to Triple(10, 16, 22),
+            Weapon.AK47 to Triple(20, 32, 44),
+            Weapon.MACHINE_GUN to Triple(26, 38, 50)
         )
         for ((weapon, row) in expected) {
             assertEquals("${weapon.id} light", row.first, weapon.powerPercent)

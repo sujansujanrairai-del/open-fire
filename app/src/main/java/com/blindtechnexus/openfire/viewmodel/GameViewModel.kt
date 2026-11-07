@@ -16,6 +16,7 @@ import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DamageTable
 import com.blindtechnexus.openfire.model.DefenceItem
+import com.blindtechnexus.openfire.model.EnemyFireStrategy
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.Facing
 import com.blindtechnexus.openfire.model.FireRange
@@ -115,6 +116,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Monotonic deadline shared by all enemy gun and breaker shots. */
     private var robertNextShotAtMs = 0L
+
+    /**
+     * The player's recent shot timestamps (oldest first). [EnemyFireStrategy]
+     * reads the gaps between them to answer the player's real firing rhythm.
+     */
+    private val playerShotTimes = ArrayDeque<Long>()
+
+    /** Shots still to fire in Robert's three-shot closing burst. */
+    private var stopBurstShotsLeft = 0
+
+    /** When the last closing burst finished, so it cannot restart at once. */
+    private var lastStopBurstAtMs = 0L
+
+    /** Set when the third closing shot has fired: the loop starts the run. */
+    private var stopBurstFinished = false
 
     /** Wall-clock moment the round five seven minute limit expires (0 = none). */
     private var matchDeadlineMs: Long = 0L
@@ -906,6 +922,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         lastPlayerShotAtMs = 0L
         lastHitSpeechAtMs = 0L
         robertNextShotAtMs = 0L
+        playerShotTimes.clear()
+        stopBurstShotsLeft = 0
+        lastStopBurstAtMs = 0L
+        stopBurstFinished = false
         lastFireAt = 0L
         nextPlayerShotAtMs = 0L
         lastIncomingHitAtMs = -1L
@@ -1823,6 +1843,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 val state = _gameState.value
                 if (state.playerHp <= 0 || state.robertHp <= 0) break
                 robertAttack()
+                if (stopBurstFinished) {
+                    stopBurstFinished = false
+                    if (_gameState.value.robertHp > 0) beginRobertSprint()
+                }
                 battleClock.awaitDelay(robertFireInterval())
             }
         }
@@ -1841,9 +1865,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         return if (remaining > 0) remaining else FLEE_TICK_MS
     }
 
-    private fun markRobertShot(continuous: Boolean = false) {
-        robertNextShotAtMs = battleClock.nowMs() +
-            RobertRules.shotInterval(continuous, Random)
+    /**
+     * Schedules Robert's next shot. The interval comes from
+     * [EnemyFireStrategy]: it is the beat that answers the player's own last
+     * firing gaps, or the 0.5 second beat of his closing three-shot burst.
+     */
+    private fun markRobertShot(intervalMs: Long) {
+        robertNextShotAtMs = battleClock.nowMs() + intervalMs.coerceAtLeast(120L)
     }
 
     /** The player's health as a fraction of their own maximum. */
@@ -1886,6 +1914,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val now = battleClock.nowMs()
         val fresh = lastPlayerShotAtMs == 0L || now - lastPlayerShotAtMs > RobertRules.PLAYER_BURST_WINDOW_MS
         lastPlayerShotAtMs = now
+        // Keep the newest timestamps: the enemy reads the gaps between them.
+        playerShotTimes.addLast(now)
+        while (playerShotTimes.size > EnemyFireStrategy.SAMPLE_WINDOW + 1) {
+            playerShotTimes.removeFirst()
+        }
+        // Firing again ends any closing burst: the exchange is live again.
+        stopBurstShotsLeft = 0
         _gameState.update { state ->
             if (fresh) playerBurstStartedAtMs = now
             state.copy(
@@ -1921,13 +1956,25 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         ensureGlueWallAvoidance()
         state = _gameState.value
         if (state.robertState in setOf("retreat", "avoid", "missileFlee", "bombFlee", "turnBack")) return
-        if (shouldRobertRetreat(state)) {
-            beginRobertSprint()
-            return
+
+        // The player's rhythm decides the enemy's rhythm. Once a sustained
+        // burst has gone quiet, he answers with three quick shots and then
+        // breaks contact instead of standing still or firing forever.
+        val nowMs = battleClock.nowMs()
+        if (EnemyFireStrategy.shouldStartStopBurst(
+                hasPlayerRhythm = EnemyFireStrategy.playerInterval(playerShotTimes.toList()) != null,
+                lastShotAtMs = lastPlayerShotAtMs,
+                nowMs = nowMs,
+                shotsLeft = stopBurstShotsLeft,
+                lastStopBurstAtMs = lastStopBurstAtMs
+            )
+        ) {
+            stopBurstShotsLeft = EnemyFireStrategy.STOP_BURST_SHOTS
+            playerShotTimes.clear()
         }
-        if (battleClock.nowMs() < robertNextShotAtMs) return
+        if (nowMs < robertNextShotAtMs) return
         if (state.glueWallActive && fireRobertBreakerAtWall()) {
-            markRobertShot(continuous = true)
+            markRobertShot(RobertRules.CONTINUOUS_FIRE_MS)
             return
         }
         val mirrorDuel = playerFiringNow()
@@ -2012,9 +2059,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Round 5 strategic logic: equal power — prioritize positioning over brute force
         val isStrategyRound = state.round == 5
         val chosen = when {
-            !isStrategyRound && state.activeWeapon.autoFire &&
-                pool.contains(Weapon.MP40) &&
-                Combat.zoneFor(proximityNow) != HitZone.MISS -> Weapon.MP40
             smartChoice != null && (Random.nextFloat() < 0.75f || isStrategyRound) -> smartChoice
             else -> pool[Random.nextInt(pool.size)]
         }
@@ -2048,16 +2092,34 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // outcome is known: a miss uses only *-miss and a hit uses *-hit.
         // Firearm sounds are exclusive: his shot cuts whatever weapon sound
         // the player still has in the air, so the two never mix.
-        markRobertShot(continuous = chosen.autoFire || state.robertHasActiveDefence ||
-            RobertRules.shouldPressPlayer(state.activeWeaponDamaged, playerHpFraction(state)))
+        // The closing burst fires on the fast 0.5 second beat. In every other
+        // exchange the enemy answers the player's measured rhythm with the
+        // matching 1 s, 1.5 s or 2.5 s beat.
+        val closingBurst = EnemyFireStrategy.inStopBurst(stopBurstShotsLeft)
+        val answerInterval = if (closingBurst) {
+            EnemyFireStrategy.stopBurstInterval(stopBurstShotsLeft)
+        } else {
+            EnemyFireStrategy.counterInterval(
+                EnemyFireStrategy.playerInterval(playerShotTimes.toList())
+            )
+        }
+        markRobertShot(answerInterval)
+        if (closingBurst) {
+            stopBurstShotsLeft -= 1
+            if (stopBurstShotsLeft <= 0) {
+                stopBurstShotsLeft = 0
+                lastStopBurstAtMs = battleClock.nowMs()
+                lastPlayerShotAtMs = 0L
+                stopBurstFinished = true
+            }
+        }
         if (!chosen.melee) {
             playEnemyWeaponSound(
                 chosen.fireSoundKey,
                 volume = 0.9f,
-                // The recorded MP40 sample is a long burst; slightly faster
-                // playback gives a distinct, finite shot instead of a
-                // near-continuous rumble.
-                rate = if (chosen == Weapon.MP40) 1.8f else 1.0f
+                // Automatic recordings are longer than a single beat; a
+                // slightly faster playback keeps each answer a distinct shot.
+                rate = if (chosen.autoFire) 1.35f else 1.0f
             )
         }
         _gameState.update { s ->
@@ -2530,8 +2592,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Missile impact. The looping flight sound stops at once and the
      * explosion plays, mixed with the hit sound of the destroyed fighter.
-     * The target takes up to 60 HP through running, glue walls and covers,
-     * unless an anti-missile interceptor destroys the projectile in the air.
+     * A direct hit removes every remaining health point and ends the battle
+     * at once; only an anti-missile interceptor can destroy the projectile in
+     * the air and prevent it.
      */
     private fun onMissileImpact() {
         val state = _gameState.value
@@ -2566,7 +2629,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 planRobertStep(500L)
                 return
             }
-            val damage = min(state.robertHp, DamageTable.damage(Weapon.MISSILE, 100f, state.robertMaxHp))
+            // A direct missile hit destroys Robert completely: the blast
+            // removes every health point he still has.
+            val damage = MissileRules.impactDamage(state.robertHp)
             val remaining = (state.robertHp - damage).coerceAtLeast(0)
             audioManager.playMixed(listOf("explosion", "enemyHit"))
             _gameState.update {
@@ -2587,7 +2652,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             if (remaining == 0) endGameAfterExplosion(won = true)
             else ensureRobertPositioned()
         } else {
-            val damage = min(state.playerHp, DamageTable.damage(Weapon.MISSILE, 100f, state.playerMaxHp))
+            // A direct missile hit destroys the player completely as well.
+            // Only an anti-missile interception can stop it.
+            val damage = MissileRules.impactDamage(state.playerHp)
             val remaining = (state.playerHp - damage).coerceAtLeast(0)
             recordIncomingDamage(damage)
             audioManager.playMixed(listOf("explosion", "playerHit"))
@@ -2880,7 +2947,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** Starts the countdown audio of a thrown bomb. */
     private fun startBombAudio(kind: BombKind, distance: Float, timer: Boolean) {
         if (timer) {
-            // timer-sound.mp3 loops for the whole countdown, then stops and
+            // timer-countdown.mp3 loops for the whole countdown, then stops and
             // the explosion takes over.
             audioManager.playLoop(kind.flightSoundKey)
         } else {
@@ -2976,17 +3043,28 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Tracking guarantees a hit, not a kill. A timer bomb can also
-        // damage its thrower inside the safety radius, with the same cap.
-        val targetDamage = DamageTable.damage(kind.weapon, 100f,
-            if (fromPlayer) state.robertMaxHp else state.playerMaxHp)
+        // A tracking bomb always reaches its target. Its blast takes the
+        // bomb's documented share of the health the victim STILL has:
+        // grenade 60%, timer bomb 68% and atom bomb 75%. A timer bomb can
+        // also catch its own thrower inside the safety radius, with exactly
+        // the same share of that fighter's remaining health.
+        val targetDamage = BombRules.blastDamage(
+            kind,
+            if (fromPlayer) state.robertHp else state.playerHp
+        )
         val throwerHit = kind == BombKind.TIMER && BombRules.timerBombKillsThrower(throwerDistance)
-        val playerDamage = min(state.playerHp, if (fromPlayer) {
-            if (throwerHit) DamageTable.damage(kind.weapon, 100f, state.playerMaxHp) else 0
-        } else targetDamage)
-        val robertDamage = min(state.robertHp, if (fromPlayer) targetDamage else {
-            if (throwerHit) DamageTable.damage(kind.weapon, 100f, state.robertMaxHp) else 0
-        })
+        val playerDamage = if (fromPlayer) {
+            if (throwerHit) BombRules.blastDamage(kind, state.playerHp) else 0
+        } else {
+            targetDamage
+        }
+        val robertDamage = if (fromPlayer) {
+            targetDamage
+        } else if (throwerHit) {
+            BombRules.blastDamage(kind, state.robertHp)
+        } else {
+            0
+        }
         val playerRemaining = (state.playerHp - playerDamage).coerceAtLeast(0)
         val robertRemaining = (state.robertHp - robertDamage).coerceAtLeast(0)
         recordIncomingDamage(playerDamage)
@@ -3042,7 +3120,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * Ends the battle only once the explosion has finished. The hit sound and
      * the explosion are already playing together, and cutting them short to
      * speak the result would swallow the blast, so the result waits for the
-     * exact length of explosion-sound.mp3.
+     * exact length of explosion.mp3.
      */
     private fun endGameAfterExplosion(won: Boolean) {
         if (endingJob != null) return
@@ -3284,8 +3362,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Holding the up-swipe with a submachine gun (MP40 or machine gun)
-     * selected keeps firing: one bullet per [Weapon.burstIntervalMs] for as
+     * Holding the up-swipe with an automatic weapon (submachine gun, AK-47
+     * or machine gun) selected keeps firing: one bullet per
+     * [Weapon.burstIntervalMs] for as
      * long as the trigger is held, with the weapon's own sound on a truly
      * gapless loop.
      *

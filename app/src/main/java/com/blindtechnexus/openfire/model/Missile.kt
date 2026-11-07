@@ -9,8 +9,11 @@ package com.blindtechnexus.openfire.model
  *  - every launch consumes exactly one missile power ([MISSILE_POWER_PRICE]
  *    coins each). Powers stack like defences and must be bought again once
  *    used;
- *  - once launched it tracks its target through ordinary barriers and deals
- *    up to 60 flat HP. A lethal missile hit bypasses the second chance;
+ *  - once launched it tracks its target through ordinary barriers and, when
+ *    it hits, completely destroys that fighter: the missile removes every
+ *    remaining health point, so a direct hit always ends the battle. The only
+ *    way to survive is an anti-missile interceptor that destroys the missile
+ *    in the air. A missile hit bypasses the second chance;
  *  - the target still tries to run as far away as possible inside the 25 m
  *    arena while the missile sound plays. If the target can run, the sound
  *    loops and is cut the moment the missile impacts; if the target has
@@ -40,13 +43,13 @@ object MissileRules {
     const val ANTI_MISSILE_PRICE = 1800
 
     /**
-     * Length of `missile-sound.mp3` (about 14 seconds). A direct hit lands
+     * Length of `missile.mp3` (about 14 seconds). A direct hit lands
      * exactly when this sound finishes.
      */
     const val SOUND_DURATION_MS = SoundDurations.MISSILE_MS
 
     /**
-     * Length of `explosion-sound.mp3`. The battle ends only after the impact
+     * Length of `explosion.mp3`. The battle ends only after the impact
      * explosion has really finished playing, never on the frame of the hit.
      */
     const val EXPLOSION_MS = SoundDurations.EXPLOSION_MS
@@ -74,6 +77,16 @@ object MissileRules {
 
     /** Shots Robert must have fired before he considers his missile. */
     const val ENEMY_LAUNCH_MIN_SHOTS = 3
+
+    /**
+     * A direct missile hit destroys its target: it deals every health point
+     * the victim still has. There is no percentage, no cap and no second
+     * chance - only an anti-missile interception prevents the destruction.
+     */
+    const val DIRECT_HIT_DESTROYS = true
+
+    /** Damage of a direct missile impact on a victim with [remainingHp] health. */
+    fun impactDamage(remainingHp: Int): Int = remainingHp.coerceAtLeast(0)
 
     /** True when the target still has room to run away inside the arena. */
     fun targetWillFlee(distance: Float): Boolean =
