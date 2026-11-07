@@ -244,7 +244,9 @@ class CombatTest {
             val state = movingLeft.copy(playerFacing = facing.id)
             val proximity = Combat.proximityOf(state.distance)
             assertEquals(HitZone.STRONG, Combat.zoneFor(proximity))
-            assertEquals(26, Combat.weaponDamage(Weapon.ASSAULT_GUN, proximity, 200))
+            // 72 percent proximity is the strong band: 80 percent of the
+            // assault rifle's 44 HP point-blank power.
+            assertEquals(35, Combat.weaponDamage(Weapon.ASSAULT_GUN, proximity, 200))
         }
 
         // Being genuinely out of range still misses, regardless of facing.
@@ -253,7 +255,7 @@ class CombatTest {
         assertEquals(0, Combat.weaponDamage(Weapon.ASSAULT_GUN, Combat.proximityOf(far.distance), 200))
         // The AWM's existing long-range exception still applies.
         val awmRange = initial.withPositions(playerX = 6f, robertX = 25f, robertY = 12f)
-        assertEquals(24, Combat.weaponDamage(Weapon.AWM, Combat.proximityOf(awmRange.distance), 200))
+        assertEquals(32, Combat.weaponDamage(Weapon.AWM, Combat.proximityOf(awmRange.distance), 200))
     }
 
     @Test
