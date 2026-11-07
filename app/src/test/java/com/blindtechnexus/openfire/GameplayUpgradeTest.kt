@@ -135,8 +135,11 @@ class GameplayUpgradeTest {
         assertEquals("unlockAfterRound2", Shop.unlockReasonKey(2))
         assertEquals("unlockAfterRound3", Shop.unlockReasonKey(3))
         assertEquals("unlockAfterRound4", Shop.unlockReasonKey(4))
-        assertTrue(Shop.isLocked(Weapon.MACHINE_GUN.requiredCompletedRounds, 2))
-        assertFalse(Shop.isLocked(Weapon.MACHINE_GUN.requiredCompletedRounds, 3))
+        // The machine gun now unlocks in round three.
+        assertEquals(3, Weapon.MACHINE_GUN.unlockRound)
+        assertEquals(2, Weapon.MACHINE_GUN.requiredCompletedRounds)
+        assertTrue(Shop.isLocked(Weapon.MACHINE_GUN.requiredCompletedRounds, 1))
+        assertFalse(Shop.isLocked(Weapon.MACHINE_GUN.requiredCompletedRounds, 2))
         assertFalse(Shop.isLocked(0, 0))
         // Every round-gated item has a real translated sentence in all three
         // languages, and the sentence is not the raw key.
@@ -154,7 +157,8 @@ class GameplayUpgradeTest {
     fun weaponSoundKeysAreRecognisedAndNoStrayAliasesRemain() {
         for (key in listOf(
             "assault", "shortGun", "pistol", "sniperRifle", "awm",
-            "mp40", "machineGun", "knifeSwish", "knifeMiss", "swordGlide", "swordMiss",
+            "mp40", "m10", "submachineGun", "ak47", "machineGun",
+            "knifeSwish", "knifeMiss", "swordGlide", "swordMiss",
             "glueWallBreaker"
         )) {
             assertTrue("$key must be a recognised sound", key in AudioManager.WEAPON_SOUND_KEYS)

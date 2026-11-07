@@ -1,6 +1,7 @@
 package com.blindtechnexus.openfire
 
 import com.blindtechnexus.openfire.model.BombKind
+import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.MissileRules
 import com.blindtechnexus.openfire.model.SoundDurations
@@ -29,13 +30,47 @@ class MissileRulesTest {
 
     @Test
     fun theBattleEndsOnlyAfterTheExplosionFinished() {
-        // The impact mixes the hit sound with explosion-sound.mp3 and the
-        // result is announced only once that sound has really run out.
+        // The impact mixes the hit sound with explosion.mp3 and the result
+        // is announced only once that sound has really run out.
         assertEquals(SoundDurations.EXPLOSION_MS, MissileRules.EXPLOSION_MS)
         assertTrue(MissileRules.EXPLOSION_MS in 5_000L..8_000L)
         assertEquals("explosion", BombKind.GRENADE.blastSoundKey)
         assertEquals("explosion", BombKind.ATOM.blastSoundKey)
         assertEquals("explosion", BombKind.TIMER.blastSoundKey)
+    }
+
+    @Test
+    fun aDirectMissileHitDestroysEveryRemainingHealthPoint() {
+        assertTrue(MissileRules.DIRECT_HIT_DESTROYS)
+        for (hp in listOf(1, 60, 100, 750, 2600)) {
+            assertEquals(hp, MissileRules.impactDamage(hp))
+        }
+        assertEquals(0, MissileRules.impactDamage(0))
+        assertEquals(0, MissileRules.impactDamage(-5))
+        // The destroyed fighter has nothing left: the battle is over.
+        assertEquals(0, 1000 - MissileRules.impactDamage(1000))
+    }
+
+    @Test
+    fun bombsTakeSixtyToSeventyFivePercentOfRemainingHealth() {
+        assertEquals(60, BombRules.blastPercent(BombKind.GRENADE))
+        assertEquals(68, BombRules.blastPercent(BombKind.TIMER))
+        assertEquals(75, BombRules.blastPercent(BombKind.ATOM))
+        // 1000 HP: the documented 750 point atom-bomb deduction.
+        assertEquals(600, BombRules.blastDamage(BombKind.GRENADE, 1000))
+        assertEquals(680, BombRules.blastDamage(BombKind.TIMER, 1000))
+        assertEquals(750, BombRules.blastDamage(BombKind.ATOM, 1000))
+        // The share is always taken from what is left, not the maximum.
+        assertEquals(300, BombRules.blastDamage(BombKind.GRENADE, 500))
+        assertEquals(75, BombRules.blastDamage(BombKind.ATOM, 100))
+        assertEquals(1, BombRules.blastDamage(BombKind.GRENADE, 1))
+        assertEquals(0, BombRules.blastDamage(BombKind.ATOM, 0))
+        assertEquals(
+            mapOf(BombKind.GRENADE to 60, BombKind.ATOM to 75, BombKind.TIMER to 68),
+            BombRules.BLAST_TABLE
+        )
+        assertEquals(0.60f, BombRules.blastFraction(BombKind.GRENADE), 0.0001f)
+        assertEquals(0.75f, BombRules.blastFraction(BombKind.ATOM), 0.0001f)
     }
 
     @Test

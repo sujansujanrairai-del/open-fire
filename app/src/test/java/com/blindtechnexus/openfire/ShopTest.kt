@@ -51,6 +51,13 @@ class ShopTest {
         assertEquals(800, Weapon.MP40.price)
         assertEquals(1200, Weapon.AWM.price)
         assertEquals(1700, Weapon.MACHINE_GUN.price)
+        // The three new guns keep the ladder under the missile.
+        assertEquals(600, Weapon.M10.price)
+        assertEquals(900, Weapon.SUBMACHINE_GUN.price)
+        assertEquals(1250, Weapon.AK47.price)
+        assertEquals(1, Weapon.M10.unlockRound)
+        assertEquals(1, Weapon.AK47.unlockRound)
+        assertEquals(2, Weapon.SUBMACHINE_GUN.unlockRound)
         assertEquals(600, Weapon.GRENADE.price)
         assertEquals(2000, Weapon.ATOM_BOMB.price)
         assertEquals(1700, Weapon.TIMER_BOMB.price)
@@ -441,20 +448,26 @@ class ShopTest {
     @Test
     fun battleWeaponsOnlyContainWhatTheRoundUnlocks() {
         val everything = Inventory(weaponIds = Weapon.entries.map { it.id }.toSet())
-        // Round one: the two free guns plus every round-one shop weapon.
+        // Round one: the two free guns, the M10, the AK-47 and every other
+        // round-one shop weapon.
         assertEquals(
-            setOf("shortGun", "assaultGun", "pistol", "sniper", "glueBreaker", "knife", "sword"),
+            setOf(
+                "shortGun", "assaultGun", "pistol", "sniper", "glueBreaker",
+                "knife", "sword", "m10", "ak47"
+            ),
             everything.battleWeapons(1).map { it.id }.toSet()
         )
         assertTrue(everything.battleWeapons(2).contains(Weapon.MP40))
         assertTrue(everything.battleWeapons(2).contains(Weapon.AWM))
+        assertTrue(everything.battleWeapons(2).contains(Weapon.SUBMACHINE_GUN))
         assertFalse(everything.battleWeapons(2).contains(Weapon.GRENADE))
         assertFalse(everything.battleWeapons(2).contains(Weapon.MISSILE))
         assertTrue(everything.battleWeapons(3).contains(Weapon.GRENADE))
         assertTrue(everything.battleWeapons(3).contains(Weapon.ATOM_BOMB))
         assertTrue(everything.battleWeapons(3).contains(Weapon.TIMER_BOMB))
         assertTrue(everything.battleWeapons(3).contains(Weapon.MISSILE))
-        assertFalse(everything.battleWeapons(3).contains(Weapon.MACHINE_GUN))
+        // The machine gun moved to the round-three ladder with the bombs.
+        assertTrue(everything.battleWeapons(3).contains(Weapon.MACHINE_GUN))
         assertTrue(everything.battleWeapons(4).contains(Weapon.MACHINE_GUN))
         assertTrue(everything.battleWeapons(5).contains(Weapon.MACHINE_GUN))
     }
@@ -469,7 +482,7 @@ class ShopTest {
         assertEquals(0, Weapon.MACHINE_GUN.issuedFreeFromRound)
         assertFalse(Weapon.issuedForRound(5).contains(Weapon.MACHINE_GUN))
         assertTrue(Weapon.MACHINE_GUN.price > 0)
-        assertEquals(4, Weapon.MACHINE_GUN.unlockRound)
+        assertEquals(3, Weapon.MACHINE_GUN.unlockRound)
 
         val granted = Shop.grantWeapon(Inventory(), Weapon.MP40)
         assertTrue(granted.success)

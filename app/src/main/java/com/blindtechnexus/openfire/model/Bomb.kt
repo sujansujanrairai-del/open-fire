@@ -10,28 +10,31 @@ import kotlin.math.roundToInt
  * always ends exactly when its sound ends instead of guessing.
  */
 object SoundDurations {
-    /** missile-sound.mp3 */
+    /** missile.mp3 */
     const val MISSILE_MS = 14_800L
 
-    /** explosion-sound.mp3: the tail every blast waits for. */
+    /** explosion.mp3: the tail every blast waits for. */
     const val EXPLOSION_MS = 6_100L
 
-    /** atom-bom-sound.mp3 */
+    /** atom-bomb.mp3 */
     const val ATOM_BOMB_MS = 7_100L
 
-    /** grenade-sound.mp3 */
+    /** grenade.mp3 */
     const val GRENADE_MS = 9_100L
 
-    /** timer-sound.mp3 (looped until the chosen duration elapses) */
+    /** timer-countdown.mp3 (looped until the chosen duration elapses) */
     const val TIMER_LOOP_MS = 4_300L
 
-    /** mp-40-gun.mp3 (looped during a continuous burst) */
-    const val MP40_MS = 1_300L
+    /** submachine-gun.mp3 (looped during a continuous burst) */
+    const val SUBMACHINE_GUN_MS = 1_300L
+
+    /** ak-47-gun.mp3 (looped during a continuous burst) */
+    const val AK47_MS = 4_400L
 
     /** machine-gun.mp3 (looped during a continuous burst) */
     const val MACHINE_GUN_MS = 1_600L
 
-    /** AWM-sound.mp3 */
+    /** awm-rifle.mp3 */
     const val AWM_MS = 2_600L
 
     /** level-complete.mp3 */
@@ -40,7 +43,7 @@ object SoundDurations {
     /** round-complete.mp3 */
     const val ROUND_COMPLETE_MS = 28_200L
 
-    /** wall-sound.mp3, the boundary wall impact */
+    /** wall-hit.mp3, the boundary wall impact */
     const val WALL_MS = 1_700L
 
     /** walk.mp3 */
@@ -102,24 +105,26 @@ enum class BombKind(
 /**
  * Pure bomb rules shared by the battle engine, the shop and Robert.
  *
- * Bombs now track the enemy like the missile and kill at any cost — when a
- * bomb is released it tracks the enemy, falls onto them, and detonates. A
- * target is always destroyed unless an anti-bomb explosive intercepts it.
+ * Bombs track the enemy like the missile: once released, a bomb follows its
+ * target, falls onto them and detonates. A tracking bomb cannot miss, but it
+ * no longer erases the whole health bar: every blast takes a fixed share of
+ * the health the victim still has (60% to 75%, depending on the bomb's
+ * power), unless an anti-bomb explosive intercepts it in the air.
  *
  *  - the grenade and the atom bomb unlock in round three and fly for exactly
- *    as long as their own sound (grenade-sound, atom-bom-sound); tracking ensures
+ *    as long as their own sound (grenade.mp3, atom-bomb.mp3); tracking ensures
  *    the bomb follows the moving target and explodes on top of them;
  *  - the timer bomb unlocks in round three too. Swiping up asks
  *    \"Select your timer\": swiping left or right walks through 15, 30, 40, 50
  *    and 60 seconds and a tap locks the choice in. The timer sound then loops
  *    for the whole countdown, stops, and the explosion plays;
- *  - every bomb now kills its enemy target at any cost, exactly like the missile.
- *    A target without an anti-bomb explosive cannot escape by running — the bomb
- *    tracks them. The 50m race is kept for the timer bomb thrower safety but
- *    the enemy is always hit;
+ *  - every tracking bomb always reaches its target, but the blast takes the
+ *    bomb's documented share of the target's remaining health: the grenade
+ *    60%, the timer bomb 68% and the atom bomb 75% (see [blastPercent]). An
+ *    anti-bomb explosive destroys the bomb in the air and prevents all of it;
  *  - the timer bomb is the exception: its thrower must stay at least
- *    [SAFE_DISTANCE] metres away from the destination, or both fighters are
- *    destroyed together and the thrower loses;
+ *    [SAFE_DISTANCE] metres away from the destination, or the thrower also
+ *    takes the blast's share and can be destroyed by it;
  *  - from round three Robert carries anti-bomb explosives per the round
  *    table: twice in round 3, three times in round 4 and five times in round 5;
  *    the player's anti-bomb explosive is free and always usable from round 3;
@@ -257,6 +262,46 @@ object BombRules {
      * This returns true unless intercepted, guaranteeing the blast reaches the target.
      */
     fun trackingKillGuaranteed(): Boolean = true
+
+    // ------------------------------------------------------------------
+    // Blast power table: the share of the victim's REMAINING health taken
+    // by one tracking bomb, chosen by the bomb's power.
+    //
+    //   grenade      60%   (lightest bomb)
+    //   timer bomb   68%   (medium bomb)
+    //   atom bomb    75%   (heaviest bomb)
+    //
+    // The share is applied to what the victim still has, never to their
+    // maximum health: 1000 remaining HP loses 750 to an atom bomb, and 200
+    // remaining HP loses 150 to the same bomb.
+    // ------------------------------------------------------------------
+    const val GRENADE_BLAST_PERCENT = 60
+    const val TIMER_BOMB_BLAST_PERCENT = 68
+    const val ATOM_BOMB_BLAST_PERCENT = 75
+
+    /** The share of remaining health taken by this bomb, in percent. */
+    fun blastPercent(kind: BombKind): Int = when (kind) {
+        BombKind.GRENADE -> GRENADE_BLAST_PERCENT
+        BombKind.TIMER -> TIMER_BOMB_BLAST_PERCENT
+        BombKind.ATOM -> ATOM_BOMB_BLAST_PERCENT
+    }
+
+    /** The share of remaining health taken by this bomb, as a 0..1 fraction. */
+    fun blastFraction(kind: BombKind): Float = blastPercent(kind) / 100f
+
+    /**
+     * Damage one tracking bomb blast deals to a victim who still has
+     * [remainingHp] health. The result is rounded to the nearest health point
+     * and can never exceed what the victim actually has left.
+     */
+    fun blastDamage(kind: BombKind, remainingHp: Int): Int {
+        if (remainingHp <= 0) return 0
+        val damage = (remainingHp * blastFraction(kind)).roundToInt()
+        return damage.coerceIn(1, remainingHp)
+    }
+
+    /** The whole blast table, in power order. Used by the guide and tests. */
+    val BLAST_TABLE: Map<BombKind, Int> = BombKind.entries.associateWith { blastPercent(it) }
 
     /**
      * True when the timer bomb also hits its own thrower: the thrower did

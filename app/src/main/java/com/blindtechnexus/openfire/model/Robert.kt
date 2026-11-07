@@ -9,16 +9,17 @@ import kotlin.random.Random
  *
  *  - Round 1, levels 1-2: 2 medkits and 1 cover (no glue walls).
  *    Round 1, levels 3-5: 2 medkits and 2 covers (no glue walls).
- *    Weapons: assault rifle and shotgun; the sniper rifle is present but
- *    locked until the glue-wall / low-health condition is met.
- *  - Round 2 (all levels): 3 medkits, 1 glue wall and 2 covers. The knife,
- *    the sword and the MP40 submachine gun join his weapons.
- *  - Round 3 (all levels): 3 medkits, 2 glue walls and 4 covers. The pistol
- *    and the AWM join his weapons, the sniper rifle unlocks, and he receives
- *    one bomb plus one anti-bomb explosive per game (1 in R3, 3 in R4, unlimited in R5).
+ *    Weapons: assault rifle, shotgun and the new M10 handgun; the sniper
+ *    rifle is present but locked until round three.
+ *  - Round 2 (all levels): 3 medkits, 2 glue walls and 2 covers. The knife,
+ *    the sword, the single-shot MP40, the submachine gun and the AK-47 join
+ *    his weapons.
+ *  - Round 3 (all levels): 3 medkits, 2 glue walls and 4 covers. The pistol,
+ *    the AWM and the machine gun join his weapons, the sniper rifle unlocks,
+ *    and he receives his bombs and anti-bomb explosives.
  *  - Round 4 (all levels): 5 medkits, 3 glue walls and 5 covers. Every weapon
- *    is available, including the machine gun, missile powers, anti-missiles,
- *    bombs (3) and anti-bombs (3).
+ *    is available, including missile powers, anti-missiles, bombs (3) and
+ *    anti-bombs (3).
  *  - Round 5 (all levels): 5 medkits, 4 glue walls and 7 covers. Strategic round:
  *    equal power, bombs and anti-bombs unlimited — relies on strategy, not raw stats.
  *
@@ -331,36 +332,50 @@ object RobertRules {
         }
 
     /**
-     * Robert's weapon rotation for a round. He receives the MP40 in round two,
-     * the AWM in round three and the machine gun in round four; his sniper
-     * rifle stays locked during the first two rounds, and his bombs arrive
-     * with round three (see [BombRules.enemyBombsForRound]).
+     * Robert's weapon rotation for a round, matched to the player's own unlock
+     * ladder so neither side is better armed than the other:
+     *
+     *  - round one: the two free guns, the locked sniper and the M10;
+     *  - round two: the knife, the sword, the single-shot MP40, the submachine
+     *    gun and the AK-47 join in;
+     *  - round three: the pistol, the AWM and the machine gun join in;
+     *  - round four and five: every standard weapon.
      */
     fun weaponsForRound(round: Int): List<Weapon> {
         val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
         return when (safeRound) {
-            1 -> listOf(Weapon.ASSAULT_GUN, Weapon.SHORT_GUN, Weapon.SNIPER)
-            // Round two adds the knife, the sword and his own MP40.
+            1 -> listOf(
+                Weapon.ASSAULT_GUN,
+                Weapon.SHORT_GUN,
+                Weapon.SNIPER,
+                Weapon.M10
+            )
             2 -> listOf(
                 Weapon.ASSAULT_GUN,
                 Weapon.SHORT_GUN,
                 Weapon.SNIPER,
+                Weapon.M10,
                 Weapon.KNIFE,
                 Weapon.SWORD,
-                Weapon.MP40
+                Weapon.MP40,
+                Weapon.SUBMACHINE_GUN,
+                Weapon.AK47
             )
-            // Round three adds the pistol and his AWM.
             3 -> listOf(
                 Weapon.SHORT_GUN,
                 Weapon.ASSAULT_GUN,
                 Weapon.PISTOL,
                 Weapon.SNIPER,
+                Weapon.M10,
                 Weapon.KNIFE,
                 Weapon.SWORD,
                 Weapon.MP40,
-                Weapon.AWM
+                Weapon.SUBMACHINE_GUN,
+                Weapon.AK47,
+                Weapon.AWM,
+                Weapon.MACHINE_GUN
             )
-            // Round four adds the machine gun: from here he owns them all.
+            // Round four and five: he owns every standard weapon.
             else -> ALL_STANDARD_WEAPONS
         }
     }

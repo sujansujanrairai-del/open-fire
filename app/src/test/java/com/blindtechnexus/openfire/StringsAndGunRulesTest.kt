@@ -55,10 +55,14 @@ class StringsAndGunRulesTest {
         // The new weapons carry their own magazines.
         assertEquals(5, Weapon.AWM.magazine)
         assertEquals(20, Weapon.MP40.magazine)
-        assertEquals(30, Weapon.MACHINE_GUN.magazine)
-        assertTrue(Weapon.AWM.needsReload)
-        assertTrue(Weapon.MP40.needsReload)
-        assertTrue(Weapon.MACHINE_GUN.needsReload)
+        assertEquals(8, Weapon.M10.magazine)
+        assertEquals(40, Weapon.SUBMACHINE_GUN.magazine)
+        assertEquals(30, Weapon.AK47.magazine)
+        assertEquals(50, Weapon.MACHINE_GUN.magazine)
+        for (weapon in listOf(
+            Weapon.AWM, Weapon.MP40, Weapon.M10,
+            Weapon.SUBMACHINE_GUN, Weapon.AK47, Weapon.MACHINE_GUN
+        )) assertTrue("${weapon.id} must reload", weapon.needsReload)
 
         // Melee weapons never reload.
         for (weapon in Weapon.entries.filter { it.melee }) {
@@ -83,7 +87,8 @@ class StringsAndGunRulesTest {
         // launcher: nothing slipped through untested.
         val counted = listOf(
             Weapon.SHORT_GUN, Weapon.ASSAULT_GUN, Weapon.PISTOL, Weapon.SNIPER,
-            Weapon.GLUE_BREAKER, Weapon.AWM, Weapon.MP40, Weapon.MACHINE_GUN
+            Weapon.GLUE_BREAKER, Weapon.AWM, Weapon.MP40, Weapon.M10,
+            Weapon.SUBMACHINE_GUN, Weapon.AK47, Weapon.MACHINE_GUN
         ) + Weapon.entries.filter { it.melee } +
             Weapon.entries.filter { it.bomb } + Weapon.MISSILE
         assertEquals(Weapon.entries.size, counted.size)
@@ -91,10 +96,13 @@ class StringsAndGunRulesTest {
 
     @Test
     fun shopCatalogMatchesTheLoweredPrices() {
-        val prices = mapOf(Weapon.KNIFE to 220, Weapon.PISTOL to 450, Weapon.GRENADE to 600,
-            Weapon.SWORD to 650, Weapon.GLUE_BREAKER to 750, Weapon.MP40 to 800,
-            Weapon.SNIPER to 850, Weapon.AWM to 1200, Weapon.MACHINE_GUN to 1700,
-            Weapon.TIMER_BOMB to 1700, Weapon.ATOM_BOMB to 2000, Weapon.MISSILE to 2200)
+        val prices = mapOf(
+            Weapon.KNIFE to 220, Weapon.PISTOL to 450, Weapon.GRENADE to 600,
+            Weapon.M10 to 600, Weapon.SWORD to 650, Weapon.GLUE_BREAKER to 750,
+            Weapon.MP40 to 800, Weapon.SNIPER to 850, Weapon.SUBMACHINE_GUN to 900,
+            Weapon.AWM to 1200, Weapon.AK47 to 1250, Weapon.MACHINE_GUN to 1700,
+            Weapon.TIMER_BOMB to 1700, Weapon.ATOM_BOMB to 2000, Weapon.MISSILE to 2200
+        )
         for ((weapon, price) in prices) assertEquals(price, weapon.price)
         assertEquals(listOf(250, 400, 550, 1700, 1800), DefenceItem.entries.map { it.price }.sorted())
         assertEquals(listOf(75, 140, 180, 200, 250), Extension.entries.map { it.price }.sorted())
@@ -124,8 +132,10 @@ class StringsAndGunRulesTest {
         for (required in listOf(
             "Five wins complete one level", "five levels complete one round", "2600",
             "25 by 25 metre", "centre left", "Swipe left with three fingers", "sound",
-            "pause", "resume", "1.5 seconds", "one shot per second", "60 HP",
-            "knife 0/12/18/26", "AWM 0/28/44/60", "missiles 60 HP",
+            "pause", "resume", "1.5 seconds", "every 0.5 seconds", "60 HP",
+            "knife 0/12/18/26", "AWM 0/28/44/60", "60, 68 or 75 percent",
+            "M10", "AK-47", "submachine gun", "instantly",
+            "three quick shots", "unlock and can be bought from round 1",
             "heavy hit or repeated", "500, 1000 or 1500", "fewer than 500",
             "1500-coin loan and 1100", "400 owed", "remaining debt", "no interest",
             "missile 2200", "anti-missile 1800", "interceptor", "timer bomb",
