@@ -9,6 +9,7 @@ import com.blindtechnexus.openfire.audio.TtsManager
 import com.blindtechnexus.openfire.data.PreferencesManager
 import com.blindtechnexus.openfire.data.Strings
 import com.blindtechnexus.openfire.model.Arena
+import com.blindtechnexus.openfire.model.AutomaticFirePowerMap
 import com.blindtechnexus.openfire.model.BattleMenuItem
 import com.blindtechnexus.openfire.model.BattleClock
 import com.blindtechnexus.openfire.model.BombKind
@@ -98,6 +99,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var bombJob: Job? = null
     private var bombTrackJob: Job? = null
     private var autoFireJob: Job? = null
+    /** Invalidates an old hold coroutine before another hold can begin. */
+    private var autoFireSession = 0L
     private var endingJob: Job? = null
     private var matchLimitJob: Job? = null
     private var foreground = true
@@ -234,16 +237,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         /** The wall announcement is repeated at most once per this window. */
         const val WALL_ANNOUNCE_COOLDOWN_MS = 1_400L
 
-        /** Bullets per second of a held automatic weapon come from the weapon. */
-        const val AUTO_FIRE_FIRST_SHOT_DELAY_MS = 0L
-
-        /**
-         * The longest an enemy automatic burst may ever ring on its own. One
-         * answer of Robert's is a single shot, so only the first stretch of his
-         * weapon's firing recording is heard; anything beyond this belongs to a
-         * fighter who stopped firing and must be silent.
-         */
-        const val MAX_ENEMY_BURST_MS = 1_600L
 
         /** Advance tick length. */
         const val ADVANCE_TICK_MS = 550L
@@ -1286,26 +1279,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * The sound of one of Robert's shots, fired exactly like the player's:
-     *
-     *  - a single-shot weapon is one clip of its own recording;
-     *  - an automatic weapon (submachine gun, AK-47, machine gun) is a burst
-     *    on his own firing channel that stays open for exactly the beat he
-     *    fired on. While he keeps answering with the same gun those bursts
-     *    join into one continuous, gapless fire - and the moment he switches
-     *    weapon, throws something or stops firing, his channel is destroyed
-     *    and his gun is silent in the same millisecond.
-     *
-     * Before this, one enemy automatic answer played the whole recorded clip -
-     * the AK-47 alone runs for three seconds - so a shot of half a second kept
-     * roaring over the weapon he switched to, over the player's own fire and
-     * over the end of the exchange, and several of those overlapping clips were
-     * heard as one unbroken, disturbing burst.
+     * Opens Robert's continuous-fire channel for an automatic weapon. Repeated
+     * bullet ticks refresh the same stream, never layer another recording.
+     * Switching to a single shot, retreating, launching or ending the exchange
+     * calls [stopEnemyFireSound], which cuts his stream immediately.
      */
-    private fun playEnemyFireSound(chosen: Weapon, beatMs: Long) {
+    private fun playEnemyFireSound(chosen: Weapon) {
         val key = chosen.fireSoundKey
         if (!chosen.autoFire) {
-            // Any burst he held before ends the instant he fires something else.
             stopEnemyFireSound()
             playEnemyWeaponSound(key, volume = 0.9f)
             return
@@ -1315,18 +1296,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             audioManager.stopEnemyWeaponLoop(held)
         }
         val (lateral, depth) = enemyAudioOffsets()
-        audioManager.playAutomaticBurst(
+        audioManager.startEnemyWeaponLoop(
             key,
-            // At least one bullet of this very gun, never more than the beat
-            // he answers on and never the whole recording: his burst is as
-            // long as his firing and not one sample longer.
-            holdMs = beatMs.coerceAtMost(MAX_ENEMY_BURST_MS)
-                .coerceAtLeast(chosen.burstIntervalMs),
-            owner = AudioManager.LOOP_OWNER_ENEMY,
             volume = 0.9f,
-            posX = lateral,
-            posY = 0f,
-            posZ = -depth
+            lateralOffset = lateral,
+            depthOffset = depth
         )
         robertFireWeaponKey = key
     }
@@ -2122,15 +2096,27 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Normal attacks and breaker shots share one cadence; movement takes priority. */
     private fun robertAttack() {
-        if (!foreground || _currentScreen.value != Screen.BATTLE) return
+        if (!foreground || _currentScreen.value != Screen.BATTLE) {
+            stopEnemyFireSound()
+            return
+        }
         var state = _gameState.value
-        if (state.robertHp <= 0 || state.playerHp <= 0 || state.timerSelectActive || state.missileInFlight) return
-        if (state.bombInFlight && state.bombFromPlayer) return
+        if (state.robertHp <= 0 || state.playerHp <= 0 || state.timerSelectActive || state.missileInFlight ||
+            (state.bombInFlight && state.bombFromPlayer)
+        ) {
+            // A held sound belongs only to a real firing exchange. Selection,
+            // projectile flight, death and screen changes all release it now.
+            stopEnemyFireSound()
+            return
+        }
         expirePlayerBurstIfStale()
         state = _gameState.value
         ensureGlueWallAvoidance()
         state = _gameState.value
-        if (state.robertState in setOf("retreat", "avoid", "missileFlee", "bombFlee", "turnBack")) return
+        if (state.robertState in setOf("retreat", "avoid", "missileFlee", "bombFlee", "turnBack")) {
+            stopEnemyFireSound()
+            return
+        }
 
         // The player's rhythm decides the enemy's rhythm. Once a sustained
         // burst has gone quiet, he answers with three quick shots and then
@@ -2216,6 +2202,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // charge left: he does not trade shots, he runs away and stays away
         // until the wall drops.
         if (state.glueWallActive && !state.robertHasActiveDefence) {
+            stopEnemyFireSound()
             if (state.robertState != "avoid") {
                 _gameState.update { it.copy(robertState = "avoid") }
                 planRobertStep(140L)
@@ -2288,9 +2275,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // outcome is known: a miss uses only *-miss and a hit uses *-hit.
         // Firearm sounds are exclusive: his shot cuts whatever weapon sound
         // the player still has in the air, so the two never mix.
-        // The closing burst fires on the fast 0.5 second beat. In every other
-        // exchange the enemy answers the player's measured rhythm with the
-        // matching 1 s, 1.5 s or 2.5 s beat.
+        // Single-shot answers use the tactical counter rhythm. Automatic guns
+        // always use their own power map: 0.5 s / 1 s / 1.5 s for both fighters.
         val closingBurst = EnemyFireStrategy.inStopBurst(stopBurstShotsLeft)
         val answerInterval = if (closingBurst) {
             EnemyFireStrategy.stopBurstInterval(stopBurstShotsLeft)
@@ -2299,7 +2285,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 EnemyFireStrategy.playerInterval(playerShotTimes.toList())
             )
         }
-        markRobertShot(answerInterval)
+        val fireInterval = AutomaticFirePowerMap.intervalFor(chosen) ?: answerInterval
+        markRobertShot(fireInterval)
         if (closingBurst) {
             stopBurstShotsLeft -= 1
             if (stopBurstShotsLeft <= 0) {
@@ -2310,7 +2297,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         if (!chosen.melee) {
-            playEnemyFireSound(chosen, answerInterval)
+            playEnemyFireSound(chosen)
         } else {
             // A melee attack owns no firing channel either: cut any burst that
             // was still sounding before his swing.
@@ -2379,7 +2366,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         // Robert's assault rifle and shotgun use his explicit per-zone table;
         // every other weapon uses the standard player table.
-        var dealt = RobertRules.weaponDamage(chosen, proxPercent, state.playerMaxHp)
+        var dealt = if (chosen.autoFire) {
+            AutomaticFirePowerMap.damageAt(chosen, proxPercent, state.playerMaxHp)
+        } else {
+            RobertRules.weaponDamage(chosen, proxPercent, state.playerMaxHp)
+        }
         // While the quick menu is genuinely being navigated every hit is cut
         // down to a fixed percentage of maximum health. The protection expires
         // on its own, so browsing the menu can never become invulnerability.
@@ -3508,7 +3499,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val damage = Combat.weaponDamage(weapon, proxPercent, state.robertMaxHp)
+        val damage = AutomaticFirePowerMap.damageAt(weapon, proxPercent, state.robertMaxHp)
         val newRobertHp = max(0, state.robertHp - damage)
         _gameState.update {
             it.copy(
@@ -3599,26 +3590,36 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (_currentScreen.value != Screen.BATTLE) return
         val state = _gameState.value
         val weapon = state.activeWeapon
-        if (!weapon.autoFire || state.autoFireActive) {
+        if (!weapon.autoFire) {
             fire()
             return
         }
+        // Repeated pointer events for the same hold are idempotent.
+        if (state.autoFireActive) return
         if (!holdFireAllowed()) {
             fire()
             return
         }
+        autoFireSession++
+        val session = autoFireSession
+        autoFireJob?.cancel()
         markExplicitAction()
         _gameState.update { it.copy(autoFireActive = true) }
         // Sound first, bullets second: the gun is already firing the moment
         // the hand goes down.
         startPlayerHoldLoop()
-        autoFireJob?.cancel()
+        val cadenceMs = AutomaticFirePowerMap.intervalFor(weapon) ?: weapon.burstIntervalMs
         autoFireJob = viewModelScope.launch {
-            while (holdFireAllowed()) {
+            var nextShotAtMs = battleClock.nowMs()
+            while (session == autoFireSession && holdFireAllowed()) {
                 fireOneAutomaticShot()
-                battleClock.awaitDelay(weapon.burstIntervalMs)
+                nextShotAtMs += cadenceMs
+                val nowMs = battleClock.nowMs()
+                // Do not create a tight catch-up loop after a busy UI frame.
+                if (nextShotAtMs <= nowMs) nextShotAtMs = nowMs + cadenceMs
+                battleClock.awaitDelay(nextShotAtMs - nowMs)
             }
-            stopHoldFire()
+            if (session == autoFireSession) stopHoldFire()
         }
     }
 
@@ -3642,6 +3643,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * immediately, with no tail and no silence in between.
      */
     fun stopHoldFire() {
+        autoFireSession++
         autoFireJob?.cancel()
         autoFireJob = null
         val state = _gameState.value
@@ -3662,15 +3664,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (!holdFireAllowed()) return
         val state = _gameState.value
         val weapon = state.activeWeapon
-        // Watchdog: the trigger is still down, so the loop must be audible.
-        // Re-arming it here restores a burst that a stalled stream may have
-        // interrupted, and refreshes the distance gain while the fighters
-        // move. A loop that is not held is never re-armed by anything.
-        if (!audioManager.isWeaponLoopActive(weapon.fireSoundKey)) {
-            startPlayerHoldLoop()
-        } else {
-            audioManager.refreshWeaponLoop(weapon.fireSoundKey, volume = 1.0f, posZ = -state.distance)
-        }
+        // Idempotent start doubles as the watchdog and positional-gain refresh.
+        // It never adds a second stream and cannot run after holdFireAllowed().
+        startPlayerHoldLoop()
         fire(fromAutomatic = true)
     }
 
@@ -4538,6 +4534,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         bombJob = null
         bombTrackJob?.cancel()
         bombTrackJob = null
+        autoFireSession++
         autoFireJob?.cancel()
         autoFireJob = null
         endingJob?.cancel()
