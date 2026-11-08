@@ -7,7 +7,6 @@ import android.media.MediaPlayer
 import android.media.PlaybackParams
 import android.media.SoundPool
 import android.os.Build
-import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -45,9 +44,10 @@ import kotlin.math.sqrt
  * 2. Managed MediaPlayer Channel Pool for streamed, long audio clips (win, lose, parachute, airplane, music, walk).
  *    Completely prevents SoundPool native buffer starvation, freezing and premature cutoffs.
  *    Every streamed track is generation-guarded and prepared off the UI thread, so a slow prepare never blocks gestures.
- * 3. A firing channel per automatic weapon and per fighter (submachine gun, AK-47, machine gun), created when
- *    that fighter really fires and destroyed the moment he stops. See [WeaponLoopChannel]: the loop's lifetime is
- *    exactly the trigger's lifetime, which is the guarantee that keeps gunfire from ever playing on its own.
+ * 3. A preloaded SoundPool firing channel per automatic weapon and per fighter
+ *    (submachine gun, AK-47, machine gun). [AutomaticWeaponMixer] reuses one
+ *    gapless stream while held and stops it immediately on release; late loads
+ *    are generation-guarded so they can never produce phantom gunfire.
  * 4. 3D Positional Spatial Audio with realistic distance attenuation and azimuth stereo panning.
  * 5. Granular sound management: any sound or screen audio can be stopped instantly at any time.
  * 6. Stabilized mixer: synchronized player access, leak pruning, volume smoothing and rate adaptation ensure
@@ -78,10 +78,9 @@ class AudioManager(private val context: Context) {
             // Progression stings; the round sting alone is 28 seconds long.
             "levelComplete",
             "roundComplete",
-            // The three automatic weapons are never SoundPool samples: their
-            // firing sound is a channel of its own (see [AUTO_LOOP_WEAPONS])
-            // that lives exactly as long as the trigger that opened it, and a
-            // single shot of one of them is a bounded clip streamed on demand.
+            // Automatic requests are intercepted before the generic long-track
+            // path. Their loop samples are preloaded into SoundPool and legacy
+            // single-shot requests use the same bounded AutomaticWeaponMixer.
             "submachineGun",
             "ak47",
             "machineGun",
@@ -324,30 +323,43 @@ class AudioManager(private val context: Context) {
     )
 
     /**
-     * One continuous-fire channel: one owner (the player or Robert) plus one
-     * automatic weapon.
-     *
-     * [desired] is the intent - it is true for exactly as long as that fighter
-     * is firing this weapon, and it is the one and only authority: nothing may
-     * start, keep or resume a player of this channel while it is false.
-     * [tapDeadlineMs] marks a *bounded* burst (one shot of a fighter who is not
-     * holding the trigger): the channel cuts itself off at that moment unless a
-     * real hold takes it over.
-     *
-     * Every field is only ever written while holding [weaponLoopLock].
+     * Automatic weapons use preloaded SoundPool samples, not a MediaPlayer
+     * created for every burst. The mixer owns at most six loop streams (three
+     * weapons for each fighter) and all sample loading remains asynchronous.
      */
-    private class WeaponLoopChannel(
-        val id: String,
-        val owner: String,
-        val soundKey: String
-    ) {
-        @Volatile var desired = false
-        @Volatile var player: MediaPlayer? = null
-        @Volatile var preparing = false
-        @Volatile var left = 1f
-        @Volatile var right = 1f
-        @Volatile var tapDeadlineMs = 0L
-    }
+    private val automaticWeaponMixer = AutomaticWeaponMixer(
+        backend = object : AutomaticAudioBackend {
+            override fun play(sampleId: Int, left: Float, right: Float): Int =
+                synchronized(soundPool) {
+                    try {
+                        soundPool.play(sampleId, left, right, 1, -1, 1.0f)
+                    } catch (_: Exception) {
+                        0
+                    }
+                }
+
+            override fun stop(streamId: Int) {
+                synchronized(soundPool) {
+                    try {
+                        soundPool.stop(streamId)
+                    } catch (_: Exception) {}
+                }
+            }
+
+            override fun setVolume(streamId: Int, left: Float, right: Float) {
+                synchronized(soundPool) {
+                    try {
+                        soundPool.setVolume(streamId, left, right)
+                    } catch (_: Exception) {}
+                }
+            }
+        },
+        scope = audioScope,
+        sampleId = { key -> soundMap[key]?.takeIf { it in loadedSounds } },
+        requestSample = { key -> maybeLoadOnDemand(key) },
+        minimumBurstMs = MIN_BURST_MS,
+        takeoverGraceMs = BURST_TAKEOVER_GRACE_MS
+    )
 
     // Managed MediaPlayers for long / streaming audio
     // Loops are keyed by sound; each one-shot has its own independent player.
@@ -364,8 +376,8 @@ class AudioManager(private val context: Context) {
 
     /**
      * The players [pauseAllSounds] parked, each one tagged with the *owner*
-     * that still wants it: `"track:<key>"` for a streamed track, `"shot:<id>"`
-     * for one independent one-shot and `"loop:<channel>"` for a firing loop.
+     * that still wants it: `"track:<key>"` for a streamed track or `"shot:<id>"`
+     * for one independent one-shot. Automatic loops use SoundPool.autoPause.
      *
      * The tag is not bookkeeping for its own sake - it is the answer to the
      * question "[resumeAllSounds] may I start this again?" A player is only
@@ -388,21 +400,6 @@ class AudioManager(private val context: Context) {
     private val playerGeneration = ConcurrentHashMap<String, Int>()
     private val preparingTracks = ConcurrentHashMap.newKeySet<String>()
     private val trackGains = ConcurrentHashMap<String, Pair<Float, Float>>()
-
-    /**
-     * The continuous-fire channels of the three automatic weapons, one per
-     * owner and weapon (`"player:ak47"`, `"enemy:ak47"`, ...).
-     *
-     * A channel only exists as long as somebody is firing it, and it holds the
-     * single [WeaponLoopChannel.desired] flag that every start in the class
-     * has to pass. That flag is the whole defence against phantom gunfire:
-     * nothing in this file may start a loop unless the fighter asking for it
-     * is still holding that very weapon.
-     */
-    private val weaponLoopChannels = ConcurrentHashMap<String, WeaponLoopChannel>()
-
-    /** Guards every read and write of a channel's intent and player. */
-    private val weaponLoopLock = Any()
 
     /**
      * Serializes `prepare()` of every MediaPlayer of the app (loops, streamed
@@ -579,6 +576,7 @@ class AudioManager(private val context: Context) {
             if (status == 0) {
                 loadedSounds.add(sampleId)
                 if (key != null) {
+                    if (key in AUTO_LOOP_KEYS) automaticWeaponMixer.onSoundReady(key)
                     flushPendingPlays(key)
                 }
             } else if (key != null) {
@@ -596,8 +594,9 @@ class AudioManager(private val context: Context) {
     private fun preloadShortSounds() {
         audioScope.launch {
             for ((key, files) in soundAliases) {
-                // Preload only short SFX into SoundPool. Long audio tracks are streamed via MediaPlayer on-demand.
-                if (key in LONG_TRACK_KEYS) continue
+                // Preload short SFX and the three gapless automatic samples.
+                // Other long tracks are streamed via MediaPlayer on demand.
+                if (key in LONG_TRACK_KEYS && key !in AUTO_LOOP_KEYS) continue
                 loadShortSound(key, files, allowSynthetic = true)
             }
         }
@@ -617,7 +616,10 @@ class AudioManager(private val context: Context) {
                     sampleToKey[soundId] = key
                     // Loading can finish on another thread before the reverse
                     // lookup is registered; do not strand those requests.
-                    if (soundId in loadedSounds) flushPendingPlays(key)
+                    if (soundId in loadedSounds) {
+                        if (key in AUTO_LOOP_KEYS) automaticWeaponMixer.onSoundReady(key)
+                        flushPendingPlays(key)
+                    }
                     return
                 }
             } catch (_: Exception) {}
@@ -630,7 +632,10 @@ class AudioManager(private val context: Context) {
                     if (soundId != 0) {
                         soundMap[key] = soundId
                         sampleToKey[soundId] = key
-                        if (soundId in loadedSounds) flushPendingPlays(key)
+                        if (soundId in loadedSounds) {
+                            if (key in AUTO_LOOP_KEYS) automaticWeaponMixer.onSoundReady(key)
+                            flushPendingPlays(key)
+                        }
                         return
                     }
                 }
@@ -670,7 +675,7 @@ class AudioManager(private val context: Context) {
      * preload pass has mapped it (or after a failed load was cleared).
      */
     private fun maybeLoadOnDemand(key: String) {
-        if (key in LONG_TRACK_KEYS) return
+        if (key in LONG_TRACK_KEYS && key !in AUTO_LOOP_KEYS) return
         if (soundMap.containsKey(key)) return
         val files = soundAliases[key] ?: return
         val attempts = loadAttempts[key] ?: 0
@@ -1077,36 +1082,9 @@ class AudioManager(private val context: Context) {
     private fun canonicalAutoKey(key: String): String? =
         if (key in AUTO_LOOP_KEYS) key else AUTO_LOOP_OF[key]
 
-    /** The one channel of one automatic weapon of one fighter. */
-    private fun loopChannelId(owner: String, key: String): String = "$owner:$key"
-
-    private fun loopChannel(owner: String, key: String): WeaponLoopChannel? =
-        weaponLoopChannels[loopChannelId(owner, key)]
-
     /**
-     * The channel of one weapon of one fighter, created on first use.
-     *
-     * The creation happens under [weaponLoopLock] on purpose: two racing calls
-     * must never end up with two channel objects for the same weapon, because
-     * a stop would then find the one in the map while a player was installed on
-     * the detached other - and a loop nobody can reach is a loop nobody can
-     * stop.
-     */
-    private fun acquireLoopChannel(owner: String, key: String): WeaponLoopChannel =
-        synchronized(weaponLoopLock) {
-            val id = loopChannelId(owner, key)
-            weaponLoopChannels.getOrPut(id) { WeaponLoopChannel(id, owner, key) }
-        }
-
-    private fun loopOwnerTag(channel: WeaponLoopChannel): String = "loop:${channel.id}"
-
-    /**
-     * Starts (or keeps) the continuous-fire loop of [key] for [owner].
-     *
-     * The channel is opened here and closed by exactly one matching stop call,
-     * so "the trigger is down" and "this loop may be audible" are the very
-     * same fact. Nothing in this class starts a firing loop by any other route:
-     * that is what makes phantom gunfire impossible rather than unlikely.
+     * Starts or refreshes one held, gapless automatic-fire stream. Calling this
+     * for every bullet is safe: the mixer reuses the existing stream.
      */
     fun startWeaponLoop(
         key: String,
@@ -1119,16 +1097,14 @@ class AudioManager(private val context: Context) {
         if (released) return
         val canonical = canonicalAutoKey(key)
         if (canonical == null) {
-            // Not an automatic weapon: it owns no firing channel, so it is
-            // played as an ordinary looping track, which has its own stop.
             playLoop(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
             return
         }
         val (left, right) = calculate3dVolume(posX, posY, posZ, volume, canonical)
-        holdChannel(acquireLoopChannel(owner, canonical), left, right)
+        automaticWeaponMixer.start(canonical, owner, left, right)
     }
 
-    /** Held continuous fire of Robert, panned by his real position in the arena. */
+    /** Held continuous fire of Robert, panned by his real arena position. */
     fun startEnemyWeaponLoop(
         key: String,
         volume: Float = 1.0f,
@@ -1146,198 +1122,8 @@ class AudioManager(private val context: Context) {
     }
 
     /**
-     * Marks one channel as wanted and makes it audible.
-     *
-     * The intent and the player are written in one critical section, and every
-     * path that can start a player re-reads that intent inside the same lock.
-     * A released trigger therefore cannot be "un released" by a preparation
-     * that finishes a moment later, which is the race that used to leave a
-     * burst running on its own.
-     */
-    private fun holdChannel(channel: WeaponLoopChannel, left: Float, right: Float) {
-        var mustBuild = false
-        synchronized(weaponLoopLock) {
-            if (released) return
-            channel.left = left.coerceIn(0f, 1f)
-            channel.right = right.coerceIn(0f, 1f)
-            channel.desired = true
-            // A real hold is never cut by the timer of an earlier single shot.
-            channel.tapDeadlineMs = 0L
-            mustBuild = armChannel(channel)
-        }
-        if (mustBuild) buildWeaponLoop(channel)
-    }
-
-    /**
-     * Resumes the player of a wanted channel, or reports that one has to be
-     * built for it. A player that answers at all is reused; a dead one is
-     * destroyed and rebuilt. The caller must hold [weaponLoopLock].
-     */
-    private fun armChannel(channel: WeaponLoopChannel): Boolean {
-        val player = channel.player
-        if (player != null) {
-            if (reviveChannelPlayer(channel, player)) return false
-            channel.player = null
-            safeRelease(player)
-        }
-        if (channel.preparing) return false
-        channel.preparing = true
-        return true
-    }
-
-    /**
-     * Starts the player of a channel that is wanted right now. While the game
-     * is paused the player is only *registered* as wanted (tagged with this
-     * channel), so [resumeAllSounds] may bring it back - and nothing else may.
-     * Returns false when the player is dead and must be rebuilt.
-     */
-    private fun reviveChannelPlayer(channel: WeaponLoopChannel, player: MediaPlayer): Boolean = try {
-        player.setVolume(channel.left, channel.right)
-        if (soundsPaused) {
-            markPaused(player, loopOwnerTag(channel))
-        } else {
-            pausedPlayers.remove(player)
-            if (!player.isPlaying) player.start()
-        }
-        true
-    } catch (_: Exception) {
-        false
-    }
-
-    /**
-     * Prepares the loop player of one channel on the audio thread.
-     *
-     * The preparation may take a few milliseconds, so it is only honoured at
-     * all when, in the very moment the player is ready, the firing that asked
-     * for it is still going: the trigger still down, no player installed
-     * meanwhile. Anything else is released unheard. A loop can therefore never
-     * be born after the shooting that caused it has ended - and a preparation
-     * that a newer hold is waiting for is handed to that hold instead of being
-     * thrown away.
-     */
-    private fun buildWeaponLoop(channel: WeaponLoopChannel) {
-        audioScope.launch {
-            var player: MediaPlayer? = null
-            try {
-                val created = MediaPlayer()
-                player = created
-                val afd = getAssetFd(channel.soundKey)
-                if (afd != null) {
-                    created.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                    try {
-                        afd.close()
-                    } catch (_: Exception) {}
-                } else {
-                    val synth = generateSyntheticSoundFile(channel.soundKey)
-                    if (synth == null) {
-                        safeRelease(created)
-                        player = null
-                        return@launch
-                    }
-                    created.setDataSource(synth.absolutePath)
-                }
-                created.setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_GAME)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-                created.isLooping = true
-                created.setVolume(channel.left, channel.right)
-                created.setOnErrorListener { failed, what, extra ->
-                    Log.w(TAG, "Weapon loop ${channel.id} failed ($what/$extra)")
-                    var dead = false
-                    synchronized(weaponLoopLock) {
-                        if (channel.player === failed) {
-                            channel.player = null
-                            dead = true
-                        }
-                    }
-                    if (dead) safeRelease(failed)
-                    true
-                }
-                if (!acquirePresentationSlot()) {
-                    safeRelease(created)
-                    player = null
-                    return@launch
-                }
-                try {
-                    if (released) {
-                        safeRelease(created)
-                        player = null
-                        return@launch
-                    }
-                    created.prepare()
-                } finally {
-                    presentationLock.unlock()
-                }
-                var installed = false
-                synchronized(weaponLoopLock) {
-                    channel.preparing = false
-                    if (!released && channel.desired && channel.player == null) {
-                        channel.player = created
-                        installed = reviveChannelPlayer(channel, created)
-                    }
-                }
-                if (!installed) {
-                    // Nobody wants this player any more - or it refuses to
-                    // start. It leaves the pipeline here, so no later resume,
-                    // watchdog or stop can ever find a half-alive gun player.
-                    synchronized(weaponLoopLock) {
-                        if (channel.player === created) channel.player = null
-                    }
-                    safeRelease(created)
-                    player = null
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed preparing weapon loop ${channel.id}", e)
-                player?.let { safeRelease(it) }
-                synchronized(weaponLoopLock) {
-                    if (channel.player === player) channel.player = null
-                }
-            } finally {
-                synchronized(weaponLoopLock) { channel.preparing = false }
-            }
-        }
-    }
-
-    /**
-     * Clears the intent of a channel and detaches its player. The caller must
-     * hold [weaponLoopLock]; the returned player belongs to the caller and has
-     * to be released outside the lock.
-     */
-    private fun takeDownChannelLocked(channel: WeaponLoopChannel): MediaPlayer? {
-        channel.desired = false
-        channel.tapDeadlineMs = 0L
-        val dead = channel.player
-        channel.player = null
-        return dead
-    }
-
-    /**
-     * Ends one channel for good. The player is not parked and not paused: it is
-     * stopped and released, so after this call there is no object left that
-     * could ever make this weapon sound again until somebody fires it anew.
-     */
-    private fun releaseChannel(channel: WeaponLoopChannel) {
-        var dead: MediaPlayer? = null
-        synchronized(weaponLoopLock) {
-            dead = takeDownChannelLocked(channel)
-        }
-        dead?.let { safeRelease(it) }
-    }
-
-    /**
-     * One automatic shot that lasts exactly as long as the firing that caused
-     * it, on the channel of the fighter who fired it.
-     *
-     * This is the sound of an automatic weapon that is *not* being held: a tap
-     * of the player, one answer of Robert. The burst recording of the weapon is
-     * opened and hard-closed after [holdMs], so one bullet is heard as one
-     * bullet and nothing is left ringing on its own. Firing the same weapon
-     * again before that moment extends the very same, already-started burst,
-     * which is what keeps real continuous fire seamless without ever letting it
-     * outlive the trigger.
+     * A bounded burst for a tap or a legacy caller. Repeated bursts replace one
+     * timeout; they never accumulate deadline coroutines or native players.
      */
     fun playAutomaticBurst(
         key: String,
@@ -1355,157 +1141,47 @@ class AudioManager(private val context: Context) {
             return
         }
         val (left, right) = calculate3dVolume(posX, posY, posZ, volume, canonical)
-        val channel = acquireLoopChannel(owner, canonical)
-        var mustBuild = false
-        synchronized(weaponLoopLock) {
-            if (released) return
-            channel.left = left.coerceIn(0f, 1f)
-            channel.right = right.coerceIn(0f, 1f)
-            if (channel.desired && channel.tapDeadlineMs <= 0L) {
-                // A real hold owns this channel: a single shot never cuts it
-                // and never restarts it either - it only keeps it audible.
-                channel.player?.let { reviveChannelPlayer(channel, it) }
-                return
-            }
-            val deadline = SystemClock.elapsedRealtime() +
-                holdMs.coerceAtLeast(MIN_BURST_MS) + BURST_TAKEOVER_GRACE_MS
-            val extending = channel.desired && channel.tapDeadlineMs > 0L
-            channel.desired = true
-            // Firing again pushes the cut-off forward: the already-running
-            // burst simply stays open, so a beat-to-beat exchange never hears a
-            // seam, and the guard of the previous shot steps aside by itself.
-            channel.tapDeadlineMs = if (extending) maxOf(channel.tapDeadlineMs, deadline) else deadline
-            mustBuild = armChannel(channel)
-        }
-        if (mustBuild) buildWeaponLoop(channel)
-        guardBurstEnd(channel)
+        automaticWeaponMixer.playBurst(canonical, owner, holdMs, left, right)
     }
 
-    /**
-     * Cuts a bounded burst when its time is up.
-     *
-     * It is the last line of defence against gunfire that outlives its cause:
-     * even if no stop call ever arrives - a lost touch release, a screen that
-     * changed in between, a coroutine that was cancelled mid-burst - the loop
-     * is destroyed at its deadline. A fighter who keeps firing simply pushes
-     * that deadline forward, and a fighter who takes the trigger down for real
-     * clears it, so a genuine hold is never cut by this guard.
-     */
-    private fun guardBurstEnd(channel: WeaponLoopChannel) {
-        audioScope.launch {
-            while (!released) {
-                val deadline = channel.tapDeadlineMs
-                if (deadline <= 0L) return@launch
-                val wait = deadline - SystemClock.elapsedRealtime()
-                if (wait > 0L) {
-                    delay(wait)
-                    continue
-                }
-                var cut = false
-                var dead: MediaPlayer? = null
-                synchronized(weaponLoopLock) {
-                    // Only a deadline that has really passed may cut: a newer
-                    // shot pushed it into the future and owns the channel now.
-                    cut = channel.tapDeadlineMs in 1L..SystemClock.elapsedRealtime()
-                    if (cut) dead = takeDownChannelLocked(channel)
-                }
-                if (!cut) continue
-                dead?.let { safeRelease(it) }
-                return@launch
-            }
-        }
-    }
-
-    /**
-     * Stops the firing loop of one weapon. With no owner both fighters are
-     * cut, which is what a screen change or a weapon switch does; with an
-     * owner only that fighter's own burst ends, so the player's finger never
-     * silences Robert's gun and Robert's answer never silences his.
-     */
+    /** Stops one weapon for one fighter, or for both when [owner] is null. */
     fun stopWeaponLoop(key: String, owner: String? = null) {
         val canonical = canonicalAutoKey(key)
         if (canonical == null) {
             stopSoundInternal(key)
             return
         }
-        val owners = if (owner == null) LOOP_OWNERS else listOf(owner)
-        for (current in owners) {
-            loopChannel(current, canonical)?.let { releaseChannel(it) }
-        }
+        automaticWeaponMixer.stop(canonical, owner)
         if (owner == null) {
-            // A full stop of this weapon also drops every queued or in-flight
-            // copy of the same recording, so lifting a trigger can never leave
-            // one stray burst behind. An owner-scoped stop deliberately does
-            // not: the recorded copies are shared by both fighters, and one
-            // fighter's stop may never mute the other's shot.
             AUTO_LOOP_SHOT_KEYS[canonical]?.let { stopSoundInternal(it) }
             stopSoundInternal(canonical)
         }
     }
 
-    /** Ends one weapon's burst of Robert only - the player keeps firing. */
     fun stopEnemyWeaponLoop(key: String) = stopWeaponLoop(key, LOOP_OWNER_ENEMY)
 
-    /** Ends one weapon's burst of the player only - Robert keeps firing. */
     fun stopPlayerWeaponLoop(key: String) = stopWeaponLoop(key, LOOP_OWNER_PLAYER)
 
-    /** Ends every firing loop of one fighter: his trigger is gone for good. */
-    private fun stopWeaponLoopsOf(owner: String) {
-        for (key in AUTO_LOOP_KEYS) {
-            loopChannel(owner, key)?.let { releaseChannel(it) }
-        }
-    }
+    private fun stopWeaponLoopsOf(owner: String) = automaticWeaponMixer.stopOwner(owner)
 
-    /** Ends the held bursts of the player only - Robert keeps firing his own. */
     fun stopPlayerWeaponLoops() = stopWeaponLoopsOf(LOOP_OWNER_PLAYER)
 
-    /** Ends Robert's bursts only - the player's held trigger is untouched. */
     fun stopEnemyWeaponLoops() = stopWeaponLoopsOf(LOOP_OWNER_ENEMY)
 
-    /** Ends every continuous-fire channel of both fighters. */
-    fun stopWeaponLoops() {
-        for (owner in LOOP_OWNERS) stopWeaponLoopsOf(owner)
-    }
+    fun stopWeaponLoops() = automaticWeaponMixer.stopAll()
 
-    /**
-     * True while the firing loop of [key] really is audible for [owner].
-     *
-     * A loop that nobody is holding is never active - a player that merely
-     * exists, is being prepared or was left parked is explicitly *not* an
-     * answer, because "it exists" was never a proof that somebody wants to hear
-     * it. The battle engine uses this as the watchdog of a held burst.
-     */
+    /** True while this fighter's trigger still owns a playing/loading stream. */
     fun isWeaponLoopActive(key: String, owner: String = LOOP_OWNER_PLAYER): Boolean {
         val canonical = canonicalAutoKey(key) ?: return isTrackActive(key)
-        val channel = loopChannel(owner, canonical) ?: return false
-        if (!channel.desired) return false
-        val now = SystemClock.elapsedRealtime()
-        // A single shot whose time is up is over, even though its cut-off is a
-        // millisecond away: a burst that is about to die must never be reported
-        // as still firing.
-        if (channel.tapDeadlineMs in 1L..now) return false
-        if (channel.preparing) return true
-        val player = channel.player ?: return false
-        return try {
-            player.isPlaying
-        } catch (_: Exception) {
-            false
-        }
+        return automaticWeaponMixer.isActive(canonical, owner)
     }
 
-    /**
-     * True while any fighter is firing an automatic weapon - that is, while a
-     * firing loop is legitimately allowed to be audible. Outside a battle this
-     * must always be false, and [stopWeaponSounds] is what guarantees it.
-     */
-    fun isAnyWeaponLoopActive(): Boolean = weaponLoopChannels.values.any { it.desired }
+    fun isAnyWeaponLoopActive(): Boolean = automaticWeaponMixer.isAnyActive()
 
-    /** Live level of a running loop (the distance to the enemy can change). */
     fun refreshWeaponLoop(key: String, volume: Float = 1.0f, posZ: Float = 0f) {
         refreshLoop(key, LOOP_OWNER_PLAYER, 0f, 0f, posZ, volume)
     }
 
-    /** The same for Robert: his burst follows his real position in the arena. */
     fun refreshEnemyWeaponLoop(
         key: String,
         volume: Float = 1.0f,
@@ -1524,74 +1200,20 @@ class AudioManager(private val context: Context) {
         volume: Float
     ) {
         val canonical = canonicalAutoKey(key) ?: return
-        val channel = loopChannel(owner, canonical) ?: return
         val (left, right) = calculate3dVolume(posX, posY, posZ, volume, canonical)
-        var dead: MediaPlayer? = null
-        synchronized(weaponLoopLock) {
-            if (!channel.desired) return
-            channel.left = left.coerceIn(0f, 1f)
-            channel.right = right.coerceIn(0f, 1f)
-            val player = channel.player
-            if (player != null) {
-                try {
-                    player.setVolume(channel.left, channel.right)
-                } catch (_: Exception) {
-                    channel.player = null
-                    dead = player
-                }
-            }
-        }
-        dead?.let { safeRelease(it) }
-    }
-
-    /**
-     * Self-healing pass: a channel that is not wanted must not hold a player.
-     * Called after every bulk stop, so even a stop that raced with a background
-     * preparation cannot leave a live looping player of an automatic weapon
-     * behind.
-     */
-    private fun sweepOrphanLoops() {
-        val orphans = ArrayList<MediaPlayer>()
-        synchronized(weaponLoopLock) {
-            for (channel in weaponLoopChannels.values) {
-                if (channel.desired) continue
-                channel.tapDeadlineMs = 0L
-                channel.player?.let { player ->
-                    channel.player = null
-                    orphans.add(player)
-                }
-            }
-        }
-        orphans.forEach { safeRelease(it) }
-    }
-
-    /** Drops every loop channel (full shutdown). */
-    private fun releaseWeaponLoops() {
-        val all = ArrayList<MediaPlayer>()
-        synchronized(weaponLoopLock) {
-            for (channel in weaponLoopChannels.values) {
-                channel.desired = false
-                channel.tapDeadlineMs = 0L
-                channel.player?.let { player ->
-                    channel.player = null
-                    all.add(player)
-                }
-            }
-            weaponLoopChannels.clear()
-        }
-        all.forEach { safeRelease(it) }
+        automaticWeaponMixer.refresh(canonical, owner, left, right)
     }
 
     /** Cuts every weapon sound that is still playing, loops included. */
     fun stopWeaponSounds() {
-        // Channels first: they own dedicated players that only this path
-        // destroys, and no burst may survive a screen change.
         stopWeaponLoops()
         for (weaponKey in WEAPON_SOUND_KEYS + AUTO_WEAPON_KEYS) {
             stopSoundInternal(weaponKey)
         }
-        sweepOrphanLoops()
     }
+
+    /** Full mixer shutdown. Ordinary battle stops use [stopWeaponLoops] instead. */
+    private fun releaseWeaponLoops() = automaticWeaponMixer.release()
 
     /**
      * Live footstep mix state: when each track last refreshed its volume
@@ -1870,9 +1492,8 @@ class AudioManager(private val context: Context) {
     /**
      * Independent long one-shots, including overlapping copies of the same key.
      *
-     * Returns the id of the registered shot, so the caller can cut exactly this
-     * one instance later (see [scheduleShotCut]) without touching any other copy
-     * of the same recording. The request is registered *before* it is prepared:
+     * Returns the id of the registered shot. The request is registered before
+     * it is prepared, so a matching key stop also cancels an in-flight request:
      * cancelling it by id while it is still loading therefore removes the
      * request itself, and a shot can never appear a moment after it was called
      * off.
@@ -1976,27 +1597,6 @@ class AudioManager(private val context: Context) {
     }
 
     /**
-     * Cuts one registered shot after [afterMs], whatever else happens. This is
-     * how an automatic weapon - whose recording is a burst seconds longer than
-     * the single shot it stands for - is made to stop with the firing that asked
-     * for it instead of ringing to the end of the clip.
-     */
-    private fun scheduleShotCut(id: Long, afterMs: Long) {
-        audioScope.launch {
-            delay(afterMs.coerceAtLeast(MIN_BURST_MS))
-            if (released) return@launch
-            stopShot(id)
-        }
-    }
-
-    /** Releases one specific independent shot, if it is still running. */
-    private fun stopShot(id: Long) {
-        var shot: ManagedShot? = null
-        synchronized(playerLock) { shot = managedShots.remove(id) }
-        shot?.player?.let { safeRelease(it) }
-    }
-
-    /**
      * Plays one recorded clip of an automatic weapon as a *bounded* one-shot.
      *
      * Every automatic key that arrives outside a fighter's own firing channel -
@@ -2019,9 +1619,17 @@ class AudioManager(private val context: Context) {
             playSound(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
             return
         }
-        val shotKey = loopKey?.let { AUTO_LOOP_SHOT_KEYS[it] } ?: key
-        val id = playManagedOneShot(shotKey, volume, posX, posY, posZ, 1.0f)
-        if (id > 0L) scheduleShotCut(id, maxMs)
+        val canonical = loopKey ?: AUTO_LOOP_OF[key] ?: return
+        val (left, right) = calculate3dVolume(posX, posY, posZ, volume, canonical)
+        // Even a stray/legacy request stays inside the trigger-aware mixer.
+        // There is no unmanaged MediaPlayer clip that can outlive a release.
+        automaticWeaponMixer.playBurst(
+            canonical,
+            LOOP_OWNER_PLAYER,
+            maxMs,
+            left,
+            right
+        )
     }
 
     /** Marks a player as parked by [pauseAllSounds] under the given owner tag. */
@@ -2032,11 +1640,9 @@ class AudioManager(private val context: Context) {
     /**
      * Whether the owner that parked [player] still wants to hear it.
      *
-     * A track is wanted while it is still the current player of its key, a shot
-     * while it is still the player of a live shot, and a firing loop only while
-     * that very fighter is still firing that very weapon. Anything else is
-     * dropped for good - which is exactly what makes it impossible for an
-     * unpausing battle to fill the game with gunfire nobody asked for.
+     * A track is wanted while it is still the current player of its key and a
+     * shot while it is still the player of a live shot. Automatic weapon loops
+     * are SoundPool streams and are guarded separately by their mixer intent.
      */
     private fun isPlayerStillWanted(player: MediaPlayer): Boolean =
         when (val owner = pausedPlayers[player]) {
@@ -2046,10 +1652,6 @@ class AudioManager(private val context: Context) {
                     managedPlayers[owner.removePrefix("track:")] === player
                 owner.startsWith("shot:") ->
                     managedShots[owner.removePrefix("shot:").toLongOrNull()]?.player === player
-                owner.startsWith("loop:") -> {
-                    val channel = weaponLoopChannels[owner.removePrefix("loop:")]
-                    channel != null && channel.desired && channel.player === player
-                }
                 else -> false
             }
         }
@@ -2060,6 +1662,7 @@ class AudioManager(private val context: Context) {
             if (soundsPaused) return
             soundsPaused = true
             audioPausedAtMs = System.currentTimeMillis()
+            automaticWeaponMixer.pause()
             try { soundPool.autoPause() } catch (_: Exception) {}
             managedPlayers.forEach { (key, player) ->
                 try { if (player.isPlaying) markPaused(player, "track:$key") } catch (_: Exception) {}
@@ -2069,18 +1672,6 @@ class AudioManager(private val context: Context) {
                 // not parked: the resume starts nothing that was not playing.
                 val player = shot.player ?: return@forEach
                 try { if (player.isPlaying) markPaused(player, "shot:$id") } catch (_: Exception) {}
-            }
-            // Only a loop whose trigger is really down is parked for a resume.
-            // A channel that is not wanted has no business surviving a pause -
-            // and a released burst is destroyed anyway, so none is ever left.
-            synchronized(weaponLoopLock) {
-                for (channel in weaponLoopChannels.values) {
-                    if (!channel.desired) continue
-                    val player = channel.player ?: continue
-                    try {
-                        if (player.isPlaying) markPaused(player, loopOwnerTag(channel))
-                    } catch (_: Exception) {}
-                }
             }
         }
     }
@@ -2105,6 +1696,7 @@ class AudioManager(private val context: Context) {
             }
             soundsPaused = false
             try { soundPool.autoResume() } catch (_: Exception) {}
+            automaticWeaponMixer.resume()
             for (player in pausedPlayers.keys.toList()) {
                 if (!isPlayerStillWanted(player)) {
                     doomed.add(player)

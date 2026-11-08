@@ -2,6 +2,7 @@ package com.blindtechnexus.openfire
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
+import com.blindtechnexus.openfire.audio.AudioManager
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.Inventory
@@ -131,6 +132,32 @@ class EnemyBattleIntegrationTest {
                 invoke(vm, "robertAfterHit", 0)
                 assertEquals("advance", state.value.robertState)
             }
+        } finally {
+            invoke(vm, "stopTimers")
+            vm.onAppPaused()
+            vm.audioManager.release()
+            vm.ttsManager.shutdown()
+        }
+    }
+
+    @Test
+    fun enemyAutomaticFireIsHeldOnItsOwnChannelAndStopsOnReleaseOrWeaponChange() {
+        val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
+        try {
+            flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            invoke(vm, "playEnemyFireSound", Weapon.AK47)
+            assertTrue(vm.audioManager.isWeaponLoopActive("ak47", AudioManager.LOOP_OWNER_ENEMY))
+            assertFalse(vm.audioManager.isWeaponLoopActive("ak47", AudioManager.LOOP_OWNER_PLAYER))
+
+            // Repeated bullet ticks reuse the channel. Changing guns releases
+            // the old gun before opening the new one.
+            invoke(vm, "playEnemyFireSound", Weapon.AK47)
+            invoke(vm, "playEnemyFireSound", Weapon.MACHINE_GUN)
+            assertFalse(vm.audioManager.isWeaponLoopActive("ak47", AudioManager.LOOP_OWNER_ENEMY))
+            assertTrue(vm.audioManager.isWeaponLoopActive("machineGun", AudioManager.LOOP_OWNER_ENEMY))
+
+            invoke(vm, "stopEnemyFireSound")
+            assertFalse(vm.audioManager.isAnyWeaponLoopActive())
         } finally {
             invoke(vm, "stopTimers")
             vm.onAppPaused()

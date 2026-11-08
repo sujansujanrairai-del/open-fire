@@ -37,16 +37,19 @@ class AudioLoopLifecycleTest {
     private val automatic = listOf("submachineGun", "ak47", "machineGun")
 
     @Suppress("UNCHECKED_CAST")
-    private fun channels(audio: AudioManager): Collection<Any> =
-        (AudioManager::class.java.getDeclaredField("weaponLoopChannels").apply { isAccessible = true }
-            .get(audio) as ConcurrentHashMap<String, Any>).values
+    private fun channels(audio: AudioManager): Collection<Any> {
+        val mixer = AudioManager::class.java.getDeclaredField("automaticWeaponMixer")
+            .apply { isAccessible = true }.get(audio)
+        return (mixer.javaClass.getDeclaredField("channels").apply { isAccessible = true }
+            .get(mixer) as ConcurrentHashMap<String, Any>).values
+    }
 
     private fun fieldOf(channel: Any, name: String): Any? =
         channel.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(channel)
 
-    /** How many looping players of an automatic weapon exist right now. */
+    /** How many native looping streams of an automatic weapon exist right now. */
     private fun liveLoopPlayers(audio: AudioManager): Int =
-        channels(audio).count { fieldOf(it, "player") != null }
+        channels(audio).count { (fieldOf(it, "streamId") as Int) != 0 }
 
     /** How many fighters are firing an automatic weapon right now. */
     private fun heldChannels(audio: AudioManager): Int =
@@ -187,11 +190,14 @@ class AudioLoopLifecycleTest {
             audio.stopPlayerWeaponLoops()
             assertEquals(0, heldChannels(audio))
 
-            // A stray request for an automatic recording - a menu, a queued
-            // play, a feint - plays a bounded clip and never opens a channel.
+            // Legacy requests also enter the same bounded mixer rather than
+            // creating an unmanaged MediaPlayer. They never create a second
+            // overlapping stream and are cut by the fighter's own release.
             audio.playSound("ak47Shot")
             audio.playSound("ak47")
             audio.playLoop("ak47Shot")
+            assertEquals(1, heldChannels(audio))
+            audio.stopPlayerWeaponLoops()
             assertEquals(0, heldChannels(audio))
             // A tapped automatic weapon does open one, and the fighter's own
             // stop is what closes it again.
