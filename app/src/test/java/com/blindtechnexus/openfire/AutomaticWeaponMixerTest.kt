@@ -37,7 +37,7 @@ class AutomaticWeaponMixerTest {
         }
 
         override fun setVolume(streamId: Int, left: Float, right: Float) {
-            volumes += Triple(stream, left, right)
+            volumes += Triple(streamId, left, right)
         }
     }
 
