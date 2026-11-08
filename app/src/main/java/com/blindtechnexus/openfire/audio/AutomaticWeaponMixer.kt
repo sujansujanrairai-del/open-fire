@@ -266,6 +266,9 @@ internal class AutomaticWeaponMixer(
         channel.attempts++
         channel.retryJob = scope.launch {
             delay(RETRY_DELAY_MS)
+            // The current retry is active while it runs. Clear its slot before
+            // requesting the next attempt, otherwise it suppresses itself.
+            synchronized(lock) { channel.retryJob = null }
             start(StartRequest(channel, generation))
         }
     }
