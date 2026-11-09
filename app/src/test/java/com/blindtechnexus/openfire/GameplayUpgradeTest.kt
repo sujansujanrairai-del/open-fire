@@ -157,7 +157,7 @@ class GameplayUpgradeTest {
     fun weaponSoundKeysAreRecognisedAndNoStrayAliasesRemain() {
         for (key in listOf(
             "assault", "shortGun", "pistol", "sniperRifle", "awm",
-            "mp40", "m10", "submachineGun", "ak47", "machineGun",
+            "m10", "submachineGun", "ak47", "machineGun",
             "knifeSwish", "knifeMiss", "swordGlide", "swordMiss",
             "glueWallBreaker"
         )) {

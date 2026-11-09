@@ -448,7 +448,22 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "Version 2.6",
+                text = "Version 2.7",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            listOf(
+                "release27Mp40", "release27EnemyWeapons", "release27Loop",
+                "release27Mixing", "release27Retreat", "release27Guide"
+            ).forEach { key ->
+                Text(text = "• ${viewModel.t(key)}", color = Color.White, modifier = Modifier.padding(vertical = 3.dp))
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = "Version 2.6 (historical)",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = WarnBright,
@@ -491,7 +506,7 @@ fun ChangelogScreen(viewModel: GameViewModel) {
                 "Enemy walls and breakers are limited per match: the moment you raise a gloo wall Robert raises one of his own and arms his own Gloo Wall Breaker, which he then fires automatically at your wall. Round one allows one wall and one breaker use, round two allows two of each.",
                 "Automatic aiming: shots can hit Robert within the weapon’s effective distance regardless of which way you or he last ran. Movement still changes position and the direction reported in status; walls and cover still block shots.",
                 "The battlefield is now a 25 metre square, 25 by 25 metres, with left, right, forward and backward movement and real 3D positional audio: an enemy on the right half of the square is heard in the right ear and one running at you simply grows louder.",
-                "Audio mixing: firing the same weapon again still cuts its own previous shot, but two different weapons now really mix together, and every footstep, hit and explosion keeps its own channel. The MP40 fires every 0.2 seconds and the machine gun every 0.12 seconds.",
+                "Audio mixing: firing the same weapon again still cuts its own previous shot, but two different weapons now really mix together, and every footstep, hit and explosion keeps its own channel. The submachine gun fires every 0.5 seconds and the machine gun every 1.5 seconds.",
                 "Max Speed is now maximum speed: with the extension on, the fast level is pushed to 2.2 times the normal speed - the absolute maximum - and the footsteps follow at the top of their playback range. Robert's own fastest speed mode unlocks automatically from round three.",
                 "Bombs are scaled to the new square: the blast and the timer bomb safety line are 12 metres, so the timer bomb thrower has a real escape race inside the 25 metre battlefield."
             )
@@ -522,10 +537,10 @@ fun ChangelogScreen(viewModel: GameViewModel) {
                 "The final round keeps its seven minute limit: if Robert survives that long you lose the game. A defeat still costs 20 coins unless you have none, and the timer bomb picker still freezes all enemy fire until you confirm or cancel it.",
                 "Wall sound fixed: the dedicated wall-hit.mp3 is the one and only boundary impact, it belongs to the player alone and it plays once when a run is first stopped, so holding a finger against a wall can no longer smear it into a continuous, stretched noise.",
                 "Robert never touches a wall again. Every one of his steps is simulated against the four boundaries before he takes it: the moment a heading would bring him near a boundary he cuts sideways, turns back or runs at the open middle of the zone, silently. The repeated and stretched wall sound on the enemy side is gone for good.",
-                "Machine gun and MP40 fire is now one truly gapless loop: the gun sound starts on the very instant of the hold, it never breaks between two repeats and no enemy shot can cut it. Lifting the hand pauses it in the same millisecond and the next hold resumes it instantly; a held burst now lasts as long as the trigger and the magazine allow.",
+                "Machine gun fire is now one truly gapless loop: the gun sound starts on the very instant of the hold, it never breaks between two repeats and no enemy shot can cut it. Lifting the hand pauses it in the same millisecond and the next hold resumes it instantly; a held burst now lasts as long as the trigger and the magazine allow.",
                 "Robert now answers with your own trigger speed: face to face with no cover, with only a cover, or with only a gloo wall between you, he fires at exactly your cadence - half a second, a quarter of a second, whatever he hears. Coverless against a covered player he never waits longer than one second and matches any faster rate at once. A raised gloo wall is always detected and answered with his own Gloo Wall Breaker.",
                 "Round one mirrors your pistol: the moment you own one, Robert carries one too. The sniper rifle is never mirrored any more. A gloo wall of yours allows him one gloo wall per game, and from round two he always carries two.",
-                "Weapon powers were rebalanced upward by capacity and now reach the full 40 point ceiling: knife 0, 8, 12 and 14; shotgun 0, 6, 11 and 16; assault rifle 0, 8, 13 and 18; pistol 0, 9, 14 and 20; sniper rifle 0, 10, 16 and 22; sword 0, 10, 16 and 22; AWM 14, 16, 26 and 40; MP40 0, 5, 8 and 11; machine gun 0, 7, 11 and 15. The AWM long range hit is 14 health points and the new Max Speed extension for 300 coins makes you run 30 percent faster than the speed level you selected.",
+                "Weapon powers were rebalanced upward by capacity and now reach the full 40 point ceiling: knife 0, 8, 12 and 14; shotgun 0, 6, 11 and 16; assault rifle 0, 8, 13 and 18; pistol 0, 9, 14 and 20; sniper rifle 0, 10, 16 and 22; sword 0, 10, 16 and 22; AWM 14, 16, 26 and 40; machine gun 0, 7, 11 and 15. The AWM long range hit is 14 health points and the new Max Speed extension for 300 coins makes you run 30 percent faster than the speed level you selected.",
                 "Enemy combat rebuilt: one hit and Robert fires straight back at once; two hits in a row, or simply out-firing him, and he sprints right across the 25 metre square at twice your own top running speed before flanking you from a new angle. Raise a gloo wall he cannot break and he refuses the fight entirely and runs away until the wall drops. The 'the enemy holds his fire while you choose the timer' prompt is no longer spoken over the timer itself."
             )
             latestNotes.forEach { note ->
@@ -562,7 +577,7 @@ fun ChangelogScreen(viewModel: GameViewModel) {
                 "Retreat logic: Robert retreats when he took significant damage, when the position is unsafe, or when you have a Gloo Wall up and he has no Gloo Wall Breaker charge left - then he avoids you until the wall drops.",
                 "Round 5 strategy over stats: both sides fight with equal power and only tactics decide the win.",
                 "Distinct end-game sounds: level completion plays only level-complete, round completion plays only round-complete, a normal victory plays win and a defeat plays lose - they are never mixed together.",
-                "MP40 loop stabilized: the hold-to-fire sound now runs stably as streamed audio until you release the swipe, with proper cleanup on release.",
+                "Hold-to-fire loops stabilized: the sound now runs stably as streamed audio until you release the swipe, with proper cleanup on release.",
                 "Stable sound mixer: long sounds such as missiles, bombs, timer countdowns and progression stings are streamed via the enhanced player, prepared in the background, retried on failure, and fully stopped on screen changes."
             )
             v23Notes.forEach { note ->
@@ -594,10 +609,10 @@ fun ChangelogScreen(viewModel: GameViewModel) {
                 "Running speeds: swipe right with three fingers for one step faster and left for one step slower. The three levels are slow, normal (the default) and fast, and the fast level matches Robert's own fast fleeing speed for the round exactly. Your running sound now follows the level too: louder and quicker when fast, quieter and dragged when slow.",
                 "A real 25 metre square battlefield with four boundaries. Running into one stops you completely, plays the wall impact sound and speaks Wall; nobody can leave the perimeter. Robert detects the same walls, turns back towards the open middle and then fights on.",
                 "The center portion of the battle screen is split in two halves: hold the left half to run left and the right half to run right, so all four directions are reachable. Your own and Robert's real positions are shown and spoken in the status.",
-                "Damage table: one single table now drives every hit, in percent of maximum health. Knife 0/5/8/10, shotgun 0/5/8/12, assault rifle 0/7/10/14, pistol 0/7/11/15, sniper rifle 0/8/12/16, sword 0/8/12/16, AWM 10/12/18/24, MP40 0/4/6/8 and machine gun 0/5/8/11. No normal weapon takes more than 40 percent in one hit, so a burst can no longer erase an enemy while you lose two percent.",
+                "Damage table: one single table now drives every hit, in percent of maximum health. Knife 0/5/8/10, shotgun 0/5/8/12, assault rifle 0/7/10/14, pistol 0/7/11/15, sniper rifle 0/8/12/16, sword 0/8/12/16, AWM 10/12/18/24 and machine gun 0/5/8/11. No normal weapon takes more than 40 percent in one hit, so a burst can no longer erase an enemy while you lose two percent.",
                 "The AWM is the long-range rifle: inside the 20 to 40 percent band, where everything else misses, it still lands for 10 percent of maximum health and never less than 10 health.",
-                "New weapons by round: MP40 (900) and AWM (1400) unlock and are issued free in round two, the grenade (700) is issued free in round three while the atom bomb (2400) and timer bomb (2000) are shop weapons, and the machine gun (1900) unlocks in round four and is never a reward. Robert receives the MP40 in round two, the AWM and his bombs in round three, and the machine gun in round four.",
-                "Submachine guns: hold the up-swipe and the MP40 fires one bullet every half second for up to four seconds and the machine gun one bullet every 0.4 seconds for up to five, with the gun sound looped for the whole burst. Lifting the finger stops the bullets and the sound together, at any moment. Robert answers a closing MP40 with his own MP40 automatically.",
+                "New weapons by round: the AWM (1400) unlocks and is issued free in round two, the grenade (700) is issued free in round three while the atom bomb (2400) and timer bomb (2000) are shop weapons, and the machine gun (1900) unlocks in round four and is never a reward. Robert receives the AWM and his bombs in round three.",
+                "Submachine guns: hold the up-swipe and the gun fires one bullet per beat for as long as the trigger is held, with the gun sound looped for the whole burst. Lifting the finger stops the bullets and the sound together, at any moment.",
                 "Bombs: thrown at a fixed destination and only destructive inside 12 metres. A target with no anti-bomb explosive sprints for the safety line, so the atom bomb usually catches him, the grenade is a photo finish decided by walls, and a timer bomb always lets him out.",
                 "Timer bomb: swipe up speaks Select your timer, swipe right or left walks through 15, 30, 40, 50 and 60 seconds and a tap throws it. The timer sound loops for the whole countdown, then the explosion plays. Stay at least 12 metres away or both fighters are destroyed and you lose. The bomb destination is shown and spoken next to the enemy health.",
                 "Anti-bomb explosive defence (2600 coins, after round two): deploy it while an enemy bomb is in the air and it destroys that bomb, with the explosion still playing. Robert carries one per game from round three and deploys it automatically the moment he hears your bomb, never twice in the same game.",
@@ -607,7 +622,7 @@ fun ChangelogScreen(viewModel: GameViewModel) {
                 "Gloo wall tactics: with no Gloo Wall Breaker charge left Robert flees and refuses to approach until your gloo wall drops; with a charge he closes in and fires continuously at the wall, and he raises a cover first when he has one.",
                 "The gloo wall and the cover are mutually exclusive: activating one while the other is up consumes nothing and simply tells you which one is already activated.",
                 "Shop: an Enable / Disable button under every weapon row, below buy and remove. A disabled weapon is never issued at the start of a battle and is skipped by the left and right weapon swipes until you enable it again.",
-                "Balanced prices: every weapon 200 coins cheaper, every defence 200 coins cheaper and every extension 50 coins cheaper. Knife 300, pistol 550, sword 750, MP40 900, sniper rifle 1000, AWM 1400, machine gun 1900, grenade 700, timer bomb 2000, atom bomb 2400, missile 3300, missile power 1600, medikit 300, cover 450, gloo wall 650, anti-missile 2800, anti-bomb 2600 and extensions 100, 190, 250 and 250.",
+                "Balanced prices: every weapon 200 coins cheaper, every defence 200 coins cheaper and every extension 50 coins cheaper. Knife 300, pistol 550, sword 750, sniper rifle 1000, AWM 1400, machine gun 1900, grenade 700, timer bomb 2000, atom bomb 2400, missile 3300, missile power 1600, medikit 300, cover 450, gloo wall 650, anti-missile 2800, anti-bomb 2600 and extensions 100, 190, 250 and 250.",
                 "Menu protection now costs 2 percent of maximum health per hit and expires by itself after six seconds, so browsing the quick menu is safe but can never become invulnerability.",
                 "Sound engine rebuilt for smooth playback on every device: long sounds such as the missile, bombs, timer countdown and the progression stings are streamed and prepared in the background instead of loaded into the small sound pool, refused streams are retried automatically, and every projectile sound stops at once on a screen change.",
                 "The complete user guide was rewritten in English, Hindi and Nepali for the whole new game structure."

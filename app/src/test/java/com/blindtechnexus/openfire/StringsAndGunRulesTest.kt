@@ -54,13 +54,12 @@ class StringsAndGunRulesTest {
         }
         // The new weapons carry their own magazines.
         assertEquals(5, Weapon.AWM.magazine)
-        assertEquals(20, Weapon.MP40.magazine)
         assertEquals(8, Weapon.M10.magazine)
         assertEquals(40, Weapon.SUBMACHINE_GUN.magazine)
         assertEquals(30, Weapon.AK47.magazine)
         assertEquals(50, Weapon.MACHINE_GUN.magazine)
         for (weapon in listOf(
-            Weapon.AWM, Weapon.MP40, Weapon.M10,
+            Weapon.AWM, Weapon.M10,
             Weapon.SUBMACHINE_GUN, Weapon.AK47, Weapon.MACHINE_GUN
         )) assertTrue("${weapon.id} must reload", weapon.needsReload)
 
@@ -87,7 +86,7 @@ class StringsAndGunRulesTest {
         // launcher: nothing slipped through untested.
         val counted = listOf(
             Weapon.SHORT_GUN, Weapon.ASSAULT_GUN, Weapon.PISTOL, Weapon.SNIPER,
-            Weapon.GLUE_BREAKER, Weapon.AWM, Weapon.MP40, Weapon.M10,
+            Weapon.GLUE_BREAKER, Weapon.AWM, Weapon.M10,
             Weapon.SUBMACHINE_GUN, Weapon.AK47, Weapon.MACHINE_GUN
         ) + Weapon.entries.filter { it.melee } +
             Weapon.entries.filter { it.bomb } + Weapon.MISSILE
@@ -99,7 +98,7 @@ class StringsAndGunRulesTest {
         val prices = mapOf(
             Weapon.KNIFE to 220, Weapon.PISTOL to 450, Weapon.GRENADE to 600,
             Weapon.M10 to 600, Weapon.SWORD to 650, Weapon.GLUE_BREAKER to 750,
-            Weapon.MP40 to 800, Weapon.SNIPER to 850, Weapon.SUBMACHINE_GUN to 900,
+            Weapon.SNIPER to 850, Weapon.SUBMACHINE_GUN to 900,
             Weapon.AWM to 1200, Weapon.AK47 to 1250, Weapon.MACHINE_GUN to 1700,
             Weapon.TIMER_BOMB to 1700, Weapon.ATOM_BOMB to 2000, Weapon.MISSILE to 2200
         )

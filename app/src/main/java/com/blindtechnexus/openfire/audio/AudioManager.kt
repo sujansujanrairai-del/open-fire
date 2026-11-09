@@ -211,7 +211,6 @@ class AudioManager(private val context: Context) {
             "sniperRifle",
             "glueWallBreaker",
             "awm",
-            "mp40",
             "m10",
             "submachineGun",
             "ak47",
@@ -238,6 +237,35 @@ class AudioManager(private val context: Context) {
          * preparing a dozen of them at once and freezing playback.
          */
         private const val PRESENTATION_WAIT_MS = 400L
+
+        /**
+         * Total stream budget of the pool.
+         *
+         * Two held weapon loops exist at most (one per fighter), each of them
+         * on a priority above every effect. The remaining streams carry the
+         * one-shot effects: footsteps, hits, explosions, menu clicks.
+         */
+        const val MAX_SFX_STREAMS = 48
+
+        /**
+         * How many streams the one-shot effects may hold at once. The rest of
+         * [MAX_SFX_STREAMS] is reserved for the held weapon loops, so a dense
+         * hit pattern can never starve - and therefore cut - a continuous
+         * machine-gun burst.
+         */
+        const val SFX_STREAM_BUDGET = MAX_SFX_STREAMS - 8
+
+        /** Pool priority of a held weapon loop: above every one-shot effect. */
+        const val LOOP_STREAM_PRIORITY = 5
+
+        /** Pool priority of one-shot effects. */
+        const val SFX_STREAM_PRIORITY = 1
+
+        /** Assumed length of an effect whose recording length is unknown. */
+        const val DEFAULT_SFX_LENGTH_MS = 2_000L
+
+        /** Extra time a stream is assumed to sound after its recording ends. */
+        const val SFX_DEADLINE_SLACK_MS = 250L
 
         /** Delay before a refused stream is retried once. */
         private const val STREAM_RETRY_DELAY_MS = 90L
@@ -288,8 +316,17 @@ class AudioManager(private val context: Context) {
     @Volatile
     private var released = false
 
+    /**
+     * Stream budget of the pool.
+     *
+     * [MAX_SFX_STREAMS] is the real limit handed to SoundPool. The extra room
+     * above [SFX_STREAM_BUDGET] is a hard reserve for the held weapon loops: a
+     * continuous machine-gun burst must never lose its stream to a flood of
+     * hit sounds, so the one-shot effects are kept inside their own budget and
+     * the loops always have a free stream of their own.
+     */
     private val soundPool: SoundPool = SoundPool.Builder()
-        .setMaxStreams(48)
+        .setMaxStreams(MAX_SFX_STREAMS)
         .setAudioAttributes(
             AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_GAME)
@@ -302,6 +339,13 @@ class AudioManager(private val context: Context) {
     private val soundMap = ConcurrentHashMap<String, Int>()
     private val loadedSounds = ConcurrentHashMap.newKeySet<Int>()
     private val activeSfxStreams = ConcurrentHashMap<String, MutableSet<Int>>()
+
+    /**
+     * Deadline of every one-shot stream currently counted against
+     * [SFX_STREAM_BUDGET], and the lock that keeps the effect ledger atomic.
+     */
+    private val sfxStreamDeadlines = ConcurrentHashMap<Int, Long>()
+    private val sfxBudgetLock = Any()
 
     // Reliable playback pipeline: map every sample id back to its key, count
     // load attempts for retries, and queue play requests that arrive while a
@@ -329,10 +373,18 @@ class AudioManager(private val context: Context) {
      */
     private val automaticWeaponMixer = AutomaticWeaponMixer(
         backend = object : AutomaticAudioBackend {
-            override fun play(sampleId: Int, left: Float, right: Float): Int =
+            override fun play(
+                sampleId: Int,
+                left: Float,
+                right: Float,
+                priority: Int
+            ): Int =
                 synchronized(soundPool) {
                     try {
-                        soundPool.play(sampleId, left, right, 1, -1, 1.0f)
+                        // Priority above every one-shot effect: when the pool
+                        // is full, SoundPool frees a hit sound first, never
+                        // the gun the player is holding.
+                        soundPool.play(sampleId, left, right, priority, -1, 1.0f)
                     } catch (_: Exception) {
                         0
                     }
@@ -491,9 +543,6 @@ class AudioManager(private val context: Context) {
         // The dedicated Gloo Wall Breaker gun: the only sound that destroys a
         // gloo wall. Three consecutive shots from the 90%-100% band break it.
         "glueWallBreaker" to listOf("glue-wall-breaker.mp3"),
-        // The MP40 is a single-shot firearm now: it shares the submachine
-        // gun recording, but only ever plays one shot per swipe.
-        "mp40" to listOf("submachine-gun.mp3"),
         // The M10 handgun, available from round one.
         "m10" to listOf("m10-gun.mp3"),
         // Long-range automatics: the submachine gun (0.5 s beat), the AK-47
@@ -868,6 +917,10 @@ class AudioManager(private val context: Context) {
         }
 
         val soundId = soundMap[playKey] ?: return -1
+        // One-shot effects stay inside their own stream budget: the pool keeps
+        // a hard reserve for the held weapon loops, so a flood of hit sounds
+        // can never take the stream of a continuous machine-gun burst.
+        if (!reserveSfxStream(playKey)) return -1
         val (left, right) = calculate3dVolume(posX, posY, posZ, volume, playKey)
         val pitch = when (soundTheme) {
             SoundTheme.CYBER -> rate * 1.10f
@@ -883,12 +936,15 @@ class AudioManager(private val context: Context) {
                     loop = false, enqueuedAt = System.currentTimeMillis()))
                 -1
             } else try {
-                synchronized(soundPool) { soundPool.play(soundId, left, right, 1, 0, pitch) }
+                synchronized(soundPool) {
+                    soundPool.play(soundId, left, right, SFX_STREAM_PRIORITY, 0, pitch)
+                }
             } catch (_: Exception) { 0 }
         }
         if (streamId == -1) return -1
         if (streamId != 0) {
             activeSfxStreams.getOrPut(playKey) { ConcurrentHashMap.newKeySet() }.add(streamId)
+            bookSfxStream(playKey, streamId)
         } else {
             // The pool could not hand out a stream right now. Queue the
             // request and schedule one short retry, so a busy pool never
@@ -979,7 +1035,7 @@ class AudioManager(private val context: Context) {
         }
         if (key in LONG_TRACK_KEYS) {
             // Ensure any previous instance is fully released before re-looping; this is what
-            // makes the MP40 loop stable across rapid hold/release cycles without overlapping.
+            // keeps a hold-to-repeat loop stable across rapid hold/release cycles without overlapping.
             if (isTrackActive(key)) {
                 // Already looping correctly — just refresh volume/rate instead of restarting.
                 val player = managedPlayers[key]
@@ -1008,6 +1064,9 @@ class AudioManager(private val context: Context) {
         }
 
         val soundId = soundMap[key] ?: return
+        // A short looping effect is still a one-shot-class stream: it obeys
+        // the same budget, so it can never crowd out a held weapon loop.
+        if (!reserveSfxStream(key)) return
         val (left, right) = calculate3dVolume(posX, posY, posZ, volume, key)
         val pitch = rate.coerceIn(0.5f, 2.0f)
         val streamId = synchronized(playerLock) {
@@ -1016,12 +1075,17 @@ class AudioManager(private val context: Context) {
                     loop = true, enqueuedAt = System.currentTimeMillis()))
                 -1
             } else try {
-                synchronized(soundPool) { soundPool.play(soundId, left, right, 1, -1, pitch) }
+                synchronized(soundPool) {
+                    soundPool.play(soundId, left, right, SFX_STREAM_PRIORITY, -1, pitch)
+                }
             } catch (_: Exception) { 0 }
         }
         if (streamId == -1) return
         if (streamId != 0) {
             activeSfxStreams.getOrPut(key) { ConcurrentHashMap.newKeySet() }.add(streamId)
+            // A short looping effect is booked as long-lived: it holds its slot
+            // until it is explicitly stopped (which releases the slot below).
+            bookSfxStream(key, streamId, looping = true)
         } else {
             queuePendingPlay(PendingPlay(key, volume, rate, posX, posY, posZ, loop = true, enqueuedAt = System.currentTimeMillis()))
             scheduleRetry(key)
@@ -1119,6 +1183,29 @@ class AudioManager(private val context: Context) {
             posZ = -depthOffset,
             owner = LOOP_OWNER_ENEMY
         )
+    }
+
+    /**
+     * Watchdog of a held burst: re-arms the loop when it lost its stream while
+     * the trigger is still down, and refreshes its position every bullet.
+     *
+     * This is the guarantee that a continuous machine-gun burst is never cut
+     * by anything - not by a hit sound, not by a pool that ran out of streams,
+     * not by a glitch of the audio system itself. Called once per bullet, it is
+     * a no-op while the loop is healthy.
+     */
+    fun keepWeaponLoopAlive(
+        key: String,
+        owner: String = LOOP_OWNER_PLAYER,
+        volume: Float = 1.0f,
+        posX: Float = 0f,
+        posY: Float = 0f,
+        posZ: Float = 0f
+    ) {
+        if (released) return
+        val canonical = canonicalAutoKey(key) ?: return
+        val (left, right) = calculate3dVolume(posX, posY, posZ, volume, canonical)
+        automaticWeaponMixer.keepAlive(canonical, owner, left, right)
     }
 
     /**
@@ -1793,6 +1880,91 @@ class AudioManager(private val context: Context) {
         stopSoundInternal(key)
     }
 
+    /**
+     * Stops one weapon of **one** fighter.
+     *
+     * This is the owner-aware form of [stopSound] and the one every in-battle
+     * caller must use: a sound of the player's own drawing, a hit marker or a
+     * screen clean-up of Robert can never silence a held burst of the other
+     * fighter, and - above all - nothing can cut a continuous machine gun that
+     * somebody is still holding. Only an explicit [stopWeaponSounds] or a
+     * screen change stops every channel.
+     */
+    fun stopWeaponSound(key: String, owner: String) {
+        val canonical = canonicalAutoKey(key)
+        if (canonical != null) {
+            stopWeaponLoop(canonical, owner)
+            return
+        }
+        // A one-shot copy belongs to the channel of its own weapon: when the
+        // fighter still holds that weapon, its recording is not cut either.
+        val loopKey = AUTO_LOOP_OF[key]
+        if (loopKey != null) {
+            if (!isWeaponLoopActive(loopKey, owner)) stopSoundInternal(key)
+            return
+        }
+        stopSoundInternal(key)
+    }
+
+    /**
+     * Keeps the one-shot effects inside [SFX_STREAM_BUDGET] streams.
+     *
+     * SoundPool frees a stream when its limit is reached, and priority alone
+     * is not enough: a long firefight can flood the pool with hit, footstep
+     * and explosion streams until nothing but one-shots is left. This gate
+     * makes that impossible. The effects stop at their own budget, so the
+     * reserve at the top of the pool is always free for the gun a fighter is
+     * holding. A sound refused here is simply dropped - a hit marker is never
+     * worth cutting the continuous machine gun of the player.
+     *
+     * Returns true when the request may take a stream.
+     */
+    private fun reserveSfxStream(key: String): Boolean = synchronized(sfxBudgetLock) {
+        pruneFinishedSfxStreamsLocked()
+        if (sfxStreamDeadlines.size < SFX_STREAM_BUDGET) return true
+        // The effects are at their budget: drop this one instead of letting it
+        // displace a stream of the held loop.
+        Log.d(TAG, "SFX budget reached, '$key' dropped instead of cutting a held loop")
+        false
+    }
+
+    /**
+     * Forgets the one-shot streams that already finished. SoundPool cannot be
+     * asked whether a stream still plays, so every effect is booked with the
+     * deadline of its own recording: once that deadline has passed the stream
+     * is certainly over and its slot is free again.
+     */
+    private fun pruneFinishedSfxStreamsLocked() {
+        if (sfxStreamDeadlines.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val done = sfxStreamDeadlines.filterValues { it <= now }.keys
+        if (done.isEmpty()) return
+        for (streamId in done) {
+            sfxStreamDeadlines.remove(streamId)
+            for ((key, streams) in activeSfxStreams) {
+                if (streams.remove(streamId)) {
+                    if (streams.isEmpty()) activeSfxStreams.remove(key, streams)
+                    break
+                }
+            }
+        }
+    }
+
+    /**
+     * Books a stream against the effect budget. A one-shot is released again at
+     * the end of its own recording; a short looping effect holds its slot until
+     * it is stopped and the slot is released in [stopSoundInternal].
+     */
+    private fun bookSfxStream(key: String, streamId: Int, looping: Boolean = false) {
+        val deadline = if (looping) {
+            Long.MAX_VALUE
+        } else {
+            val lengthMs = soundDurationMs(key).takeIf { it > 0L } ?: DEFAULT_SFX_LENGTH_MS
+            System.currentTimeMillis() + lengthMs + SFX_DEADLINE_SLACK_MS
+        }
+        synchronized(sfxBudgetLock) { sfxStreamDeadlines[streamId] = deadline }
+    }
+
     /** The real stop path: every stream, streamed track and queued request. */
     private fun stopSoundInternal(key: String) {
         dropPendingPlays(key)
@@ -1802,6 +1974,8 @@ class AudioManager(private val context: Context) {
         val streams = activeSfxStreams.remove(key)
         if (streams != null) {
             for (streamId in streams) {
+                // The stream leaves the effect budget together with the pool.
+                synchronized(sfxBudgetLock) { sfxStreamDeadlines.remove(streamId) }
                 try {
                     soundPool.stop(streamId)
                 } catch (_: Exception) {}
@@ -1891,6 +2065,7 @@ class AudioManager(private val context: Context) {
             }
         }
         activeSfxStreams.clear()
+        synchronized(sfxBudgetLock) { sfxStreamDeadlines.clear() }
     }
 
     /**
@@ -1965,7 +2140,7 @@ class AudioManager(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 when (key) {
                     "assault", "shortGun", "pistol", "sniperRifle",
-                    "mp40", "machineGun", "awm" -> {
+                    "machineGun", "awm" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE))
                     }
                     "wall" -> {
@@ -2018,7 +2193,7 @@ class AudioManager(private val context: Context) {
                 @Suppress("DEPRECATION")
                 when (key) {
                     "assault", "shortGun", "pistol", "playerHit",
-                    "mp40", "machineGun", "awm" -> vibrator.vibrate(60)
+                    "machineGun", "awm" -> vibrator.vibrate(60)
                     "gunHit", "glueSound", "cover", "gunReload", "wall" -> vibrator.vibrate(35)
                 }
             }
@@ -2058,7 +2233,6 @@ class AudioManager(private val context: Context) {
             "spend" -> generateCoinWave(sampleRate, 0.18f)
             "missile" -> generateChirpWave(sampleRate, 1.2f, 300f, 1400f)
             "explosion", "timerBomb" -> generateNoiseThudWave(sampleRate, 0.9f, 70f)
-            "mp40" -> generateGunshotWave(sampleRate, 0.14f, 360f, 110f)
             // The three automatics fall back to a single shot of their own
             // weight, never to a beep: a firing loop of one of them is audible
             // for as long as a trigger is down and must still sound like a gun.

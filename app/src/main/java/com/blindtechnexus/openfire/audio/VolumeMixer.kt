@@ -61,7 +61,7 @@ object VolumeMixer {
      */
     val WEAPON_BUS_KEYS: Set<String> = setOf(
         "assault", "pistol", "shortGun", "sniperRifle", "glueWallBreaker",
-        "awm", "mp40", "m10",
+        "awm", "m10",
         "submachineGun", "ak47", "machineGun",
         "submachineGunShot", "ak47Shot", "machineGunShot",
         // Flight sounds of the launchers are weapon audio as well.

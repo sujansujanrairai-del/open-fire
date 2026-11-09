@@ -11,17 +11,25 @@ import kotlin.random.Random
  *    Round 1, levels 3-5: 2 medkits and 2 covers (no glue walls).
  *    Weapons: assault rifle, shotgun and the new M10 handgun; the sniper
  *    rifle is present but locked until round three.
- *  - Round 2 (all levels): 3 medkits, 2 glue walls and 2 covers. The knife,
- *    the sword, the single-shot MP40, the submachine gun and the AK-47 join
- *    his weapons.
- *  - Round 3 (all levels): 3 medkits, 2 glue walls and 4 covers. The pistol,
- *    the AWM and the machine gun join his weapons, the sniper rifle unlocks,
- *    and he receives his bombs and anti-bomb explosives.
- *  - Round 4 (all levels): 5 medkits, 3 glue walls and 5 covers. Every weapon
- *    is available, including missile powers, anti-missiles, bombs (3) and
+ *  - Round 2 (all levels): 3 medkits, 2 glue walls and 2 covers. The knife
+ *    and the sword join his weapons.
+ *  - Round 3 (all levels): 3 medkits, 2 glue walls and 4 covers. The pistol
+ *    and the AWM join his weapons, the sniper rifle unlocks, and he receives
+ *    his bombs and anti-bomb explosives.
+ *  - Round 4 (all levels): 5 medkits, 3 glue walls and 5 covers. Every remaining
+ *    standard weapon, plus his missile powers, anti-missiles, bombs (3) and
  *    anti-bombs (3).
  *  - Round 5 (all levels): 5 medkits, 4 glue walls and 7 covers. Strategic round:
  *    equal power, bombs and anti-bombs unlimited — relies on strategy, not raw stats.
+ *
+ * Two hard rules hold in every round from one to five:
+ *
+ *  - Robert never receives a machine gun, an AK-47 or a submachine gun. Those
+ *    three continuous-fire weapons belong to the player's own shop ladder
+ *    only; the enemy has no way of obtaining one by any means - not from his
+ *    round loadout, not from a mirror, not from a reward, not from his own
+ *    shop and not from a stray call ([ENEMY_FORBIDDEN_WEAPONS]). Every bullet
+ *    he fires is a single-shot round.
  *
  * The missile and the bombs never enter his random weapon rotation: they are
  * fired only through [MissileRules.shouldEnemyLaunch] and
@@ -367,25 +375,67 @@ object RobertRules {
         return pool[random.nextInt(pool.size)]
     }
 
-    /** Every standard battle weapon (bombs and the missile are separate). */
+    /**
+     * The three continuous-fire weapons Robert may never obtain, in any round
+     * from one to five and by any means. They are the player's own automatic
+     * choices in the shop; the enemy fights with single-shot rounds only.
+     */
+    val ENEMY_FORBIDDEN_WEAPONS: Set<Weapon> = setOf(
+        Weapon.MACHINE_GUN,
+        Weapon.AK47,
+        Weapon.SUBMACHINE_GUN
+    )
+
+    /**
+     * Every standard battle weapon (bombs and the missile are separate).
+     *
+     * This is the raw catalogue, not an enemy loadout: the round loadouts in
+     * [weaponsForRound] are the only list Robert may draw a weapon from, and
+     * they deliberately keep the three automatics away from him.
+     */
     val ALL_STANDARD_WEAPONS: List<Weapon> =
         Weapon.entries.filter {
             !it.missileLauncher && !it.bomb && it != Weapon.GLUE_BREAKER
         }
 
+    /** Every standard battle weapon Robert may ever be handed in a round. */
+    val ENEMY_WEAPONS: List<Weapon> =
+        ALL_STANDARD_WEAPONS.filter { isEnemyAllowed(it, Progression.ROUNDS_PER_MATCH) }
+
     /**
-     * Robert's weapon rotation for a round, matched to the player's own unlock
-     * ladder so neither side is better armed than the other:
+     * True when Robert may be given [weapon] in [round]. This is the single
+     * gate every enemy weapon path reads, so a forbidden weapon can never
+     * reach him through a loadout, a mirror, a reward or a stray call.
+     *
+     * The rules are absolute:
+     *  - the machine gun, the AK-47 and the submachine gun are never his, in
+     *    any round from one to five;
+     *  - the Gloo Wall Breaker is a separate charge, and the missile and the
+     *    bombs are handled by their own rules, so none of them appears here;
+     *  - everything else still follows its own unlock round.
+     */
+    fun isEnemyAllowed(weapon: Weapon, round: Int): Boolean {
+        val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
+        if (weapon in ENEMY_FORBIDDEN_WEAPONS) return false
+        if (weapon.missileLauncher || weapon.bomb || weapon == Weapon.GLUE_BREAKER) return false
+        return weapon.unlockRound <= safeRound
+    }
+
+    /**
+     * Robert's weapon rotation for a round:
      *
      *  - round one: the two free guns, the locked sniper and the M10;
-     *  - round two: the knife, the sword, the single-shot MP40, the submachine
-     *    gun and the AK-47 join in;
-     *  - round three: the pistol, the AWM and the machine gun join in;
-     *  - round four and five: every standard weapon.
+     *  - round two: the knife and the sword join in;
+     *  - round three: the pistol and the AWM join in;
+     *  - round four and five: every standard weapon he is allowed to own.
+     *
+     * The machine gun, the AK-47 and the submachine gun never join, in any
+     * round: the enemy cannot obtain one of them by any means. Everything he
+     * fires is a single-shot round.
      */
     fun weaponsForRound(round: Int): List<Weapon> {
         val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
-        return when (safeRound) {
+        val base = when (safeRound) {
             1 -> listOf(
                 Weapon.ASSAULT_GUN,
                 Weapon.SHORT_GUN,
@@ -398,10 +448,7 @@ object RobertRules {
                 Weapon.SNIPER,
                 Weapon.M10,
                 Weapon.KNIFE,
-                Weapon.SWORD,
-                Weapon.MP40,
-                Weapon.SUBMACHINE_GUN,
-                Weapon.AK47
+                Weapon.SWORD
             )
             3 -> listOf(
                 Weapon.SHORT_GUN,
@@ -411,15 +458,12 @@ object RobertRules {
                 Weapon.M10,
                 Weapon.KNIFE,
                 Weapon.SWORD,
-                Weapon.MP40,
-                Weapon.SUBMACHINE_GUN,
-                Weapon.AK47,
-                Weapon.AWM,
-                Weapon.MACHINE_GUN
+                Weapon.AWM
             )
-            // Round four and five: he owns every standard weapon.
+            // Round four and five: every standard weapon he is allowed to own.
             else -> ALL_STANDARD_WEAPONS
         }
+        return base.filter { isEnemyAllowed(it, safeRound) }
     }
 
     /**
@@ -431,6 +475,9 @@ object RobertRules {
     fun mirroredWeapons(round: Int, playerOwnsPistol: Boolean): List<Weapon> {
         val base = weaponsForRound(round)
         if (!playerOwnsPistol || base.contains(Weapon.PISTOL)) return base
+        // A mirror may never hand him a weapon the round forbids (the pistol
+        // is always allowed, but the gate keeps this path honest for good).
+        if (!isEnemyAllowed(Weapon.PISTOL, round)) return base
         return base + Weapon.PISTOL
     }
 
@@ -450,7 +497,12 @@ object RobertRules {
         val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
         val safeLevel = level.coerceIn(1, Progression.LEVELS_PER_ROUND)
         val maxHp = Progression.hpFor(safeRound, safeLevel)
+        // The last barrier before a profile exists: whatever built the mirror,
+        // a weapon the round forbids can never end up in his hands. This is
+        // what makes "no machine gun, no AK-47, no submachine gun in any round
+        // from one to five" a property of the game rather than of one caller.
         val weapons = mirroredWeapons(safeRound, playerOwnsPistol)
+            .filter { isEnemyAllowed(it, safeRound) }
         return when (safeRound) {
             1 -> {
                 // Round one: the sniper rifle always stays locked (only the
@@ -657,6 +709,45 @@ object RobertRules {
             robertHealthDropping &&
             !playerHealthDropping
 
+    /**
+     * Hits landed in a row by a held automatic weapon that always break
+     * contact. A machine gun or a submachine gun fires faster than Robert can
+     * answer, so waiting for his usual two-hit exchange rule left him standing
+     * in the stream of bullets - the burst kept resetting the exchange and his
+     * own answering shot kept resetting the hit streak, so he never chose to
+     * run. Two landed bullets of one continuing burst are enough: he uses his
+     * speed and leaves.
+     */
+    const val SUSTAINED_FIRE_HITS_TO_FLEE = 2
+
+    /**
+     * True when a *continuing* automatic burst is really taking health away
+     * and Robert must break contact, whatever his own answering shots did to
+     * the exchange counters in between.
+     *
+     * This is deliberately independent of [shouldRetreatFromFight]: that rule
+     * reads the hit exchange, which a held trigger resets on every shot.
+     * Here the burst itself is the evidence - the player's health is holding
+     * while Robert's is dropping under two or more consecutive hits.
+     */
+    fun shouldFleeUnderSustainedAutomaticFire(
+        playerBurstShots: Int,
+        robertHealthDropping: Boolean,
+        playerHealthDropping: Boolean,
+        hitsTakenInRow: Int = SUSTAINED_FIRE_HITS_TO_FLEE,
+        playerFiringAutomatic: Boolean = true
+    ): Boolean {
+        // Only a held automatic trigger pins anybody: a tap-fired weapon never
+        // makes this decision for him, the ordinary exchange rules do.
+        if (!playerFiringAutomatic) return false
+        // While the player is the one losing health, he stands and fires back.
+        if (playerHealthDropping) return false
+        if (!robertHealthDropping) return false
+        // Two or more bullets of the same burst really landed on him.
+        if (playerBurstShots < SUSTAINED_FIRE_HITS_TO_FLEE) return false
+        return hitsTakenInRow >= 1
+    }
+
     fun shouldRetreatWhenPlayerFiresBack(playerBurstShots: Int): Boolean =
         isContinuousPlayerFire(playerBurstShots)
 
@@ -666,13 +757,33 @@ object RobertRules {
 
     /** Evaluate actual hits, not trigger pulls. A single hit is answered;
      * two hits ahead, or sustained damaging fire, trigger a quick retreat.
-     * A barrier always takes priority over ordinary gunfire retreat. */
+     * A barrier always takes priority over ordinary gunfire retreat.
+     *
+     * A held automatic burst is handled before every other rule: while two or
+     * more of its bullets have landed and Robert's own health is really
+     * dropping, he runs - even when his answering shots kept resetting the
+     * exchange counters that the ordinary rules read.
+     */
     fun shouldRetreatFromFight(
         playerHits: Int, enemyHits: Int, consecutiveHits: Int,
         playerBurstShots: Int, enemyHealthDropping: Boolean,
         enemyWall: Boolean, playerWall: Boolean, playerHasBreaker: Boolean,
-        proximityPercent: Float, damageFromLastHit: Int = 0
+        proximityPercent: Float, damageFromLastHit: Int = 0,
+        playerHealthDropping: Boolean = false,
+        playerFiringAutomatic: Boolean = false
     ): Boolean {
+        if (shouldFleeUnderSustainedAutomaticFire(
+                playerBurstShots = playerBurstShots,
+                robertHealthDropping = enemyHealthDropping,
+                playerHealthDropping = playerHealthDropping,
+                hitsTakenInRow = maxOf(consecutiveHits, if (damageFromLastHit > 0) 1 else 0),
+                playerFiringAutomatic = playerFiringAutomatic
+            )
+        ) {
+            // A held trigger can never pin him in place: he breaks contact at
+            // his sprinting speed before the next bullet is even resolved.
+            return true
+        }
         if (enemyWall && damageFromLastHit <= 0) return false // no damage passed the barrier
         return damageFromLastHit >= RetreatRules.HEAVY_HIT_HP ||
             (playerHits >= 2 && playerHits > enemyHits) ||

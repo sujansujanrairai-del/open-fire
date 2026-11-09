@@ -19,9 +19,10 @@ import org.junit.Test
 import kotlin.random.Random
 
 /**
- * Locks Robert's level health, round loadouts (including the MP40, the AWM,
- * the machine gun and his bombs), the special sniper rule, his defence
- * thresholds, his continuous fire and his round speed.
+ * Locks Robert's level health, round loadouts (including the AWM and his
+ * bombs, and the hard rule that no round of one to five ever arms him with a
+ * machine gun, an AK-47 or a submachine gun), the special sniper rule, his
+ * defence thresholds, his continuous fire and his round speed.
  */
 class RobertTest {
 
@@ -72,7 +73,7 @@ class RobertTest {
     }
 
     @Test
-    fun roundTwoAddsKnifeSwordAndHisMp40() {
+    fun roundTwoAddsTheKnifeAndTheSword() {
         val roundTwo = RobertRules.profile(2, 1)
         assertEquals(3, roundTwo.medikits)
         // Two gloo walls per game from round two on.
@@ -80,13 +81,13 @@ class RobertTest {
         assertEquals(2, roundTwo.covers)
         assertTrue(roundTwo.weapons.contains(Weapon.KNIFE))
         assertTrue(roundTwo.weapons.contains(Weapon.SWORD))
-        // The enemy also receives the MP40, the submachine gun and the
-        // AK-47 in round two.
-        assertTrue(roundTwo.weapons.contains(Weapon.MP40))
-        assertTrue(roundTwo.weapons.contains(Weapon.SUBMACHINE_GUN))
-        assertTrue(roundTwo.weapons.contains(Weapon.AK47))
-        assertFalse(roundTwo.weapons.contains(Weapon.AWM))
+        // He never receives a continuous-fire weapon in round two: no
+        // machine gun, no AK-47 and no submachine gun.
+        assertFalse(roundTwo.weapons.contains(Weapon.SUBMACHINE_GUN))
+        assertFalse(roundTwo.weapons.contains(Weapon.AK47))
         assertFalse(roundTwo.weapons.contains(Weapon.MACHINE_GUN))
+        assertTrue(roundTwo.weapons.none { it.autoFire })
+        assertFalse(roundTwo.weapons.contains(Weapon.AWM))
         assertFalse(roundTwo.weapons.contains(Weapon.PISTOL))
         assertFalse(roundTwo.weapons.contains(Weapon.MISSILE))
         assertTrue(roundTwo.sniperLocked)
@@ -107,14 +108,14 @@ class RobertTest {
         assertEquals(4, roundThree.covers)
         assertTrue(roundThree.weapons.contains(Weapon.PISTOL))
         assertTrue(roundThree.weapons.contains(Weapon.KNIFE))
-        // Round three: the enemy gets the AWM too.
+        // Round three: the enemy gets the AWM too, and still no automatic.
         assertTrue(roundThree.weapons.contains(Weapon.AWM))
-        assertTrue(roundThree.weapons.contains(Weapon.MP40))
-        // The machine gun joins in round three, exactly like the player's
-        // own round-three shop ladder.
-        assertTrue(roundThree.weapons.contains(Weapon.MACHINE_GUN))
+        assertFalse(roundThree.weapons.contains(Weapon.MACHINE_GUN))
+        assertFalse(roundThree.weapons.contains(Weapon.SUBMACHINE_GUN))
+        assertFalse(roundThree.weapons.contains(Weapon.AK47))
+        assertTrue(roundThree.weapons.none { it.autoFire })
         assertEquals(
-            RobertRules.ALL_STANDARD_WEAPONS.toSet(),
+            RobertRules.ENEMY_WEAPONS.toSet(),
             roundThree.weapons.toSet()
         )
         assertFalse(roundThree.sniperLocked)
@@ -138,12 +139,54 @@ class RobertTest {
     }
 
     @Test
+    fun noRoundFromOneToFiveEverArmsHimWithAContinuousFireWeapon() {
+        // The three automatics are the player's own shop ladder. The enemy can
+        // obtain none of them by any means, in any round.
+        assertEquals(
+            setOf(Weapon.MACHINE_GUN, Weapon.AK47, Weapon.SUBMACHINE_GUN),
+            RobertRules.ENEMY_FORBIDDEN_WEAPONS
+        )
+        for (round in 1..5) {
+            for (weapon in RobertRules.ENEMY_FORBIDDEN_WEAPONS) {
+                assertFalse(
+                    "${weapon.id} must never be his in round $round",
+                    RobertRules.isEnemyAllowed(weapon, round)
+                )
+                assertFalse(
+                    "${weapon.id} must never be in the round-$round loadout",
+                    RobertRules.weaponsForRound(round).contains(weapon)
+                )
+                assertFalse(
+                    "${weapon.id} must never be mirrored to him in round $round",
+                    RobertRules.mirroredWeapons(round, playerOwnsPistol = true).contains(weapon)
+                )
+            }
+            // Every weapon he may be given is a single-shot weapon.
+            assertTrue(
+                "round $round must not arm him with an automatic",
+                RobertRules.weaponsForRound(round).none { it.autoFire }
+            )
+            // A feint can never draw one either.
+            for (weapon in RobertRules.weaponsForRound(round)) {
+                assertFalse(RobertRules.isFeintWeapon(weapon) && weapon.autoFire)
+            }
+        }
+        // Everything he is ever allowed to own is exactly the allowed set.
+        assertEquals(
+            RobertRules.ALL_STANDARD_WEAPONS
+                .filter { it !in RobertRules.ENEMY_FORBIDDEN_WEAPONS }
+                .toSet(),
+            RobertRules.ENEMY_WEAPONS.toSet()
+        )
+    }
+
+    @Test
     fun roundFourHasEveryWeaponOneMissileAndOneInterceptor() {
         val roundFour = RobertRules.profile(4, 1)
         assertEquals(5, roundFour.medikits)
         assertEquals(3, roundFour.glueWalls)
         assertEquals(5, roundFour.covers)
-        assertEquals(RobertRules.ALL_STANDARD_WEAPONS.toSet(), roundFour.weapons.toSet())
+        assertEquals(RobertRules.ENEMY_WEAPONS.toSet(), roundFour.weapons.toSet())
         // The missile is a once-per-game special, not a random rotation weapon.
         assertFalse(roundFour.weapons.contains(Weapon.MISSILE))
         assertEquals(1, roundFour.missilePowers)
@@ -156,7 +199,11 @@ class RobertTest {
         assertEquals(3, roundFour.atomBombs)
         assertEquals(3, roundFour.timerBombs)
         assertEquals(3, roundFour.antiBombs)
-        assertTrue(roundFour.weapons.contains(Weapon.MACHINE_GUN))
+        // Even the strongest rounds never arm him with a continuous-fire
+        // weapon: the machine gun, the AK-47 and the submachine gun are the
+        // player's own, in every round from one to five.
+        assertFalse(roundFour.weapons.contains(Weapon.MACHINE_GUN))
+        assertTrue(roundFour.weapons.none { it.autoFire })
     }
 
     @Test
@@ -165,7 +212,7 @@ class RobertTest {
         assertEquals(5, roundFive.medikits)
         assertEquals(4, roundFive.glueWalls)
         assertEquals(7, roundFive.covers)
-        assertEquals(RobertRules.ALL_STANDARD_WEAPONS.toSet(), roundFive.weapons.toSet())
+        assertEquals(RobertRules.ENEMY_WEAPONS.toSet(), roundFive.weapons.toSet())
         assertFalse(roundFive.weapons.contains(Weapon.MISSILE))
         // Round five holds two missiles, four anti-missiles and five anti-bombs.
         assertEquals(2, roundFive.missilePowers)
@@ -177,7 +224,8 @@ class RobertTest {
         assertEquals(99, roundFive.grenades)
         assertEquals(99, roundFive.atomBombs)
         assertEquals(99, roundFive.timerBombs)
-        assertTrue(roundFive.weapons.contains(Weapon.MACHINE_GUN))
+        assertFalse(roundFive.weapons.contains(Weapon.MACHINE_GUN))
+        assertTrue(roundFive.weapons.none { it.autoFire })
     }
 
     @Test
@@ -307,6 +355,45 @@ class RobertTest {
         assertFalse(retreat(shots = 3))
         assertFalse(retreat(hits = 2, landed = 1, protected = true))
         assertFalse(retreat(shots = 4, weakened = true, protected = true))
+    }
+
+    @Test
+    fun aHeldAutomaticBurstCanNeverPinHimEvenWithAWallUp() {
+        fun retreat(shots: Int, consecutive: Int = 0, hits: Int = 1, landed: Int = 1,
+                    dropping: Boolean = true, wall: Boolean = false,
+                    automatic: Boolean = true, playerDropping: Boolean = false) =
+            RobertRules.shouldRetreatFromFight(
+                playerHits = hits, enemyHits = landed, consecutiveHits = consecutive,
+                playerBurstShots = shots, enemyHealthDropping = dropping,
+                enemyWall = wall, playerWall = false, playerHasBreaker = false,
+                proximityPercent = 60f, damageFromLastHit = 20,
+                playerHealthDropping = playerDropping,
+                playerFiringAutomatic = automatic
+            )
+
+        // Straight through a burst that keeps resetting the exchange: his own
+        // answering shots (enemyHits == playerHits) do not save him any more.
+        assertTrue(retreat(shots = 2, hits = 1, landed = 1))
+        assertTrue(retreat(shots = 6, hits = 3, landed = 3))
+
+        // An active cover, glue wall or medkit no longer holds him in the
+        // stream: the sustained-fire rule is evaluated before the barrier gate.
+        assertTrue(retreat(shots = 2, wall = true))
+
+        // While the player is the one losing health, the sustained-fire rule
+        // never fires: only the ordinary exchange rules may decide then.
+        assertFalse(
+            RobertRules.shouldFleeUnderSustainedAutomaticFire(
+                playerBurstShots = 6, robertHealthDropping = true,
+                playerHealthDropping = true
+            )
+        )
+
+        // A tap-fired weapon never reaches this rule; the ordinary exchange
+        // rules decide for it, exactly as before.
+        assertFalse(retreat(shots = 2, automatic = false, dropping = false))
+        // A single bullet of a burst is not "sustained fire" yet.
+        assertFalse(retreat(shots = 1, consecutive = 0, hits = 1, landed = 1, wall = true))
     }
 
     @Test
