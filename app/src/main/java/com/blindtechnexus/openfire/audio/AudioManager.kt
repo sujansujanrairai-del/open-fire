@@ -351,6 +351,17 @@ class AudioManager(private val context: Context) {
     private val sfxStreamDeadlines = ConcurrentHashMap<Int, Long>()
     private val sfxBudgetLock = Any()
 
+    /**
+     * The held weapon loops the engine still owns.
+     *
+     * SoundPool cannot be asked about a stream that it already dropped, so the
+     * mixer's backend keeps this short ledger instead: a stream enters it when
+     * it is played and leaves it when it is stopped. The per-bullet watchdog
+     * reads it to tell a healthy loop from one that was cut behind the game's
+     * back, and re-arms the loop in that case.
+     */
+    private val loopStreams: MutableSet<Int> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
     // Reliable playback pipeline: map every sample id back to its key, count
     // load attempts for retries, and queue play requests that arrive while a
     // sound is still loading so no sound is ever silently dropped.
@@ -388,7 +399,9 @@ class AudioManager(private val context: Context) {
                         // Priority above every one-shot effect: when the pool
                         // is full, SoundPool frees a hit sound first, never
                         // the gun the player is holding.
-                        soundPool.play(sampleId, left, right, priority, -1, 1.0f)
+                        val stream = soundPool.play(sampleId, left, right, priority, -1, 1.0f)
+                        if (stream > 0) synchronized(loopStreams) { loopStreams.add(stream) }
+                        stream
                     } catch (_: Exception) {
                         0
                     }
@@ -400,6 +413,7 @@ class AudioManager(private val context: Context) {
                         soundPool.stop(streamId)
                     } catch (_: Exception) {}
                 }
+                synchronized(loopStreams) { loopStreams.remove(streamId) }
             }
 
             override fun setVolume(streamId: Int, left: Float, right: Float) {
@@ -409,6 +423,9 @@ class AudioManager(private val context: Context) {
                     } catch (_: Exception) {}
                 }
             }
+
+            override fun isLive(streamId: Int): Boolean =
+                synchronized(loopStreams) { loopStreams.contains(streamId) }
         },
         scope = audioScope,
         sampleId = { key -> soundMap[key]?.takeIf { it in loadedSounds } },

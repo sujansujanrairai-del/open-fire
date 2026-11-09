@@ -23,6 +23,16 @@ internal interface AutomaticAudioBackend {
     fun stop(streamId: Int)
     fun setVolume(streamId: Int, left: Float, right: Float)
 
+    /**
+     * True while [streamId] still exists in the engine.
+     *
+     * A held loop is only healthy while this answers true. SoundPool itself
+     * cannot report on a stream it was never asked about, so the production
+     * backend keeps its own short ledger of the streams it opened and closed
+     * and answers from that; a test backend can answer however it likes.
+     */
+    fun isLive(streamId: Int): Boolean = true
+
     companion object {
         /**
          * Priority of a held weapon loop. Higher than every one-shot effect
@@ -156,6 +166,13 @@ internal class AutomaticWeaponMixer(
         synchronized(lock) {
             val channel = channels[channelId(owner, key)]
             if (!released && !paused && channel != null && channel.desired) {
+                val stream = channel.streamId
+                // A stream the engine no longer owns is exactly the cut this
+                // watchdog exists for: forget it and re-arm on this beat.
+                if (stream != NO_STREAM && !backend.isLive(stream)) {
+                    channel.streamId = NO_STREAM
+                    channel.generation++
+                }
                 if (channel.streamId == NO_STREAM) {
                     request = armLocked(channel, left, right)
                 } else {

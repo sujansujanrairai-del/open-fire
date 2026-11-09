@@ -24,6 +24,9 @@ class AutomaticWeaponMixerTest {
 
         val priorities = mutableListOf<Int>()
 
+        /** Streams the fake engine currently owns, exactly like SoundPool. */
+        val live = mutableSetOf<Int>()
+
         override fun play(sampleId: Int, left: Float, right: Float, priority: Int): Int {
             if (failuresBeforeSuccess > 0) {
                 failuresBeforeSuccess--
@@ -32,12 +35,16 @@ class AutomaticWeaponMixerTest {
             priorities += priority
             val stream = nextStream++
             played += Played(sampleId, stream, left, right)
+            live += stream
             return stream
         }
 
         override fun stop(streamId: Int) {
             stopped += streamId
+            live -= streamId
         }
+
+        override fun isLive(streamId: Int): Boolean = streamId in live
 
         override fun setVolume(streamId: Int, left: Float, right: Float) {
             volumes += Triple(streamId, left, right)
@@ -219,10 +226,11 @@ class AutomaticWeaponMixerTest {
         assertEquals(1, backend.played.size)
         assertTrue(backend.volumes.isNotEmpty())
 
-        // Something outside took the stream away (a pool limit, a glitch).
-        // The loop object survives with no native stream, and the very next
-        // bullet re-arms it instead of going silent for the rest of the burst.
-        backend.stop(backend.played.first().streamId)
+        // Something outside took the stream away (a pool limit, a glitch) -
+        // not through the mixer, which is exactly why the channel id is stale.
+        // The very next bullet notices, forgets the dead stream and re-arms
+        // the loop instead of leaving the rest of the burst silent.
+        backend.live.remove(backend.played.first().streamId)
         mixer.keepAlive("machineGun", "player", 1f, 1f)
         assertEquals(2, backend.played.size)
         assertTrue(mixer.isActive("machineGun", "player"))
