@@ -58,7 +58,6 @@ object DamageTable {
     const val SUBMACHINE_GUN_POWER_HP = 26
     const val KNIFE_POWER_HP = 32
     const val GLUE_BREAKER_POWER_HP = 34
-    const val MP40_POWER_HP = 36
     const val SHORT_GUN_POWER_HP = 38
     const val M10_POWER_HP = 42
     const val ASSAULT_GUN_POWER_HP = 44
@@ -81,7 +80,6 @@ object DamageTable {
         Weapon.SUBMACHINE_GUN to row(SUBMACHINE_GUN_POWER_HP),
         Weapon.KNIFE to row(KNIFE_POWER_HP),
         Weapon.GLUE_BREAKER to row(GLUE_BREAKER_POWER_HP),
-        Weapon.MP40 to row(MP40_POWER_HP),
         Weapon.SHORT_GUN to row(SHORT_GUN_POWER_HP),
         Weapon.M10 to row(M10_POWER_HP),
         Weapon.ASSAULT_GUN to row(ASSAULT_GUN_POWER_HP),

@@ -22,19 +22,29 @@ class AutomaticWeaponMixerTest {
         var failuresBeforeSuccess = 0
         private var nextStream = 100
 
-        override fun play(sampleId: Int, left: Float, right: Float): Int {
+        val priorities = mutableListOf<Int>()
+
+        /** Streams the fake engine currently owns, exactly like SoundPool. */
+        val live = mutableSetOf<Int>()
+
+        override fun play(sampleId: Int, left: Float, right: Float, priority: Int): Int {
             if (failuresBeforeSuccess > 0) {
                 failuresBeforeSuccess--
                 return 0
             }
+            priorities += priority
             val stream = nextStream++
             played += Played(sampleId, stream, left, right)
+            live += stream
             return stream
         }
 
         override fun stop(streamId: Int) {
             stopped += streamId
+            live -= streamId
         }
+
+        override fun isLive(streamId: Int): Boolean = streamId in live
 
         override fun setVolume(streamId: Int, left: Float, right: Float) {
             volumes += Triple(streamId, left, right)
@@ -199,6 +209,49 @@ class AutomaticWeaponMixerTest {
         assertEquals(1, backend.played.size)
         mixer.stopAll()
         assertEquals(listOf(100), backend.stopped)
+    }
+
+    @Test
+    fun aHeldLoopIsReArmedWhenItLosesItsStreamButNeverAfterARelease() = runTest {
+        val backend = FakeBackend()
+        val mixer = mixer(this, backend, mutableMapOf("machineGun" to 9))
+
+        // A held burst owns exactly one stream.
+        mixer.start("machineGun", "player", 1f, 1f)
+        assertEquals(1, backend.played.size)
+
+        // The watchdog of every bullet is a no-op while the loop is healthy:
+        // it refreshes the position and never layers a second recording.
+        repeat(50) { mixer.keepAlive("machineGun", "player", 0.5f, 0.5f) }
+        assertEquals(1, backend.played.size)
+        assertTrue(backend.volumes.isNotEmpty())
+
+        // Something outside took the stream away (a pool limit, a glitch) -
+        // not through the mixer, which is exactly why the channel id is stale.
+        // The very next bullet notices, forgets the dead stream and re-arms
+        // the loop instead of leaving the rest of the burst silent.
+        backend.live.remove(backend.played.first().streamId)
+        mixer.keepAlive("machineGun", "player", 1f, 1f)
+        assertEquals(2, backend.played.size)
+        assertTrue(mixer.isActive("machineGun", "player"))
+
+        // A released trigger is never resurrected by the watchdog: the burst
+        // stops with the hand, exactly like the bullets do.
+        mixer.stop("machineGun", "player")
+        mixer.keepAlive("machineGun", "player", 1f, 1f)
+        assertEquals(2, backend.played.size)
+        assertFalse(mixer.isActive("machineGun", "player"))
+    }
+
+    @Test
+    fun aHeldLoopIsStartedAboveEveryOneShotEffect() = runTest {
+        val backend = FakeBackend()
+        val mixer = mixer(this, backend, mutableMapOf("machineGun" to 9))
+        mixer.start("machineGun", "player", 1f, 1f)
+        // The stream is opened on the loop priority (5), above the one-shot
+        // effects (1), so a full pool frees a hit sound before the held gun.
+        assertEquals(1, backend.played.size)
+        assertEquals(5, backend.priorities.first())
     }
 
     @Test

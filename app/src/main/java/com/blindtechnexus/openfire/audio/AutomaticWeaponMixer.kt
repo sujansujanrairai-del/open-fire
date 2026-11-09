@@ -13,9 +13,35 @@ import java.util.concurrent.ConcurrentHashMap
  * makes the trigger lifecycle testable without an Android media server.
  */
 internal interface AutomaticAudioBackend {
-    fun play(sampleId: Int, left: Float, right: Float): Int
+    /**
+     * Starts one looping stream. [priority] is the pool priority of the
+     * stream: a held weapon loop is always played above a one-shot effect, so
+     * a busy pool sacrifices a hit sound before it ever sacrifices the gun
+     * the player is holding.
+     */
+    fun play(sampleId: Int, left: Float, right: Float, priority: Int = LOOP_STREAM_PRIORITY): Int
     fun stop(streamId: Int)
     fun setVolume(streamId: Int, left: Float, right: Float)
+
+    /**
+     * True while [streamId] still exists in the engine.
+     *
+     * A held loop is only healthy while this answers true. SoundPool itself
+     * cannot report on a stream it was never asked about, so the production
+     * backend keeps its own short ledger of the streams it opened and closed
+     * and answers from that; a test backend can answer however it likes.
+     */
+    fun isLive(streamId: Int): Boolean = true
+
+    companion object {
+        /**
+         * Priority of a held weapon loop. Higher than every one-shot effect
+         * (which play at 1), so SoundPool frees a one-shot stream first when
+         * its limit is reached. This is what stops a hit sound from cutting a
+         * continuous machine-gun burst.
+         */
+        const val LOOP_STREAM_PRIORITY = 5
+    }
 }
 
 /**
@@ -121,6 +147,38 @@ internal class AutomaticWeaponMixer(
                 stopBounded(channel, burstGeneration)
             }
             request = armLocked(channel, left, right)
+        }
+        start(request)
+    }
+
+    /**
+     * Re-arms a loop that lost its native stream without being released.
+     *
+     * The engine calls this on every bullet of a held burst. It is the hard
+     * guarantee behind "a continuous burst is never cut": if anything out
+     * there - the pool limit, a system audio glitch, a stolen stream - has
+     * stopped the stream while the trigger is still held, the loop is started
+     * again on the very next beat instead of going silent for the rest of the
+     * magazine.
+     */
+    fun keepAlive(key: String, owner: String, left: Float, right: Float) {
+        var request: StartRequest? = null
+        synchronized(lock) {
+            val channel = channels[channelId(owner, key)]
+            if (!released && !paused && channel != null && channel.desired) {
+                val stream = channel.streamId
+                // A stream the engine no longer owns is exactly the cut this
+                // watchdog exists for: forget it and re-arm on this beat.
+                if (stream != NO_STREAM && !backend.isLive(stream)) {
+                    channel.streamId = NO_STREAM
+                    channel.generation++
+                }
+                if (channel.streamId == NO_STREAM) {
+                    request = armLocked(channel, left, right)
+                } else {
+                    updateVolumeLocked(channel, left, right)
+                }
+            }
         }
         start(request)
     }
@@ -241,7 +299,12 @@ internal class AutomaticWeaponMixer(
                 channel.preparing = true
                 load = true
             } else {
-                val stream = backend.play(sample, channel.left, channel.right)
+                val stream = backend.play(
+                    sample,
+                    channel.left,
+                    channel.right,
+                    AutomaticAudioBackend.LOOP_STREAM_PRIORITY
+                )
                 if (stream > 0) {
                     channel.streamId = stream
                     channel.preparing = false

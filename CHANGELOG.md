@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.7
+
+- Remove the MP40 from the game completely: its weapon entry, its damage row, its shop slot and free issue, its sound asset, its sound alias, its synthetic fallback, its mixer bus key, its interface text in all three languages and every test that named it are gone. No fighter can own, buy, be issued or be shot with it any more.
+- Keep every continuous-fire weapon away from Robert. Rounds one to five never give him a machine gun, an AK-47 or a submachine gun — not from his round loadout, not from the pistol mirror, not from a reward and not from a feint. A single `RobertRules.isEnemyAllowed` gate is applied where the loadout is built and again where the firing pool is chosen, so no path can arm him with one, and every bullet he fires is a single-shot round.
+- Let a continuous machine-gun burst play to the end: the held loop now runs on its own pooled stream above every effect, the one-shot effects are held inside their own stream budget so they can never take the loop's stream, and a watchdog re-arms the loop on every bullet if anything does take it away. An enemy hit, a footstep or a blast is mixed on top of the burst instead of cutting it.
+- Let an enemy under continuous automatic fire escape. Two landed bullets of one continuing burst now break contact through `RobertRules.shouldFleeUnderSustainedAutomaticFire`, evaluated before the exchange rules, so Robert's own answering shots — and an active cover, glue wall or medkit — can no longer pin him in the stream.
+- Add an owner-aware `AudioManager.stopWeaponSound`, so a stop of one fighter's weapon can never silence the other fighter's held burst.
+- Bump to version 2.7 (version code 11).
+
 ## 2.6
 
 - Remove the phantom weapon loops for good: the submachine gun, the AK-47 and the machine gun can no longer fire on their own. A firing loop now exists only while one fighter is really firing that weapon - it is created by the hold and destroyed by the release, so no pause, resume, watchdog, weapon switch or late preparation can ever bring a burst back, and unpausing a battle only restarts a sound whose owner still asks for it. Each fighter owns his own channel per weapon, so the player's finger and Robert's answer can never start, restart, mask or mute each other.

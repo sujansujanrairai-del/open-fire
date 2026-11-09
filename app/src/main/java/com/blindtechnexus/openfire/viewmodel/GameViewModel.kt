@@ -1050,8 +1050,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         )
         val hp = Progression.hpFor(round, level)
         // Weapons handed out for free in this round are issued before the
-        // battle rotation is built (the MP40 and the AWM from round two, the
-        // grenade from round three).
+        // battle rotation is built (the AWM from round two, the grenade from
+        // round three).
         val issued = issueRoundWeapons(round)
         // Disabled weapons are never revealed by a left or right swipe, so the
         // battle rotation only contains owned AND enabled weapons.
@@ -1094,7 +1094,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertGlueBreakers = RobertRules.glueWallBreakerLimitForRound(round),
             robertBreakerArmed = false,
             robertBreakerHits = 0,
-            robertWeapons = profile.weapons.map { it.id },
+            robertWeapons = profile.weapons
+                .filter { RobertRules.isEnemyAllowed(it, round) }
+                .map { it.id },
             robertWeaponIndex = 0,
             robertAmmo = profile.weapons.map { it.magazine },
             robertDamaged = profile.weapons.map { false },
@@ -1177,8 +1179,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Hands out the weapons the round provides for free: the MP40 and the AWM
-     * from round two, and the grenade from round three. Weapons that are only
+     * Hands out the weapons the round provides for free: the AWM from round
+     * two, and the grenade from round three. Weapons that are only
      * unlockable (the atom bomb, the timer bomb and the machine gun) are never
      * issued here, and no weapon is ever issued twice.
      */
@@ -1301,6 +1303,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             volume = 0.9f,
             lateralOffset = lateral,
             depthOffset = depth
+        )
+        // Same per-bullet watchdog on his side: a hit sound of the player can
+        // never cut a burst the enemy is still firing.
+        audioManager.keepWeaponLoopAlive(
+            key,
+            owner = AudioManager.LOOP_OWNER_ENEMY,
+            volume = 0.9f,
+            posX = lateral,
+            posZ = -depth
         )
         robertFireWeaponKey = key
     }
@@ -2049,7 +2060,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         playerWall = state.glueWallActive,
         playerHasBreaker = _inventory.value.ownsWeapon(Weapon.GLUE_BREAKER),
         proximityPercent = Combat.proximityOf(state.distance),
-        damageFromLastHit = damageFromLastHit
+        damageFromLastHit = damageFromLastHit,
+        playerHealthDropping = playerHealthDropping(state),
+        // A held submachine gun or machine gun is what can pin him: only that
+        // kind of fire bypasses the exchange counters and the defence gate.
+        playerFiringAutomatic = state.activeWeapon.autoFire
     )
 
     /**
@@ -2178,11 +2193,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // The absolute enemy gate is applied again here: a weapon the round
+        // forbids (the machine gun, the AK-47 and the submachine gun are never
+        // his) can never enter the firing pool, whatever built the profile.
         val allowed = RobertRules.allowedWeapons(
             robertProfile,
             state.glueWallActive,
             state.robertHp
-        ).ifEmpty { robertProfile.weapons }
+        ).filter { RobertRules.isEnemyAllowed(it, state.round) }
+            .ifEmpty { robertProfile.weapons.filter { RobertRules.isEnemyAllowed(it, state.round) } }
         var pool = allowed.filter { !isRobertWeaponDamaged(state, it) }
         if (pool.isEmpty()) {
             // Every weapon is broken: Robert repairs his arsenal for free.
@@ -2669,8 +2688,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _gameState.update { it.copy(robertDefenceArmed = true) }
         }
         // Decide from the damaging hit before panic defence resets hit counters
-        // or erects a wall. Continuous MP40 fire must never pin him in place.
+        // or erects a wall. Continuous automatic fire must never pin him in
+        // place.
         val retreat = shouldRobertRetreat(state, damageFromLastHit)
+        // A burst that is being landed on him must not be interrupted by his
+        // own defences either. Spending a medkit, erecting a cover or raising a
+        // glue wall resets his hit streak and hands the trigger a fresh
+        // exchange - exactly the state in which he used to stand still and be
+        // shot for a whole magazine. So while a held automatic weapon is really
+        // taking his health down, he spends nothing: he runs first, and
+        // defends himself once the trigger is released.
+        if (isPinnedByAutomaticFire(state)) {
+            val retreatText = retreatOutOfFire(state)
+            ensureGlueWallAvoidance()
+            return retreatText
+        }
         val defence = robertPanicDefence(_gameState.value)?.let { deployRobertDefence(it) }.orEmpty()
         val after = _gameState.value
         var fledText = ""
@@ -2686,6 +2718,38 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         ensureGlueWallAvoidance()
         return fledText + defence
     }
+
+    /**
+     * True while a held automatic weapon is really taking Robert's health down.
+     *
+     * This is the state in which he must not spend a defence: a medkit, a
+     * cover or a glue wall resets his hit streak and would leave him standing
+     * in the stream for another magazine. While this is true he runs instead,
+     * and only defends himself after the trigger is released.
+     */
+    private fun isPinnedByAutomaticFire(state: GameState): Boolean =
+        state.activeWeapon.autoFire &&
+            state.playerBurstShots >= RobertRules.SUSTAINED_FIRE_HITS_TO_FLEE &&
+            robertHealthDropping(state) &&
+            !playerHealthDropping(state)
+
+    /**
+     * Breaks contact at once: sprints out of the stream and returns the line
+     * the battle log shows. Used instead of a defence while a held automatic
+     * weapon is landing on him.
+     */
+    private fun retreatOutOfFire(state: GameState): String =
+        if (state.robertState == "retreat") {
+            // Already running: keep the sprint alive for a full stretch.
+            robertSprintTicks = RobertRules.SPRINT_TICKS
+            planRobertStep(FLEE_TICK_MS)
+            ""
+        } else if (state.robertState in setOf("advance", "flank", "turnBack")) {
+            beginRobertSprint()
+            " ${t("robertFled")}"
+        } else {
+            ""
+        }
 
     // ---------------------------------------------------------------------
     // Guided missiles (player and Robert)
@@ -3639,6 +3703,25 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Watchdog of the player's held burst.
+     *
+     * Called on every bullet, so a continuous machine-gun burst can never be
+     * cut by a hit sound, by a crowded pool or by a glitch of the audio
+     * system: the loop is re-armed on the next beat and keeps playing exactly
+     * as long as the trigger is held. Other sounds are mixed on top of it and
+     * are never allowed to take its stream.
+     */
+    private fun keepPlayerHoldLoopAlive() {
+        val state = _gameState.value
+        audioManager.keepWeaponLoopAlive(
+            state.activeWeapon.fireSoundKey,
+            owner = AudioManager.LOOP_OWNER_PLAYER,
+            volume = 1.0f,
+            posZ = -state.distance
+        )
+    }
+
+    /**
      * Releasing the swipe: bullets and the gun sound stop together and
      * immediately, with no tail and no silence in between.
      */
@@ -3667,6 +3750,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Idempotent start doubles as the watchdog and positional-gain refresh.
         // It never adds a second stream and cannot run after holdFireAllowed().
         startPlayerHoldLoop()
+        // Hard guarantee per bullet: a lost stream is re-armed at once instead
+        // of silencing the rest of the burst.
+        keepPlayerHoldLoopAlive()
         fire(fromAutomatic = true)
     }
 

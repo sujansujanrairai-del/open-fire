@@ -69,7 +69,6 @@ class CombatTest {
             Weapon.GLUE_BREAKER to Triple(17, 27, 34),
             Weapon.SWORD to Triple(27, 43, 54),
             Weapon.AWM to Triple(40, 64, 80),
-            Weapon.MP40 to Triple(18, 29, 36),
             Weapon.M10 to Triple(21, 34, 42),
             Weapon.SUBMACHINE_GUN to Triple(13, 21, 26),
             Weapon.AK47 to Triple(29, 46, 58),

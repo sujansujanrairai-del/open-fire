@@ -243,7 +243,7 @@ class RoundRulesTest {
         // Every weapon of the game is part of the weapon channel set: only
         // the same key is ever cut, so two different weapons really mix.
         for (weaponKey in listOf(
-            "assault", "shortGun", "pistol", "sniperRifle", "awm", "mp40", "machineGun",
+            "assault", "shortGun", "pistol", "sniperRifle", "awm", "machineGun",
             "knifeSwish", "swordGlide", "glueWallBreaker"
         )) {
             assertTrue("$weaponKey must be an exclusive weapon sound", weaponKey in keys)

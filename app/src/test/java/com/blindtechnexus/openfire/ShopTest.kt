@@ -48,7 +48,6 @@ class ShopTest {
         assertEquals(6, Weapon.GLUE_BREAKER.magazine)
         assertEquals("glueBreaker", Weapon.GLUE_BREAKER.id)
         assertEquals("gunGlueBreaker", Weapon.GLUE_BREAKER.nameKey)
-        assertEquals(800, Weapon.MP40.price)
         assertEquals(1200, Weapon.AWM.price)
         assertEquals(1700, Weapon.MACHINE_GUN.price)
         // The three new guns keep the ladder under the missile.
@@ -457,7 +456,10 @@ class ShopTest {
             ),
             everything.battleWeapons(1).map { it.id }.toSet()
         )
-        assertTrue(everything.battleWeapons(2).contains(Weapon.MP40))
+        // The MP40 was removed from the game: no round hands it out.
+        for (round in 1..5) {
+            assertFalse(everything.battleWeapons(round).any { it.id == "mp40" })
+        }
         assertTrue(everything.battleWeapons(2).contains(Weapon.AWM))
         assertTrue(everything.battleWeapons(2).contains(Weapon.SUBMACHINE_GUN))
         assertFalse(everything.battleWeapons(2).contains(Weapon.GRENADE))
@@ -475,8 +477,8 @@ class ShopTest {
     @Test
     fun freeWeaponsAreIssuedByRoundAndNeverTwice() {
         assertEquals(emptyList<Weapon>(), Weapon.issuedForRound(1))
-        assertEquals(listOf(Weapon.MP40, Weapon.AWM), Weapon.issuedForRound(2))
-        assertEquals(listOf(Weapon.MP40, Weapon.AWM, Weapon.GRENADE), Weapon.issuedForRound(3))
+        assertEquals(listOf(Weapon.AWM), Weapon.issuedForRound(2))
+        assertEquals(listOf(Weapon.AWM, Weapon.GRENADE), Weapon.issuedForRound(3))
         // The machine gun is unlockable in the shop but is never handed out
         // for free and is never part of any reward.
         assertEquals(0, Weapon.MACHINE_GUN.issuedFreeFromRound)
@@ -484,19 +486,19 @@ class ShopTest {
         assertTrue(Weapon.MACHINE_GUN.price > 0)
         assertEquals(3, Weapon.MACHINE_GUN.unlockRound)
 
-        val granted = Shop.grantWeapon(Inventory(), Weapon.MP40)
+        val granted = Shop.grantWeapon(Inventory(), Weapon.SWORD)
         assertTrue(granted.success)
-        assertTrue(granted.inventory.ownsWeapon(Weapon.MP40))
-        val twice = Shop.grantWeapon(granted.inventory, Weapon.MP40)
+        assertTrue(granted.inventory.ownsWeapon(Weapon.SWORD))
+        val twice = Shop.grantWeapon(granted.inventory, Weapon.SWORD)
         assertFalse(twice.success)
         assertEquals("alreadyOwned", twice.reasonKey)
         // Granting a weapon also re-enables it when it was disabled.
         val disabled = granted.inventory.copy(
-            disabledWeapons = setOf(Weapon.MP40.id)
+            disabledWeapons = setOf(Weapon.SWORD.id)
         )
-        val removed = Shop.removeWeapon(disabled, 0, Weapon.MP40).inventory
-        assertFalse(removed.ownsWeapon(Weapon.MP40))
-        assertTrue(Shop.grantWeapon(removed, Weapon.MP40).inventory.weaponEnabled(Weapon.MP40))
+        val removed = Shop.removeWeapon(disabled, 0, Weapon.SWORD).inventory
+        assertFalse(removed.ownsWeapon(Weapon.SWORD))
+        assertTrue(Shop.grantWeapon(removed, Weapon.SWORD).inventory.weaponEnabled(Weapon.SWORD))
     }
 
     @Test

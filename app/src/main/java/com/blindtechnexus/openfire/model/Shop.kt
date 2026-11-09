@@ -14,8 +14,7 @@ package com.blindtechnexus.openfire.model
  * missile hit destroys its target (see [BombRules] and [MissileRules]).
  *
  * Three weapon families behave differently in battle:
- *  - classic firearms and melee weapons fire one shot per swipe up (the
- *    MP40 is a single-shot firearm since the audio-game rebalance);
+ *  - classic firearms and melee weapons fire one shot per swipe up;
  *  - automatic weapons ([autoFire]: the submachine gun, the AK-47 and the
  *    machine gun) keep firing while the up-swipe is held, one bullet per
  *    [burstIntervalMs] (0.5 s, 1 s or 1.5 s depending on the weapon's power),
@@ -184,27 +183,6 @@ enum class Weapon(
         switchSoundKey = "swordSwitch",
         hitSoundKey = "swordHit",
         missSoundKey = "swordMiss"
-    ),
-    /**
-     * The MP40: a single-shot firearm exactly like the pistol and the sniper
-     * rifle. One swipe fires one bullet and the magazine holds twenty rounds.
-     * It unlocks in round two and is issued free at battle start.
-     */
-    MP40(
-        id = "mp40",
-        nameKey = "gunMp40",
-        powerPercent = 18,
-        closeRangePowerPercent = 36,
-        magazine = 20,
-        price = 800,
-        ownedByDefault = false,
-        melee = false,
-        fireSoundKey = "mp40",
-        switchSoundKey = "gunReload",
-        hitSoundKey = "gunHit",
-        missSoundKey = "click",
-        unlockRound = 2,
-        issuedFreeFromRound = 2
     ),
     /**
      * The M10: a single-shot handgun in the pistol family. One swipe fires
@@ -719,9 +697,9 @@ object Shop {
 
     /**
      * Buys a weapon. [completedRounds] is the profile's lifetime completed
-     * round count; locked weapons (the MP40 and the AWM from round two, the
-     * bombs from round three, the machine gun from round four and the missile
-     * after round two) check it before anything else.
+     * round count; locked weapons (the AWM from round two, the bombs from
+     * round three, the machine gun from round three and the missile after
+     * round two) check it before anything else.
      * The app always passes the real value; the permissive default only keeps
      * pure price tests of the unrestricted weapons free of progression setup.
      */
@@ -751,7 +729,7 @@ object Shop {
     }
 
     /**
-     * Hands a weapon out for free (the round-two MP40 and AWM issue and the
+     * Hands a weapon out for free (the round-two AWM issue and the
      * round-three grenade reward). Never charges coins and never re-adds a
      * weapon the player already owns.
      */
