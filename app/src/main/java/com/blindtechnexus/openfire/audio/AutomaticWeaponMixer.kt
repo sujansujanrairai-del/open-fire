@@ -152,15 +152,16 @@ internal class AutomaticWeaponMixer(
      * magazine.
      */
     fun keepAlive(key: String, owner: String, left: Float, right: Float) {
-        val request = synchronized(lock) {
-            if (released || paused) return
-            val channel = channels[channelId(owner, key)] ?: return
-            if (!channel.desired) return
-            if (channel.streamId != NO_STREAM) {
-                updateVolumeLocked(channel, left, right)
-                return
+        var request: StartRequest? = null
+        synchronized(lock) {
+            val channel = channels[channelId(owner, key)]
+            if (!released && !paused && channel != null && channel.desired) {
+                if (channel.streamId == NO_STREAM) {
+                    request = armLocked(channel, left, right)
+                } else {
+                    updateVolumeLocked(channel, left, right)
+                }
             }
-            armLocked(channel, left, right)
         }
         start(request)
     }

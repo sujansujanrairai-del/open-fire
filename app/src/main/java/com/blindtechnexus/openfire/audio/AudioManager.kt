@@ -255,8 +255,12 @@ class AudioManager(private val context: Context) {
          */
         const val SFX_STREAM_BUDGET = MAX_SFX_STREAMS - 8
 
-        /** Pool priority of a held weapon loop: above every one-shot effect. */
-        const val LOOP_STREAM_PRIORITY = 5
+        /**
+         * Pool priority of a held weapon loop: above every one-shot effect.
+         * Kept as an alias of the mixer's own constant so the two can never
+         * disagree.
+         */
+        val LOOP_STREAM_PRIORITY = AutomaticAudioBackend.LOOP_STREAM_PRIORITY
 
         /** Pool priority of one-shot effects. */
         const val SFX_STREAM_PRIORITY = 1
@@ -1919,13 +1923,15 @@ class AudioManager(private val context: Context) {
      *
      * Returns true when the request may take a stream.
      */
-    private fun reserveSfxStream(key: String): Boolean = synchronized(sfxBudgetLock) {
-        pruneFinishedSfxStreamsLocked()
-        if (sfxStreamDeadlines.size < SFX_STREAM_BUDGET) return true
+    private fun reserveSfxStream(key: String): Boolean {
+        synchronized(sfxBudgetLock) {
+            pruneFinishedSfxStreamsLocked()
+            if (sfxStreamDeadlines.size < SFX_STREAM_BUDGET) return true
+        }
         // The effects are at their budget: drop this one instead of letting it
         // displace a stream of the held loop.
         Log.d(TAG, "SFX budget reached, '$key' dropped instead of cutting a held loop")
-        false
+        return false
     }
 
     /**
