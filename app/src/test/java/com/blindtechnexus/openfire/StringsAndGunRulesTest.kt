@@ -105,7 +105,8 @@ class StringsAndGunRulesTest {
         )
         for ((weapon, price) in prices) assertEquals(price, weapon.price)
         assertEquals(listOf(250, 400, 550, 1700, 1800, 3500), DefenceItem.entries.map { it.price }.sorted())
-        assertEquals(listOf(75, 140, 180, 200, 250), Extension.entries.map { it.price }.sorted())
+        // Max Speed (250) is gone: the four remaining extensions.
+        assertEquals(listOf(75, 140, 180, 200), Extension.entries.map { it.price }.sorted())
         assertEquals(1000, MissileRules.MISSILE_POWER_PRICE)
         assertEquals(Weapon.forSale().map { it.price }.sorted(), Weapon.forSale().map { it.price })
         assertTrue(Weapon.forSale().all { it.price <= 2200 })

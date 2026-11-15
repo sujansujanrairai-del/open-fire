@@ -171,6 +171,8 @@ class RobertTest {
         assertEquals(
             RobertRules.ALL_STANDARD_WEAPONS
                 .filter { it !in RobertRules.ENEMY_FORBIDDEN_WEAPONS }
+                // The AR-15 is the player's rifle; no round hands it to Robert.
+                .filter { it != Weapon.AR15 }
                 .toSet(),
             RobertRules.ENEMY_WEAPONS.toSet()
         )
