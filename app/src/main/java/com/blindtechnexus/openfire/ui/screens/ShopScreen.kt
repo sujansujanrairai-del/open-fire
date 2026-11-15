@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -161,7 +162,9 @@ fun ShopScreen(viewModel: GameViewModel) {
                 modifier = Modifier.testTag("shop_flat_damage_info")
             )
             Spacer(modifier = Modifier.height(12.dp))
-            Weapon.forSale().forEach { weapon ->
+            // Every listed gun keeps its own keyed slot, so a row is never
+            // rebuilt (and its TalkBack focus never dropped) when a neighbour changes.
+            Weapon.shopListed().forEach { weapon -> key(weapon.id) {
                 val owned = inventory.ownsWeapon(weapon)
                 val weaponLocked = Shop.isLocked(
                     weapon.requiredCompletedRounds,
@@ -194,8 +197,10 @@ fun ShopScreen(viewModel: GameViewModel) {
                 }
                 val weaponOn = inventory.weaponEnabled(weapon)
                 ShopItemRow(
-                    title = "${viewModel.t(weapon.nameKey)}, ${weapon.price} ${viewModel.t("coins")}.",
-                    detail = detail + if (owned) {
+                    title = "${viewModel.t(weapon.nameKey)}, " +
+                        (if (weapon.price > 0) "${weapon.price} ${viewModel.t("coins")}" else viewModel.t("freeItem")) +
+                        ".",
+                    detail = detail + (if (weapon.ownedByDefault) " ${viewModel.t("shopBuiltInGunNote")}" else "") + if (owned) {
                         " ${viewModel.t("weaponState")}: " +
                             if (weaponOn) {
                                 viewModel.t("enabledState")
@@ -209,6 +214,8 @@ fun ShopScreen(viewModel: GameViewModel) {
                     owned = owned,
                     buyLabel = viewModel.t("buy"),
                     removeLabel = viewModel.t("remove"),
+                    // The two free guns can be disabled but never removed or bought.
+                    canRemove = !weapon.ownedByDefault,
                     onBuy = { viewModel.buyWeapon(weapon.id) },
                     onRemove = { pendingWeapon = weapon },
                     testTagPrefix = "shop_weapon_${weapon.id}",
@@ -222,7 +229,7 @@ fun ShopScreen(viewModel: GameViewModel) {
                     onToggle = { viewModel.toggleWeaponEnabled(weapon.id) }
                 )
                 Spacer(modifier = Modifier.height(10.dp))
-            }
+            } }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -314,7 +321,7 @@ fun ShopScreen(viewModel: GameViewModel) {
             )
             Spacer(modifier = Modifier.height(12.dp))
 
-            DefenceItem.entries.sortedBy { it.price }.forEach { item ->
+            DefenceItem.entries.sortedBy { it.price }.forEach { item -> key(item.id) {
                 val unlocked = stats.completedRounds >= item.requiredCompletedRounds
                 DefenceRow(
                     viewModel = viewModel,
@@ -329,7 +336,7 @@ fun ShopScreen(viewModel: GameViewModel) {
                     onRemove = { pendingDefence = item }
                 )
                 Spacer(modifier = Modifier.height(10.dp))
-            }
+            } }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -872,7 +879,9 @@ private fun ShopItemRow(
     testTagPrefix: String,
     /** Optional Enable / Disable switch shown under an owned item. */
     toggleLabel: String? = null,
-    onToggle: (() -> Unit)? = null
+    onToggle: (() -> Unit)? = null,
+    /** False for a gun the shop never removes (it can only be disabled). */
+    canRemove: Boolean = true
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
@@ -903,13 +912,15 @@ private fun ShopItemRow(
         }
         Spacer(modifier = Modifier.height(8.dp))
         if (owned) {
-            Box(modifier = Modifier.fillMaxWidth()) {
-                GameButton(
-                    text = removeLabel,
-                    onClick = onRemove,
-                    type = ButtonType.DANGER,
-                    testTag = "${testTagPrefix}_remove"
-                )
+            if (canRemove) {
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    GameButton(
+                        text = removeLabel,
+                        onClick = onRemove,
+                        type = ButtonType.DANGER,
+                        testTag = "${testTagPrefix}_remove"
+                    )
+                }
             }
             if (toggleLabel != null && onToggle != null) {
                 Spacer(modifier = Modifier.height(8.dp))

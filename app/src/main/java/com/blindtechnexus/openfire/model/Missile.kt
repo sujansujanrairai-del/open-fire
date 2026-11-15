@@ -43,13 +43,13 @@ object MissileRules {
     const val ANTI_MISSILE_PRICE = 1800
 
     /**
-     * Length of `missile.mp3` (about 14 seconds). A direct hit lands
+     * Length of `missile.ogg` (about 14 seconds). A direct hit lands
      * exactly when this sound finishes.
      */
     const val SOUND_DURATION_MS = SoundDurations.MISSILE_MS
 
     /**
-     * Length of `explosion.mp3`. The battle ends only after the impact
+     * Length of `explosion.ogg`. The battle ends only after the impact
      * explosion has really finished playing, never on the frame of the hit.
      */
     const val EXPLOSION_MS = SoundDurations.EXPLOSION_MS

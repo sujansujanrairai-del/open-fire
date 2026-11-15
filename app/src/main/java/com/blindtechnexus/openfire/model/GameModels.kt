@@ -39,6 +39,7 @@ enum class BattleMenuItem(
     COVER("cover", DefenceItem.COVER),
     GLUE_WALL("glooWall", DefenceItem.GLUE_WALL),
     ANTI_MISSILE("antiMissile", DefenceItem.ANTI_MISSILE),
+    CAR("car", DefenceItem.CAR),
     ANTI_BOMB("antiBomb", DefenceItem.ANTI_BOMB),
     EXIT("exitGame", null),
     RECOVER("recoverWeapon", null);
@@ -278,6 +279,20 @@ data class GameState(
     /** Milliseconds left before the round five limit expires. */
     val battleRemainingMs: Long = 0L,
 
+    // ------------------------------------------------------------------
+    // The bulletproof car and the electric shock.
+    // ------------------------------------------------------------------
+    /** Where the bulletproof car is in its cycle. */
+    val carStage: CarStage = CarStage.NOT_DEPLOYED,
+    /** Health of the car. Bullets can only wear it down to one. */
+    val carHp: Int = CarRules.MAX_HP,
+    /** True while the user holds the electric shock. */
+    val shockHolding: Boolean = false,
+    /** True once the user has used the electric shock in this match. */
+    val electricShockInPlay: Boolean = false,
+    /** True while Robert answers the user's shock with his own. */
+    val robertShocking: Boolean = false,
+
     /** True while the timer bomb duration picker is open. */
     val timerSelectActive: Boolean = false,
     /** Highlighted duration of the timer bomb picker. */
@@ -298,12 +313,9 @@ data class GameState(
     val playerBurstPlayerHp: Int = 0,
 
     /**
-     * The band Robert randomly prefers to fire from ([FireRange.id]):
-     * 40%-70%, 90%-100%, or the 0%-40% deception band.
+     * The band Robert fights from ([FireRange.id]): 40%-70% or 90%-100%.
      */
     val robertFireRange: String = FireRange.MID.id,
-    /** Deception shots still to fire from the 0%-40% band (one or two). */
-    val robertDeceptionShots: Int = 0,
     val robertHits: Int = 0,
     val robertShots: Int = 0,
     val robertDamage: Int = 0,

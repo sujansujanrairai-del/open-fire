@@ -26,13 +26,14 @@ import org.junit.Test
 class BattleMenuTest {
 
     @Test
-    fun theMenuRunsMedikitCoverGlueWallAntiMissileAntiBombExitAndRecover() {
+    fun theMenuRunsMedikitCoverGlueWallAntiMissileCarAntiBombExitAndRecover() {
         assertEquals(
             listOf(
                 BattleMenuItem.MEDKIT,
                 BattleMenuItem.COVER,
                 BattleMenuItem.GLUE_WALL,
                 BattleMenuItem.ANTI_MISSILE,
+                BattleMenuItem.CAR,
                 BattleMenuItem.ANTI_BOMB,
                 BattleMenuItem.EXIT,
                 BattleMenuItem.RECOVER
@@ -50,7 +51,7 @@ class BattleMenuTest {
     @Test
     fun recoverIsTheSafeDefaultSelection() {
         assertEquals(BattleMenuItem.RECOVER.ordinal, BattleMenuItem.RECOVER_INDEX)
-        assertEquals(6, BattleMenuItem.RECOVER_INDEX)
+        assertEquals(7, BattleMenuItem.RECOVER_INDEX)
         assertEquals(BattleMenuItem.RECOVER_INDEX, GameState().menuIndex)
         assertEquals(BattleMenuItem.RECOVER, GameState().menuItem)
         // Nothing is damaged in a fresh battle, so the default tap is free.
@@ -63,34 +64,36 @@ class BattleMenuTest {
     fun cyclingWrapsAroundBothEnds() {
         assertEquals(BattleMenuItem.MEDKIT, BattleMenuItem.at(0))
         assertEquals(BattleMenuItem.ANTI_MISSILE, BattleMenuItem.at(3))
-        assertEquals(BattleMenuItem.ANTI_BOMB, BattleMenuItem.at(4))
-        assertEquals(BattleMenuItem.EXIT, BattleMenuItem.at(5))
-        assertEquals(BattleMenuItem.RECOVER, BattleMenuItem.at(6))
-        assertEquals(BattleMenuItem.MEDKIT, BattleMenuItem.at(7))
+        assertEquals(BattleMenuItem.CAR, BattleMenuItem.at(4))
+        assertEquals(BattleMenuItem.ANTI_BOMB, BattleMenuItem.at(5))
+        assertEquals(BattleMenuItem.EXIT, BattleMenuItem.at(6))
+        assertEquals(BattleMenuItem.RECOVER, BattleMenuItem.at(7))
+        assertEquals(BattleMenuItem.MEDKIT, BattleMenuItem.at(8))
         assertEquals(BattleMenuItem.RECOVER, BattleMenuItem.at(-1))
         assertEquals(BattleMenuItem.EXIT, BattleMenuItem.at(-2))
         assertEquals(BattleMenuItem.ANTI_BOMB, BattleMenuItem.at(-3))
-        assertEquals(BattleMenuItem.ANTI_MISSILE, BattleMenuItem.at(-4))
-        assertEquals(BattleMenuItem.GLUE_WALL, BattleMenuItem.at(-5))
+        assertEquals(BattleMenuItem.CAR, BattleMenuItem.at(-4))
+        assertEquals(BattleMenuItem.ANTI_MISSILE, BattleMenuItem.at(-5))
+        assertEquals(BattleMenuItem.GLUE_WALL, BattleMenuItem.at(-6))
     }
 
     @Test
-    fun onlyTheFiveDefencesCarryAnItem() {
+    fun onlyTheSixDefencesCarryAnItem() {
         assertEquals(DefenceItem.MEDKIT, BattleMenuItem.MEDKIT.defence)
         assertEquals(DefenceItem.COVER, BattleMenuItem.COVER.defence)
         assertEquals(DefenceItem.GLUE_WALL, BattleMenuItem.GLUE_WALL.defence)
         assertEquals(DefenceItem.ANTI_MISSILE, BattleMenuItem.ANTI_MISSILE.defence)
+        assertEquals(DefenceItem.CAR, BattleMenuItem.CAR.defence)
         assertEquals(DefenceItem.ANTI_BOMB, BattleMenuItem.ANTI_BOMB.defence)
         assertEquals(null, BattleMenuItem.EXIT.defence)
         assertEquals(null, BattleMenuItem.RECOVER.defence)
     }
 
     @Test
-    fun aFreshBattleStartsInTheMiddleBandWithoutDeception() {
+    fun aFreshBattleStartsInTheMiddleBand() {
         val state = GameState()
         assertEquals(FireRange.MID.id, state.robertFireRange)
         assertEquals(FireRange.MID, state.robertRange)
-        assertEquals(0, state.robertDeceptionShots)
         assertEquals("advance", state.robertState)
         assertFalse(state.robertFleeing)
         assertFalse(state.activeWeaponDamaged)

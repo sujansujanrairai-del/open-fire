@@ -166,10 +166,6 @@ class RobertTest {
                 "round $round must not arm him with an automatic",
                 RobertRules.weaponsForRound(round).none { it.autoFire }
             )
-            // A feint can never draw one either.
-            for (weapon in RobertRules.weaponsForRound(round)) {
-                assertFalse(RobertRules.isFeintWeapon(weapon) && weapon.autoFire)
-            }
         }
         // Everything he is ever allowed to own is exactly the allowed set.
         assertEquals(
@@ -237,8 +233,7 @@ class RobertTest {
             robertHp = robertHp,
             robertMaxHp = 1000,
             playerHp = playerHp,
-            playerMaxHp = 1000,
-            deceptionShotsLeft = 0
+            playerMaxHp = 1000
         )
         // Big advantage: the 90%-100% band. Moderate: the 70%-90% band.
         val bigProx = Combat.proximityOf(range(900, 400).targetDistance)
@@ -249,10 +244,10 @@ class RobertTest {
         assertEquals(FireRange.MID, range(600, 600))
         val losingProx = Combat.proximityOf(range(300, 800).targetDistance)
         assertTrue(losingProx >= 40f && losingProx <= 70f)
-        // Forced point blank always wins, deception always finishes.
+        // Forced point blank always wins.
         assertEquals(
             FireRange.CLOSE,
-            RobertRules.situationalRange(FireRange.FAR, true, false, 100, 1000, 900, 1000, 2)
+            RobertRules.situationalRange(FireRange.FAR, true, false, 100, 1000, 900, 1000)
         )
         assertEquals(
             FireRange.FAR,
@@ -273,7 +268,6 @@ class RobertTest {
                 robertMaxHp = 1000,
                 playerHp = 900,
                 playerMaxHp = 1000,
-                deceptionShotsLeft = 0,
                 robertHasBreaker = true
             )
         )
@@ -288,7 +282,6 @@ class RobertTest {
                 robertMaxHp = 1000,
                 playerHp = 900,
                 playerMaxHp = 1000,
-                deceptionShotsLeft = 0,
                 robertHasBreaker = false
             )
         )
@@ -905,21 +898,6 @@ class RobertTest {
     }
 
     @Test
-    fun deceptionTripsLastOneOrTwoShotsAndHappenSometimes() {
-        val random = Random(99)
-        val shots = mutableSetOf<Int>()
-        repeat(200) { shots.add(RobertRules.deceptionShots(random)) }
-        assertEquals(setOf(1, 2), shots)
-
-        var deceptive = 0
-        repeat(1000) {
-            if (RobertRules.shouldStartDeception(random)) deceptive++
-        }
-        assertTrue(deceptive > 100)
-        assertTrue(deceptive < 400)
-    }
-
-    @Test
     fun damagedWeaponOrGlueWallAlwaysPullsHimToPointBlank() {
         assertEquals(FireRange.CLOSE, RobertRules.fireRangeFor(FireRange.MID, true, false))
         assertEquals(FireRange.CLOSE, RobertRules.fireRangeFor(FireRange.FAR, true, false))
@@ -929,52 +907,5 @@ class RobertTest {
         val proximity = Combat.proximityOf(FireRange.CLOSE.targetDistance)
         assertTrue(proximity >= Combat.HEAVY_ZONE_MIN)
         assertTrue(proximity <= Combat.FULL_PROXIMITY)
-    }
-
-    @Test
-    fun feintsNeverUseAContinuousFireWeapon() {
-        // The deception band exists only for fake shots. A feint that used the
-        // submachine gun, the AK-47 or the machine gun played a long automatic
-        // burst recording, so one fake shot sounded like a real attack.
-        for (weapon in Weapon.entries) {
-            if (weapon.autoFire) {
-                assertFalse("${weapon.id} must never fake a shot", RobertRules.isFeintWeapon(weapon))
-            }
-        }
-        for (weapon in listOf(Weapon.M10, Weapon.PISTOL, Weapon.SNIPER)) {
-            assertTrue("${weapon.id} may fake a shot", RobertRules.isFeintWeapon(weapon))
-            assertTrue(weapon in RobertRules.FEINT_WEAPONS)
-        }
-        // Melee weapons and launchers have their own sounds and rules.
-        assertFalse(RobertRules.isFeintWeapon(Weapon.KNIFE))
-        assertFalse(RobertRules.isFeintWeapon(Weapon.SWORD))
-        assertFalse(RobertRules.isFeintWeapon(Weapon.MISSILE))
-        assertFalse(RobertRules.isFeintWeapon(Weapon.GRENADE))
-    }
-
-    @Test
-    fun aFeintWeaponIsAlwaysDrawnFromTheSingleShotPool() {
-        val random = Random(7)
-        // Only automatic weapons available: no feint is possible at all.
-        val automaticOnly = listOf(Weapon.SUBMACHINE_GUN, Weapon.AK47, Weapon.MACHINE_GUN)
-        assertTrue(RobertRules.feintWeaponsFrom(automaticOnly).isEmpty())
-        assertEquals(null, RobertRules.feintWeapon(automaticOnly, random))
-
-        // A mixed loadout always yields a single-shot weapon.
-        val mixed = automaticOnly + listOf(Weapon.PISTOL, Weapon.SNIPER)
-        repeat(40) {
-            val chosen = RobertRules.feintWeapon(mixed, random)
-            assertTrue("a feint must use a single-shot weapon", chosen != null)
-            assertTrue(chosen!! in RobertRules.FEINT_WEAPONS)
-            assertFalse(chosen.autoFire)
-        }
-        assertEquals(
-            listOf(Weapon.PISTOL, Weapon.M10),
-            RobertRules.feintWeaponsFrom(listOf(Weapon.AK47, Weapon.PISTOL, Weapon.M10))
-        )
-        assertEquals(
-            listOf(Weapon.M10, Weapon.PISTOL, Weapon.SNIPER),
-            RobertRules.feintWeaponsFrom(RobertRules.FEINT_WEAPONS)
-        )
     }
 }

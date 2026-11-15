@@ -67,6 +67,7 @@ object DamageTable {
     const val SNIPER_POWER_HP = 64
     const val MACHINE_GUN_POWER_HP = 70
     const val AWM_POWER_HP = 80
+    const val AR15_POWER_HP = 48
 
     /** Half of the point-blank power: the 40%-70% band. */
     fun lightFromHeavy(heavy: Int): Int = (heavy / 2).coerceIn(1, MAX_WEAPON_DAMAGE_HP)
@@ -82,6 +83,7 @@ object DamageTable {
         Weapon.GLUE_BREAKER to row(GLUE_BREAKER_POWER_HP),
         Weapon.SHORT_GUN to row(SHORT_GUN_POWER_HP),
         Weapon.M10 to row(M10_POWER_HP),
+        Weapon.AR15 to row(AR15_POWER_HP),
         Weapon.ASSAULT_GUN to row(ASSAULT_GUN_POWER_HP),
         Weapon.PISTOL to row(PISTOL_POWER_HP),
         Weapon.SWORD to row(SWORD_POWER_HP),
@@ -89,6 +91,8 @@ object DamageTable {
         Weapon.SNIPER to row(SNIPER_POWER_HP),
         Weapon.MACHINE_GUN to row(MACHINE_GUN_POWER_HP),
         Weapon.AWM to row(AWM_POWER_HP),
+        // The electric shock drains health per second (ElectricShockRules).
+        Weapon.ELECTRIC_SHOCK to intArrayOf(0, 0, 0, 0),
         // Explosives: the missile and every bomb are resolved by their own
         // rules; these rows are the documented fallback powers.
         Weapon.GRENADE to intArrayOf(40, 40, 40, 40),

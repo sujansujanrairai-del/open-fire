@@ -507,7 +507,6 @@ fun ChangelogScreen(viewModel: GameViewModel) {
                 "Automatic aiming: shots can hit Robert within the weapon’s effective distance regardless of which way you or he last ran. Movement still changes position and the direction reported in status; walls and cover still block shots.",
                 "The battlefield is now a 25 metre square, 25 by 25 metres, with left, right, forward and backward movement and real 3D positional audio: an enemy on the right half of the square is heard in the right ear and one running at you simply grows louder.",
                 "Audio mixing: firing the same weapon again still cuts its own previous shot, but two different weapons now really mix together, and every footstep, hit and explosion keeps its own channel. The submachine gun fires every 0.5 seconds and the machine gun every 1.5 seconds.",
-                "Max Speed is now maximum speed: with the extension on, the fast level is pushed to 2.2 times the normal speed - the absolute maximum - and the footsteps follow at the top of their playback range. Robert's own fastest speed mode unlocks automatically from round three.",
                 "Bombs are scaled to the new square: the blast and the timer bomb safety line are 12 metres, so the timer bomb thrower has a real escape race inside the 25 metre battlefield."
             )
             newestNotes.forEach { note ->

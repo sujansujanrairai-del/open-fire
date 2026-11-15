@@ -86,9 +86,6 @@ object RobertRules {
     fun glueWallBreakerLimitForRound(round: Int): Int =
         if (round.coerceIn(1, Progression.ROUNDS_PER_MATCH) == 1) 1 else 2
 
-    /** Chance that a relocation is a deception trip into the miss band. */
-    const val DECEPTION_CHANCE = 0.22f
-
     /** Fast retreat: metres gained per flee tick, and the tick length. */
     const val FLEE_STEP_M = 0.9f
     const val FLEE_TICK_MS = 160L
@@ -333,48 +330,6 @@ object RobertRules {
     /** Defensive assets may only be used while alive and below 150 HP, in every round. */
     fun defenceThresholdHp(round: Int, maxHp: Int): Int = DEFENCE_THRESHOLD_HP
 
-    // ------------------------------------------------------------------
-    // Feint (deception) fire
-    //
-    // Robert sometimes walks into the 0%-40% band and fires one or two shots
-    // that always miss, purely to make the real player look for an attack
-    // that is not coming. Those feints must never use a continuous-fire
-    // weapon: the submachine gun, the AK-47 and the machine gun play a long
-    // automatic burst recording, so a single feint shot used to sound like a
-    // full held burst and confused the player about what is really
-    // happening. Feints are therefore restricted to single-shot weapons.
-    // ------------------------------------------------------------------
-
-    /** The single-shot weapons a feint may use, cheapest first. */
-    val FEINT_WEAPONS: List<Weapon> = listOf(Weapon.M10, Weapon.PISTOL, Weapon.SNIPER)
-
-    /**
-     * True when [weapon] fires one round per trigger pull, so it can be used
-     * for a feint. Automatic weapons are excluded explicitly, and so are
-     * melee weapons and launchers (they have their own sounds and rules).
-     */
-    fun isFeintWeapon(weapon: Weapon): Boolean =
-        !weapon.autoFire && !weapon.melee && !weapon.missileLauncher && !weapon.bomb
-
-    /** Every single-shot weapon of [allowed] that may be used for a feint. */
-    fun feintWeaponsFrom(allowed: List<Weapon>): List<Weapon> =
-        allowed.filter { isFeintWeapon(it) }
-
-    /**
-     * The weapon of one feint shot, or null when Robert owns no single-shot
-     * weapon at all. A null result means the feint must be cancelled instead
-     * of being fired with an automatic weapon.
-     */
-    fun feintWeapon(allowed: List<Weapon>, random: Random): Weapon? {
-        val candidates = feintWeaponsFrom(allowed)
-        if (candidates.isEmpty()) return null
-        // Prefer the documented feint guns (M10, pistol, sniper) when they are
-        // part of his loadout; otherwise any single-shot weapon is fine.
-        val documented = candidates.filter { it in FEINT_WEAPONS }
-        val pool = if (documented.isNotEmpty()) documented else candidates
-        return pool[random.nextInt(pool.size)]
-    }
-
     /**
      * The three continuous-fire weapons Robert may never obtain, in any round
      * from one to five and by any means. They are the player's own automatic
@@ -395,7 +350,7 @@ object RobertRules {
      */
     val ALL_STANDARD_WEAPONS: List<Weapon> =
         Weapon.entries.filter {
-            !it.missileLauncher && !it.bomb && it != Weapon.GLUE_BREAKER
+            !it.missileLauncher && !it.bomb && !it.electricShock && it != Weapon.GLUE_BREAKER
         }
 
     /** Every standard battle weapon Robert may ever be handed in a round. */
@@ -418,6 +373,10 @@ object RobertRules {
         val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
         if (weapon in ENEMY_FORBIDDEN_WEAPONS) return false
         if (weapon.missileLauncher || weapon.bomb || weapon == Weapon.GLUE_BREAKER) return false
+        // The electric shock is never a gun: Robert answers it with his own shock.
+        if (weapon.electricShock) return false
+        // The AR-15 is the player's rifle; no round hands it to Robert.
+        if (weapon == Weapon.AR15) return false
         return weapon.unlockRound <= safeRound
     }
 
@@ -570,13 +529,6 @@ object RobertRules {
     /** The two bands Robert really fights from: 40%-70% or 90%-100%. */
     fun preferredRange(random: Random): FireRange =
         if (random.nextBoolean()) FireRange.MID else FireRange.CLOSE
-
-    /** True when the next relocation should be a confusing 0%-40% trip. */
-    fun shouldStartDeception(random: Random): Boolean =
-        random.nextFloat() < DECEPTION_CHANCE
-
-    /** How many useless shots he fires from the 0%-40% band: one or two. */
-    fun deceptionShots(random: Random): Int = 1 + random.nextInt(2)
 
     /**
      * The band Robert holds after applying forced point-blank situations. A
@@ -1146,7 +1098,6 @@ object RobertRules {
      * he never walks into a wall he cannot shoot through. Otherwise a big
      * advantage pushes him into the 90%-100% band, a moderate advantage into
      * the 70%-90% band, and a disadvantage pulls him back to 40%-70%.
-     * An active 0%-40% deception trip is always allowed to finish.
      * In round 5 (strategy round), positioning is tactical not brute.
      */
     fun situationalRange(
@@ -1157,13 +1108,11 @@ object RobertRules {
         robertMaxHp: Int,
         playerHp: Int,
         playerMaxHp: Int,
-        deceptionShotsLeft: Int,
         robertHasBreaker: Boolean = true,
         playerWeapon: Weapon? = null
     ): FireRange {
         if (playerWeaponDamaged) return FireRange.CLOSE
         if (playerGlueWallActive) return if (robertHasBreaker) FireRange.CLOSE else FireRange.FAR
-        if (stored == FireRange.FAR && deceptionShotsLeft > 0) return FireRange.FAR
         val gap = advantageGap(robertHp, robertMaxHp, playerHp, playerMaxHp)
         // Round 5 strategic: even when advantaged, prefer STRONG over CLOSE for
         // tactical control.
