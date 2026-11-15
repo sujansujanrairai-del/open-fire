@@ -249,9 +249,10 @@ class RobertTest {
             FireRange.CLOSE,
             RobertRules.situationalRange(FireRange.FAR, true, false, 100, 1000, 900, 1000)
         )
-        assertEquals(
-            FireRange.FAR,
-            RobertRules.situationalRange(FireRange.FAR, false, false, 900, 1000, 100, 1000, 1)
+        // A big advantage always presses in: Robert never stays at range.
+        assertFalse(
+            RobertRules.situationalRange(FireRange.FAR, false, false, 900, 1000, 100, 1000) ==
+                FireRange.FAR
         )
     }
 

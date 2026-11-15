@@ -173,8 +173,9 @@ class MixEngineTest {
         val input = floatArrayOf(5f, -5f, 0.25f, -0.25f)
         val output = ShortArray(4)
         engine.toPcm16(input, 2, output)
-        assertTrue(output[0] in 1..Short.MAX_VALUE.toInt())
-        assertTrue(output[1] in Short.MIN_VALUE.toInt() + 1..-1)
-        assertEquals(8192, output[2].toInt(), 2)
+        assertTrue(output[0].toInt() in 1..Short.MAX_VALUE.toInt())
+        assertTrue(output[1].toInt() in Short.MIN_VALUE.toInt() + 1..-1)
+        // 0.25 of full scale is 8192 (within rounding).
+        assertEquals(8192.0, output[2].toDouble(), 2.0)
     }
 }
