@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.8
+
+- Remove the enemy's pre-range gunfire: Robert no longer fires a feint or any shot from the deception band to make the player think he is about to shoot, and the feint logic is deleted. He fires only when he is in his real firing range.
+- Add the AR-15 rifle: a player firearm from round one, with its own `ar-15` sound. Robert never carries it.
+- Add the bulletproof car (defence menu, between the anti-missile and the anti-bomb). It costs 3,500 coins, is unlocked after round one and can be used in two battles before it needs a refuel for 2,000 coins. Inside the closed car no bullet reaches the user, and the user can still fire from inside. Only missiles and bombs can destroy it, and an active anti-missile or anti-bomb system blocks them. Robert shoots normally at the car until its health drops below 300, then he uses his missiles and bombs against it. Its door, start, drive, brake, fire, reload, refuel and exit gestures follow the spoken prompts, with the car start, engine, moving, brake, door and crash sounds used for each step.
+- Add the electric shock, unlocked after round two and sold for 1,500 coins with the machine guns. Holding the up-swipe starts the magical sound at once and drains Robert's health; it is capped at 30 seconds per use. Robert can answer only after five seconds of the user's shock, drains 10% of the user's health per second and stops the moment the user lets go. Releasing the shock plays the electric-shock sound mixed with the enemy-hit sound.
+- Rework the audio mixer: every sound is decoded once and mixed on one output stream, so thousands of sounds can play at the same time without freezing one sound on another. A chained sound (such as the car start followed by the engine) starts on the exact frame the previous one ends.
+- Convert every sound asset from MP3 to OGG and rename all of them to match the code that uses them. Unused river and water-walk sounds are removed.
+- Fix the shop's TalkBack focus: shop rows are keyed, so scrolling no longer moves the focus to another item.
+- Let the shotgun and the assault rifle be disabled from the shop, but never removed or sold. At least one gun must stay enabled.
+- Remove the "Max Speed" extension and all of its logic.
+- Bump to version 2.8 (version code 12).
+
 ## 2.7
 
 - Remove the MP40 from the game completely: its weapon entry, its damage row, its shop slot and free issue, its sound asset, its sound alias, its synthetic fallback, its mixer bus key, its interface text in all three languages and every test that named it are gone. No fighter can own, buy, be issued or be shot with it any more.

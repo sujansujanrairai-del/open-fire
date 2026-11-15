@@ -173,9 +173,7 @@ object VolumeMixer {
     /**
      * Footstep playback rate for a movement speed in metres per second.
      *
-     * Slow movement stretches the steps out; a fast run speeds them up; and
-     * the Max Speed extension on the fast level pushes the rate to the top of
-     * the range, so an extremely fast run really sounds extremely fast.
+     * Slow movement stretches the steps out and a fast run speeds them up.
      */
     fun walkRate(speedMps: Float): Float {
         val safeSpeed = if (speedMps.isNaN()) 0f else speedMps.coerceAtLeast(0f)

@@ -254,53 +254,6 @@ class ShopTest {
     }
 
     @Test
-    fun maxSpeedIsTheFifthExtension() {
-        assertEquals(5, Extension.entries.size)
-        assertEquals(250, Extension.MAX_SPEED.price)
-        assertEquals("maxSpeed", Extension.MAX_SPEED.id)
-        assertEquals("extMaxSpeed", Extension.MAX_SPEED.nameKey)
-        assertEquals("extMaxSpeedInfo", Extension.MAX_SPEED.descriptionKey)
-        assertNotEquals(
-            Extension.MAX_SPEED.nameKey,
-            Strings.get(Extension.MAX_SPEED.nameKey, "en")
-        )
-        assertNotEquals(
-            Extension.MAX_SPEED.descriptionKey,
-            Strings.get(Extension.MAX_SPEED.descriptionKey, "en")
-        )
-        for (lang in listOf("hi", "ne")) {
-            assertNotEquals(
-                Extension.MAX_SPEED.nameKey,
-                Strings.get(Extension.MAX_SPEED.nameKey, lang)
-            )
-            assertNotEquals(
-                Extension.MAX_SPEED.descriptionKey,
-                Strings.get(Extension.MAX_SPEED.descriptionKey, lang)
-            )
-        }
-        // The speed gain is a real multiplier on top of the selected level.
-        assertEquals(1.30f, Extension.MAX_SPEED_GAIN, 0.0001f)
-    }
-
-    @Test
-    fun maxSpeedCanBeBoughtAndChanged() {
-        val bought = Shop.buyExtension(Inventory(), 250, Extension.MAX_SPEED)
-        assertTrue(bought.success)
-        assertEquals(0, bought.coins)
-        assertTrue(bought.inventory.extensionEnabled(Extension.MAX_SPEED))
-        val disabled = Shop.toggleExtension(bought.inventory, 0, Extension.MAX_SPEED)
-        assertTrue(disabled.success)
-        assertFalse(disabled.inventory.extensionEnabled(Extension.MAX_SPEED))
-    }
-
-    @Test
-    fun buyingMaxSpeedWithoutEnoughCoinsFails() {
-        val result = Shop.buyExtension(Inventory(), 249, Extension.MAX_SPEED)
-        assertFalse(result.success)
-        assertEquals("notEnoughCoins", result.reasonKey)
-    }
-
-    @Test
     fun missileAndMissilePowerHaveTheRequestedPrices() {
         assertEquals(2200, Weapon.MISSILE.price)
         assertEquals(2200, MissileRules.MISSILE_PRICE)
@@ -452,7 +405,7 @@ class ShopTest {
         assertEquals(
             setOf(
                 "shortGun", "assaultGun", "pistol", "sniper", "glueBreaker",
-                "knife", "sword", "m10", "ak47"
+                "knife", "sword", "m10", "ak47", "ar15"
             ),
             everything.battleWeapons(1).map { it.id }.toSet()
         )
@@ -465,6 +418,9 @@ class ShopTest {
         assertFalse(everything.battleWeapons(2).contains(Weapon.GRENADE))
         assertFalse(everything.battleWeapons(2).contains(Weapon.MISSILE))
         assertTrue(everything.battleWeapons(3).contains(Weapon.GRENADE))
+        // The electric shock is unlocked once round two is completed.
+        assertFalse(everything.battleWeapons(2).contains(Weapon.ELECTRIC_SHOCK))
+        assertTrue(everything.battleWeapons(3).contains(Weapon.ELECTRIC_SHOCK))
         assertTrue(everything.battleWeapons(3).contains(Weapon.ATOM_BOMB))
         assertTrue(everything.battleWeapons(3).contains(Weapon.TIMER_BOMB))
         assertTrue(everything.battleWeapons(3).contains(Weapon.MISSILE))

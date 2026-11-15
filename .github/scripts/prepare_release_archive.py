@@ -6,7 +6,7 @@ Failure signature this script exists to prevent
 Tools built on ``com.android.apksig`` (``apksigner``, Android Studio, AI Studio and
 several third-party APK utilities) report a broken release APK as::
 
-    W: Malformed ZIP entry: assets/sounds/medkit.mp3
+    W: Malformed ZIP entry: assets/sounds/medkit.ogg
     W: invalid stored block lengths
 
 ``com.android.apksig.internal.zip.LocalFileRecord`` resolves an entry's payload from
@@ -32,7 +32,7 @@ Packaging contract (enforced here, in CI, for the archive and for every APK in i
 * Exactly one canonical set of ZIP records: Local File Header and Central Directory
   agree on name, flags, method, CRC-32 and both sizes; no GPB bit 3 (Data Descriptor),
   no encryption, no ZIP64, nothing after the End of Central Directory.
-* ``resources.arsc`` and ``assets/sounds/*.mp3`` are ``ZIP_STORED`` and 4-byte aligned
+* ``resources.arsc`` and ``assets/sounds/*.ogg`` are ``ZIP_STORED`` and 4-byte aligned
   so the framework can mmap them (``openFd``).
 * Every payload decodes with the method that the Central Directory declares, exactly
   reproducing what apksig's inflater will do, so "Malformed ZIP entry" and
@@ -128,7 +128,7 @@ def must_store(name: str) -> bool:
     return (
         name == "resources.arsc"
         or name.endswith(".so")
-        or (name.startswith("assets/sounds/") and name.endswith(".mp3"))
+        or (name.startswith("assets/sounds/") and name.endswith(".ogg"))
     )
 
 
@@ -684,7 +684,7 @@ def canonicalize_apk(apk_path: Path, entries: list[dict[str, int | str | bytes]]
 
     * identical flags/method/CRC-32/sizes in both headers,
     * no Data Descriptors and no ZIP64,
-    * ``resources.arsc`` and ``assets/sounds/*.mp3`` stored so ``openFd`` works,
+    * ``resources.arsc`` and ``assets/sounds/*.ogg`` stored so ``openFd`` works,
     * STORED payloads aligned with a well-formed 0xD935 alignment extra field.
     """
     source = apk_path.read_bytes()

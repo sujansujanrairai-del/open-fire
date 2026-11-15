@@ -75,7 +75,12 @@ enum class Weapon(
     /** Legacy length of one burst; a held trigger is no longer cut by it. */
     val maxBurstMs: Long = 0L,
     /** True when the timer bomb needs its duration picker before it fires. */
-    val needsTimerSelection: Boolean = false
+    val needsTimerSelection: Boolean = false,
+    /**
+     * True only for the electric shock: holding the up-swipe drains the
+     * enemy's health (see [ElectricShockRules]); it never reloads.
+     */
+    val electricShock: Boolean = false
 ) {
     SHORT_GUN(
         id = "shortGun",
@@ -205,6 +210,25 @@ enum class Weapon(
         unlockRound = 1
     ),
     /**
+     * The AR-15: a semi-automatic rifle in the single-shot family. One swipe
+     * fires one round, with its own recording. It can be bought from round one.
+     */
+    AR15(
+        id = "ar15",
+        nameKey = "gunAr15",
+        powerPercent = 24,
+        closeRangePowerPercent = 48,
+        magazine = 10,
+        price = 1000,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "ar15",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "gunHit",
+        missSoundKey = "click",
+        unlockRound = 1
+    ),
+    /**
      * The submachine gun: a long-range automatic weapon. Holding the
      * up-swipe fires one bullet every half second, and its sound runs on a
      * gapless loop with no silence between two rounds. Its forty-round
@@ -297,6 +321,27 @@ enum class Weapon(
         burstIntervalMs = FireCadence.AUTO_SLOW_MS,
         maxBurstMs = 5_000L
     ),
+    /**
+     * The electric shock, listed with the machine guns. It unlocks once round
+     * two is complete and costs 1500 coins. Holding the up-swipe shocks Robert
+     * for as long as the hold lasts; Robert answers with his own shock.
+     */
+    ELECTRIC_SHOCK(
+        id = "electricShock",
+        nameKey = "gunElectricShock",
+        powerPercent = 0,
+        closeRangePowerPercent = 0,
+        magazine = 0,
+        price = 1500,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "magicalSound",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "electricShock",
+        missSoundKey = "click",
+        unlockRound = 3,
+        electricShock = true
+    ),
     GRENADE(
         id = "grenade",
         nameKey = "gunGrenade",
@@ -371,13 +416,17 @@ enum class Weapon(
     val requiredCompletedRounds: Int
         get() = (unlockRound - 1).coerceAtLeast(0)
 
+    /** True for a gun that fires bullets (not melee, launcher, bomb or shock). */
+    val isFirearm: Boolean
+        get() = !melee && !missileLauncher && !bomb && !electricShock
+
     /**
      * Melee weapons are always "loaded"; firearms need a reload after their
      * magazine is empty. The missile never reloads: it is fed by missile
      * powers. A bomb carries exactly one charge per battle and never reloads.
      */
     val needsReload: Boolean
-        get() = !melee && !missileLauncher && !bomb
+        get() = !melee && !missileLauncher && !bomb && !electricShock
 
     /** True when the weapon is a tracked launcher (missile or bomb). */
     val launcher: Boolean
@@ -393,6 +442,13 @@ enum class Weapon(
 
         /** The weapons that appear in the shop. */
         fun forSale(): List<Weapon> = Weapon.entries.filter { it.price > 0 }.sortedBy { it.price }
+
+        /**
+         * Every weapon listed in the shop: the paid ones and the two free guns
+         * that can be disabled but never bought or removed.
+         */
+        fun shopListed(): List<Weapon> =
+            Weapon.entries.filter { it.price > 0 || it.ownedByDefault }.sortedBy { it.price }
 
         /** Every automatic (hold to keep firing) weapon. */
         fun automatic(): List<Weapon> = Weapon.entries.filter { it.autoFire }
@@ -451,6 +507,19 @@ enum class DefenceItem(
         lockedKey = "antiMissileLocked"
     ),
     /**
+     * The bulletproof car. Bought once, it can be used in two battles before
+     * it must be refuelled. It is usable from round two, after round one.
+     */
+    CAR(
+        id = "car",
+        nameKey = "car",
+        pluralKey = "carsPlural",
+        price = CarRules.PRICE,
+        descriptionKey = "defenceCarInfo",
+        requiredCompletedRounds = 1,
+        lockedKey = "carLocked"
+    ),
+    /**
      * The anti-bomb explosive defence. Deployed while a bomb is in the air it
      * destroys that bomb with an explosion, exactly like the anti-missile
      * system destroys a missile. Robert carries one per game from round three
@@ -490,30 +559,9 @@ enum class Extension(
     AUTO_RELOAD("autoReload", "extAutoReload", 75, "extAutoReloadInfo"),
     AUTO_MEDKIT("autoMedkit", "extAutoMedkit", 140, "extAutoMedkitInfo"),
     AUTO_COVER("autoCover", "extAutoCover", 180, "extAutoCoverInfo"),
-    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 200, "extAutoGlueWallInfo"),
-
-    /**
-     * Max Speed: the only extension that changes movement instead of items.
-     * While it is enabled the player runs [MAX_SPEED_GAIN] times faster than
-     * the running-speed level chosen with the three-finger gesture, in every
-     * direction, for the whole battle.
-     */
-    MAX_SPEED("maxSpeed", "extMaxSpeed", 250, "extMaxSpeedInfo");
+    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 200, "extAutoGlueWallInfo");
 
     companion object {
-        /** Extra running speed of the Max Speed extension, as a multiplier. */
-        const val MAX_SPEED_GAIN = 1.30f
-
-        /**
-         * The multiplier Max Speed gives the FAST running level.
-         *
-         * While the extension is bought and enabled the fast level is not
-         * merely 30 percent quicker: it is pushed to the absolute maximum the
-         * game allows, so the character really runs as fast as possible and
-         * the footstep sound follows at the top of its playback range.
-         */
-        const val MAX_SPEED_FAST_GAIN = 2.20f
-
         fun fromId(id: String?): Extension? = Extension.entries.firstOrNull { it.id == id }
     }
 }
@@ -563,7 +611,11 @@ data class Inventory(
      * disabled weapon is never handed out at the start of a battle and can
      * never be revealed by a left or right swipe until it is enabled again.
      */
-    val disabledWeapons: Set<String> = emptySet()
+    val disabledWeapons: Set<String> = emptySet(),
+    /** Bulletproof cars owned: at most one. */
+    val cars: Int = 0,
+    /** Battles the owned car can still be used in before a refuel. */
+    val carGamesLeft: Int = 0
 ) {
     fun ownsWeapon(weapon: Weapon): Boolean =
         weapon.ownedByDefault || weaponIds.contains(weapon.id)
@@ -605,6 +657,7 @@ data class Inventory(
         DefenceItem.GLUE_WALL -> glueWalls
         DefenceItem.COVER -> covers
         DefenceItem.ANTI_MISSILE -> antiMissiles
+        DefenceItem.CAR -> cars
         DefenceItem.ANTI_BOMB -> antiBombs
     }
 
@@ -615,6 +668,11 @@ data class Inventory(
             DefenceItem.GLUE_WALL -> copy(glueWalls = safe)
             DefenceItem.COVER -> copy(covers = safe)
             DefenceItem.ANTI_MISSILE -> copy(antiMissiles = safe)
+            // One car at most. Without a car there is no fuel either.
+            DefenceItem.CAR -> copy(
+                cars = safe.coerceAtMost(1),
+                carGamesLeft = if (safe > 0) carGamesLeft else 0
+            )
             DefenceItem.ANTI_BOMB -> copy(antiBombs = safe)
         }
     }
@@ -828,6 +886,12 @@ object Shop {
         if (!inventory.ownsWeapon(weapon)) {
             return ShopResult(false, coins, inventory, "notOwned")
         }
+        // At least one gun always stays in the battle rotation.
+        if (weapon.isFirearm && inventory.weaponEnabled(weapon) &&
+            inventory.battleWeapons().none { it != weapon && it.isFirearm }
+        ) {
+            return ShopResult(false, coins, inventory, "keepOneGunEnabled")
+        }
         val enabled = !inventory.weaponEnabled(weapon)
         val next = inventory.withWeaponEnabled(weapon, enabled)
         val fixed = if (!enabled && next.lastWeaponId == weapon.id) {
@@ -838,7 +902,10 @@ object Shop {
         return ShopResult(true, coins, fixed)
     }
 
-    /** Defences are repeatable: every purchase adds exactly one item. */
+    /**
+     * Defences are repeatable: every purchase adds exactly one item. The car
+     * is the exception: there is only one, and buying it starts a full tank.
+     */
     fun buyDefence(
         inventory: Inventory,
         coins: Int,
@@ -848,15 +915,44 @@ object Shop {
         if (completedRounds < item.requiredCompletedRounds) {
             return ShopResult(false, coins, inventory, item.lockedKey)
         }
+        if (item == DefenceItem.CAR && inventory.cars > 0) {
+            return ShopResult(false, coins, inventory, "alreadyOwned")
+        }
         if (coins < item.price) {
+            return ShopResult(false, coins, inventory, "notEnoughCoins")
+        }
+        val bought = if (item == DefenceItem.CAR) {
+            inventory.copy(cars = 1, carGamesLeft = CarRules.GAMES_PER_FUEL)
+        } else {
+            inventory.withCount(item, inventory.count(item) + 1)
+        }
+        return ShopResult(success = true, coins = coins - item.price, inventory = bought)
+    }
+
+    /**
+     * Refuels the owned car for [CarRules.REFUEL_PRICE] coins. Only an empty
+     * tank can be refuelled, and it is good for [CarRules.GAMES_PER_FUEL] games.
+     */
+    fun refuelCar(inventory: Inventory, coins: Int): ShopResult {
+        if (inventory.cars <= 0) return ShopResult(false, coins, inventory, "notOwned")
+        if (inventory.carGamesLeft > 0) return ShopResult(false, coins, inventory, "carHasFuel")
+        if (coins < CarRules.REFUEL_PRICE) {
             return ShopResult(false, coins, inventory, "notEnoughCoins")
         }
         return ShopResult(
             success = true,
-            coins = coins - item.price,
-            inventory = inventory.withCount(item, inventory.count(item) + 1)
+            coins = coins - CarRules.REFUEL_PRICE,
+            inventory = inventory.copy(carGamesLeft = CarRules.GAMES_PER_FUEL)
         )
     }
+
+    /** Uses up one game of fuel when the car is deployed in a battle. */
+    fun useCarGame(inventory: Inventory): Inventory =
+        inventory.copy(carGamesLeft = CarRules.gamesAfterDeploy(inventory.carGamesLeft))
+
+    /** A destroyed car is gone for good. */
+    fun loseCar(inventory: Inventory): Inventory =
+        inventory.copy(cars = 0, carGamesLeft = 0)
 
     fun buyExtension(
         inventory: Inventory,

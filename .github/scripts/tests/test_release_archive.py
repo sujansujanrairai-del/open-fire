@@ -14,7 +14,7 @@ spec = importlib.util.spec_from_file_location("release_archive", SCRIPT)
 archive = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(archive)
 
-MP3_NAME = "assets/sounds/medkit.mp3"
+MP3_NAME = "assets/sounds/medkit.ogg"
 # Bytes shaped like a real sound asset: an ID3v2.4 header followed by MPEG audio frames.
 # "ID3\x04" starts with 0x49, which a DEFLATE inflater reads as a stored block whose
 # LEN/NLEN pair is invalid -- the "invalid stored block lengths" seen in the field.
@@ -262,7 +262,7 @@ class ReleaseArchiveTests(unittest.TestCase):
         with zipfile.ZipFile(self.apk, "w") as apk:
             apk.writestr("AndroidManifest.xml", b"manifest" * 100, compress_type=zipfile.ZIP_DEFLATED)
             apk.writestr("resources.arsc", os.urandom(1024), compress_type=zipfile.ZIP_STORED)
-            apk.writestr("assets/sounds/example.mp3", os.urandom(10000), compress_type=zipfile.ZIP_STORED)
+            apk.writestr("assets/sounds/example.ogg", os.urandom(10000), compress_type=zipfile.ZIP_STORED)
         self.output = self.root / "release.zip"
 
     def build(self):

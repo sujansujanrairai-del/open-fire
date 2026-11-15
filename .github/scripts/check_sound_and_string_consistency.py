@@ -4,18 +4,17 @@
 These checks mirror (and go beyond) what the JVM unit tests can see:
 
   1. Every sound key used anywhere in the Kotlin sources is declared in
-     AudioManager.soundAliases, and every declared alias points at a file that
+     AudioManager.SOUND_FILES, and every declared key points at a file that
      really exists in app/src/main/assets/sounds.
   2. Every asset sound file is actually referenced by the alias table.
   3. Every translation key used through t("...") exists in the English table,
      and the English, Hindi and Nepali tables define exactly the same keys.
   4. Braces, parentheses and brackets balance in every Kotlin file and no
      Kotlin file mixes tabs into its indentation.
-  5. Every sound asset really is an MP3 file: a well-formed ID3v2 tag (when
-     present) followed by at least one MPEG audio frame. A truncated or
+  5. Every sound asset really is an Ogg file: it starts with an Ogg page
+     capture pattern and a complete first page header. A truncated or
      non-audio asset (an HTML error page, a partial download, a Git LFS
-     pointer) plays as silence on the device and is what makes ZIP tooling
-     report bogus stream errors for that one file.
+     pointer) plays as silence on the device.
 """
 import os
 import re
@@ -122,16 +121,16 @@ def strip_noise(text):
 assets = set(os.listdir(SOUNDS_DIR))
 audio_src = open(AUDIO, encoding="utf-8").read()
 
-alias_block = audio_src.split("private val soundAliases = mapOf(", 1)[1]
-alias_block = alias_block.split("\n    )", 1)[0]
+alias_block = audio_src.split("val SOUND_FILES: Map<String, String> = mapOf(", 1)[1]
+alias_block = alias_block.split("\n        )", 1)[0]
 aliases = {}
-for key, files in re.findall(r'"([A-Za-z0-9]+)"\s+to\s+listOf\(([^)]*)\)', alias_block):
-    aliases[key] = re.findall(r'"([^"]+)"', files)
+for key, file_name in re.findall(r'"([A-Za-z0-9]+)"\s+to\s+"([^"]+)"', alias_block):
+    aliases.setdefault(key, []).append(file_name)
 
 if not aliases:
-    fail("could not parse soundAliases from AudioManager.kt")
+    fail("could not parse SOUND_FILES from AudioManager.kt")
 
-alias_keys = re.findall(r'"([A-Za-z0-9]+)"\s+to\s+listOf\(', alias_block)
+alias_keys = re.findall(r'"([A-Za-z0-9]+)"\s+to\s+"', alias_block)
 for key in sorted(set(alias_keys)):
     if alias_keys.count(key) > 1:
         fail("sound key '%s' is declared more than once" % key)
@@ -221,71 +220,33 @@ for path in kotlin_files():
         if line.startswith("\t") or "\t" in line[: len(line) - len(line.lstrip())]:
             fail("%s:%d uses tab indentation" % (os.path.relpath(path, ROOT), number))
 
-# ------------------------------------------------------------- 5: MP3 assets
-BITRATES = {
-    (1, 1): [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
-    (1, 2): [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
-    (1, 3): [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
-    (2, 1): [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
-    (2, 2): [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
-    (2, 3): [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
-}
-SAMPLE_RATES = {1: [44100, 48000, 32000], 2: [22050, 24000, 16000], 25: [11025, 12000, 8000]}
-
-
-def id3v2_size(data):
-    """Return the byte length of a leading ID3v2 tag, or 0 when there is none."""
-    if len(data) < 10 or data[:3] != b"ID3":
-        return 0
-    major = data[3]
-    size = (data[6] << 21) | (data[7] << 14) | (data[8] << 7) | data[9]
-    footer = 10 if major >= 4 and data[5] & 0x10 else 0
-    return 10 + size + footer
-
-
-def mp3_frame_length(data, offset):
-    """Return the length of the MPEG audio frame at offset, or 0 when there is none."""
-    if offset + 4 > len(data):
-        return 0
-    header = data[offset : offset + 4]
-    if header[0] != 0xFF or (header[1] & 0xE0) != 0xE0:
-        return 0
-    version = {3: 1, 2: 2, 0: 25}.get((header[1] >> 3) & 3)
-    layer = {3: 1, 2: 2, 1: 3}.get((header[1] >> 1) & 3)
-    bitrate_index = (header[2] >> 4) & 0xF
-    rate_index = (header[2] >> 2) & 3
-    if version is None or layer is None or bitrate_index in (0, 15) or rate_index == 3:
-        return 0
-    padding = (header[2] >> 1) & 1
-    bitrate = BITRATES[(1 if version == 1 else 2, layer)][bitrate_index] * 1000
-    rate = SAMPLE_RATES[version][rate_index]
-    if layer == 1:
-        return (12 * bitrate // rate + padding) * 4
-    if layer == 3 and version != 1:
-        return 72 * bitrate // rate + padding
-    return 144 * bitrate // rate + padding
-
+# ------------------------------------------------------------- 5: OGG assets
+# Every sound asset is an Ogg container (RFC 3533): it starts with a capture
+# pattern "OggS" and its first page header is complete. A truncated download,
+# an HTML error page or a Git LFS pointer fails this check instead of playing
+# as silence on the device.
+OGG_CAPTURE = b"OggS"
+OGG_PAGE_HEADER_BYTES = 27
 
 for name in sorted(assets):
     path = os.path.join(SOUNDS_DIR, name)
     with open(path, "rb") as handle:
         data = handle.read()
+    if not name.endswith(".ogg"):
+        fail("sound asset sounds/%s is not an .ogg file" % name)
+        continue
     if not data:
         fail("sound asset sounds/%s is empty" % name)
         continue
-    tag_size = id3v2_size(data)
-    if tag_size > len(data):
-        fail("sound asset sounds/%s has an ID3v2 tag larger than the file" % name)
+    if data[:4] != OGG_CAPTURE:
+        fail("sound asset sounds/%s does not start with an Ogg page (OggS)" % name)
         continue
-    if not tag_size and data[:3] != b"ID3" and not mp3_frame_length(data, 0):
-        fail("sound asset sounds/%s does not start with an ID3v2 tag or an MPEG frame" % name)
+    if len(data) < OGG_PAGE_HEADER_BYTES:
+        fail("sound asset sounds/%s is truncated inside its first Ogg page" % name)
         continue
-    offset = mp3_frame_length(data, tag_size)
-    if not offset:
-        fail("sound asset sounds/%s contains no MPEG audio frame after its tag" % name)
-        continue
-    if tag_size + offset > len(data):
-        fail("sound asset sounds/%s ends inside its first MPEG frame (truncated)" % name)
+    segment_count = data[26]
+    if len(data) < OGG_PAGE_HEADER_BYTES + segment_count:
+        fail("sound asset sounds/%s is truncated inside its segment table" % name)
 
 # ---------------------------------------------------------------------- report
 print("sound keys declared : %d" % len(aliases))

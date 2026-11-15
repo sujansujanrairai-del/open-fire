@@ -86,8 +86,8 @@ class StringsAndGunRulesTest {
         // launcher: nothing slipped through untested.
         val counted = listOf(
             Weapon.SHORT_GUN, Weapon.ASSAULT_GUN, Weapon.PISTOL, Weapon.SNIPER,
-            Weapon.GLUE_BREAKER, Weapon.AWM, Weapon.M10,
-            Weapon.SUBMACHINE_GUN, Weapon.AK47, Weapon.MACHINE_GUN
+            Weapon.GLUE_BREAKER, Weapon.AWM, Weapon.M10, Weapon.AR15,
+            Weapon.SUBMACHINE_GUN, Weapon.AK47, Weapon.MACHINE_GUN, Weapon.ELECTRIC_SHOCK
         ) + Weapon.entries.filter { it.melee } +
             Weapon.entries.filter { it.bomb } + Weapon.MISSILE
         assertEquals(Weapon.entries.size, counted.size)
@@ -100,15 +100,17 @@ class StringsAndGunRulesTest {
             Weapon.M10 to 600, Weapon.SWORD to 650, Weapon.GLUE_BREAKER to 750,
             Weapon.SNIPER to 850, Weapon.SUBMACHINE_GUN to 900,
             Weapon.AWM to 1200, Weapon.AK47 to 1250, Weapon.MACHINE_GUN to 1700,
+            Weapon.AR15 to 1000, Weapon.ELECTRIC_SHOCK to 1500,
             Weapon.TIMER_BOMB to 1700, Weapon.ATOM_BOMB to 2000, Weapon.MISSILE to 2200
         )
         for ((weapon, price) in prices) assertEquals(price, weapon.price)
-        assertEquals(listOf(250, 400, 550, 1700, 1800), DefenceItem.entries.map { it.price }.sorted())
-        assertEquals(listOf(75, 140, 180, 200, 250), Extension.entries.map { it.price }.sorted())
+        assertEquals(listOf(250, 400, 550, 1700, 1800, 3500), DefenceItem.entries.map { it.price }.sorted())
+        // Max Speed (250) is gone: the four remaining extensions.
+        assertEquals(listOf(75, 140, 180, 200), Extension.entries.map { it.price }.sorted())
         assertEquals(1000, MissileRules.MISSILE_POWER_PRICE)
         assertEquals(Weapon.forSale().map { it.price }.sorted(), Weapon.forSale().map { it.price })
         assertTrue(Weapon.forSale().all { it.price <= 2200 })
-        assertTrue(DefenceItem.entries.all { it.price <= 2200 })
+        assertTrue(DefenceItem.entries.all { it.price <= 3500 })
     }
 
     @Test

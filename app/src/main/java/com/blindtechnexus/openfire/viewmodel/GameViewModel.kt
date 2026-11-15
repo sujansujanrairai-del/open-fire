@@ -11,6 +11,9 @@ import com.blindtechnexus.openfire.data.Strings
 import com.blindtechnexus.openfire.model.Arena
 import com.blindtechnexus.openfire.model.AutomaticFirePowerMap
 import com.blindtechnexus.openfire.model.BattleMenuItem
+import com.blindtechnexus.openfire.model.CarRules
+import com.blindtechnexus.openfire.model.CarStage
+import com.blindtechnexus.openfire.model.ElectricShockRules
 import com.blindtechnexus.openfire.model.BattleClock
 import com.blindtechnexus.openfire.model.BombKind
 import com.blindtechnexus.openfire.model.BombRules
@@ -229,6 +232,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
          */
         const val PLAYER_MOVE_STEP = RunPressure.BASE_STEP_METRES
         const val PLAYER_MOVE_TICK_MS = 100L
+        /** One step of the electric shock damage: a tenth of a second. */
+        const val SHOCK_TICK_MS = 100L
 
         /** Fastest and slowest movement tick, so a sprint still looks smooth. */
         const val MIN_MOVE_TICK_MS = 30L
@@ -1136,7 +1141,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerBurstRobertHp = hp,
             playerBurstPlayerHp = hp,
             robertFireRange = RobertRules.preferredRange(Random).id,
-            robertDeceptionShots = 0,
             robertHits = 0,
             robertShots = 0,
             robertDamage = 0,
@@ -1327,26 +1331,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         RobertRules.hasUsableGlueBreaker(state.glueWallActive, state.robertGlueBreakers)
 
     /**
-     * The Max Speed extension.
-     *
-     * While it is owned and enabled the fast running level is pushed to the
-     * absolute maximum the game allows ([Extension.MAX_SPEED_FAST_GAIN]): the
-     * character really runs as fast as possible on the battlefield, and the
-     * footstep loop follows at the top of its playback range while the
-     * positional volume keeps tracking the real distance. Every other level
-     * keeps the smaller 30 percent gain. It is exactly 1.0 while the
-     * extension is missing, disabled or removed.
-     */
-    private fun maxSpeedFactor(level: RunSpeed = _gameState.value.runSpeedLevel): Float {
-        if (!_inventory.value.extensionEnabled(Extension.MAX_SPEED)) return 1.0f
-        return if (level == RunSpeed.FAST) {
-            Extension.MAX_SPEED_FAST_GAIN
-        } else {
-            Extension.MAX_SPEED_GAIN
-        }
-    }
-
-    /**
      * The three-finger running speed gesture: swiping right steps one level
      * faster, swiping left one level slower, cycling slow / normal / fast.
      * The fast level matches Robert's own fast (fleeing) speed for the round
@@ -1378,15 +1362,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val speedMps = next.speedMps(
                 RunPressure.speedFactor(movePressure),
                 enemyFastSpeedMps()
-            ) * maxSpeedFactor(next)
+            )
             audioManager.updatePlayerWalkAudio(speedMps, next.volumeGain())
         }
-        val maxSpeedNote = if (_inventory.value.extensionEnabled(Extension.MAX_SPEED)) {
-            " ${t("maxSpeedOn")}"
-        } else {
-            ""
-        }
-        msg("${t("runSpeed")}: ${t(next.nameKey)}.$maxSpeedNote")
+        msg("${t("runSpeed")}: ${t(next.nameKey)}.")
     }
 
     /**
@@ -1416,8 +1395,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 if (state.playerHp <= 0 || state.robertHp <= 0) break
 
                 val speed = state.runSpeedLevel
-                val selectedFactor = speed.factor(RunPressure.speedFactor(movePressure), enemyFastSpeedMps()) *
-                    maxSpeedFactor(speed)
+                val selectedFactor = speed.factor(RunPressure.speedFactor(movePressure), enemyFastSpeedMps())
                 // Retreat is still controlled by the player: holding the back
                 // zone becomes a sprint under recent, damaging heavy fire.
                 val threatened = lastIncomingHitAtMs >= 0 && RetreatRules.underHeavyFire(
@@ -1558,7 +1536,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertMaxHp = state.robertMaxHp,
             playerHp = state.playerHp,
             playerMaxHp = state.playerMaxHp,
-            deceptionShotsLeft = state.robertDeceptionShots,
             robertHasBreaker = robertHasBreaker(state),
             playerWeapon = state.activeWeapon
         )
@@ -1569,18 +1546,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         currentFireRange(state).targetDistance
 
     /**
-     * Picks the band Robert fights from next. He randomly prefers either the
-     * 40%-70% band or the 90%-100% band, and once in a while he goes to the
-     * 0%-40% band instead to fire one or two shots that always miss, purely
-     * to confuse the real player.
+     * Picks the band Robert fights from next: at random either the 40%-70%
+     * band or the 90%-100% band. He never fires from an empty band to fake an
+     * attack, so every shot he fires is a real one.
      */
-    private fun rollRobertFireRange(allowDeception: Boolean) {
-        val deception = allowDeception && RobertRules.shouldStartDeception(Random)
-        val range = if (deception) FireRange.FAR else RobertRules.preferredRange(Random)
-        val shots = if (deception) RobertRules.deceptionShots(Random) else 0
-        _gameState.update {
-            it.copy(robertFireRange = range.id, robertDeceptionShots = shots)
-        }
+    private fun rollRobertFireRange() {
+        val range = RobertRules.preferredRange(Random)
+        _gameState.update { it.copy(robertFireRange = range.id) }
     }
 
     /**
@@ -1607,7 +1579,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         robertSprintTicks = RobertRules.SPRINT_TICKS
-        rollRobertFireRange(allowDeception = true)
+        rollRobertFireRange()
         planRobertStep(FLEE_TICK_MS)
     }
 
@@ -1668,7 +1640,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     planRobertStep(300L)
                 } else {
                     audioManager.stopSound("enemyWalk")
-                    rollRobertFireRange(allowDeception = false)
+                    rollRobertFireRange()
                     ensureRobertPositioned()
                 }
             }
@@ -1758,7 +1730,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                             robertFlankSide = if (Random.nextBoolean()) 1 else -1
                         )
                     }
-                    rollRobertFireRange(allowDeception = true)
+                    rollRobertFireRange()
                     planRobertStep(FLANK_DELAY_MS + Random.nextLong(400L))
                 }
             }
@@ -1978,9 +1950,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (shouldAvoid && !avoiding && state.robertState != "turnBack") {
             stopEnemyFireSound()
             _gameState.update {
-                it.copy(robertState = "avoid", robertDeceptionShots = 0, robertTurnBackTicks = 0)
+                it.copy(robertState = "avoid", robertTurnBackTicks = 0)
             }
-            rollRobertFireRange(allowDeception = false)
+            rollRobertFireRange()
             msg(t("robertAvoidingGlueWall"))
             planRobertStep(140L)
         } else if (!shouldAvoid && avoiding) {
@@ -2149,6 +2121,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerShotTimes.clear()
         }
         if (nowMs < robertNextShotAtMs) return
+        // A car the user sits in is attacked only with explosives, and only
+        // once it is weak. Missiles and bombs are the only way through it.
+        if (CarRules.shieldsUser(state.carStage) && CarRules.alarmed(state.carHp)) {
+            if (state.robertMissilePowers > 0 && !state.missileInFlight && !state.bombInFlight) {
+                launchEnemyMissile()
+                return
+            }
+            if (state.robertBombs > 0 && !state.missileInFlight && !state.bombInFlight) {
+                launchEnemyBomb()
+                return
+            }
+        }
+        // Once the electric shock is in play Robert never fires a gun again.
+        // His only answer is his own shock, which is handled by the shock loop.
+        if (state.electricShockInPlay) {
+            stopEnemyFireSound()
+            return
+        }
         if (state.glueWallActive && fireRobertBreakerAtWall()) {
             markRobertShot(RobertRules.CONTINUOUS_FIRE_MS)
             return
@@ -2237,30 +2227,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerGlueWallActive = state.glueWallActive,
             hasSniper = false
         )
-        // The 0%-40% band exists only for deception: every shot fired from it
-        // misses on purpose. A feint must never be fired with a continuous-
-        // fire weapon, because the submachine gun, the AK-47 and the machine
-        // gun play a long automatic burst recording - a single fake shot then
-        // sounds exactly like a genuine burst and the player cannot tell what
-        // is happening. Feints use a single-shot weapon only (pistol, sniper
-        // or M10), and if he owns none he drops the deception band instead of
-        // faking with the wrong sound.
-        val feintShot = currentFireRange(state) == FireRange.FAR && state.robertDeceptionShots > 0
-        var forcedFeint: Weapon? = null
-        if (feintShot) {
-            val feintPool = RobertRules.feintWeaponsFrom(pool)
-            if (feintPool.isEmpty()) {
-                _gameState.update { it.copy(robertDeceptionShots = 0) }
-                rollRobertFireRange(allowDeception = false)
-                ensureRobertPositioned()
-                state = _gameState.value
-            } else {
-                forcedFeint = RobertRules.feintWeapon(feintPool, Random)
-            }
-        }
         // Round 5 strategic logic: equal power — prioritize positioning over brute force
         val isStrategyRound = state.round == 5
-        val chosen = forcedFeint ?: when {
+        val chosen = when {
             smartChoice != null && (Random.nextFloat() < 0.75f || isStrategyRound) -> smartChoice
             else -> pool[Random.nextInt(pool.size)]
         }
@@ -2339,17 +2308,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         state = _gameState.value
 
-        // The 0%-40% deception band is only held for one or two shots; every
-        // one of them misses on purpose, then Robert picks a real band again.
-        if (currentFireRange(state) == FireRange.FAR && state.robertDeceptionShots > 0) {
-            val shotsLeft = state.robertDeceptionShots - 1
-            _gameState.update { it.copy(robertDeceptionShots = shotsLeft) }
-            if (shotsLeft <= 0) {
-                rollRobertFireRange(allowDeception = false)
-                ensureRobertPositioned()
-            }
-        }
-
         val proxPercent = Combat.proximityOf(state.distance)
         val zone = Combat.zoneFor(proxPercent)
 
@@ -2366,6 +2324,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Wall Breaker hurts it (see fireRobertBreakerAtWall), and that is
         // resolved before the enemy picks a weapon at all.
         if (state.glueWallActive) return
+
+        // Inside the car no bullet, blade or swing reaches the user: it bounces off.
+        if (CarRules.shieldsUser(state.carStage)) {
+            playSound("coverHit", volume = 0.6f)
+            setLog(t("carBlockedBullet"))
+            return
+        }
 
         // The player's cover stops eleven hits and breaks on the twelfth.
         if (state.coverActive) {
@@ -2651,7 +2616,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 playEnemySound("glueSound")
                 " ${t("robertGlueWall")}"
             }
-            DefenceItem.ANTI_MISSILE, DefenceItem.ANTI_BOMB -> ""
+            DefenceItem.ANTI_MISSILE, DefenceItem.ANTI_BOMB, DefenceItem.CAR -> ""
         }
     }
 
@@ -2877,7 +2842,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         robertLateral = 0f
                     )
                 }
-                rollRobertFireRange(allowDeception = false)
+                rollRobertFireRange()
                 msg(t("antiMissileIntercept"))
                 planRobertStep(500L)
                 return
@@ -2905,6 +2870,26 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             if (remaining == 0) endGameAfterExplosion(won = true)
             else ensureRobertPositioned()
         } else {
+            // Inside the car a missile hits the car, not the user. One missile
+            // destroys the car. Anti-missile interception already happened above.
+            val carHit = carTakesBlast(state.carHp)
+            if (carHit != CarHit.NONE) {
+                if (carHit == CarHit.DESTROYED) {
+                    audioManager.playSequence(listOf("explosion", "carBrake", "carCrash"))
+                } else {
+                    playSound("explosion")
+                }
+                _gameState.update {
+                    it.copy(
+                        missileInFlight = false,
+                        missileFromPlayer = false,
+                        missileInterceptPlanned = false
+                    )
+                }
+                msg(t(if (carHit == CarHit.DESTROYED) "carDestroyed" else "carHit"))
+                ensureRobertPositioned()
+                return
+            }
             // A direct missile hit destroys the player completely as well.
             // Only an anti-missile interception can stop it.
             val damage = MissileRules.impactDamage(state.playerHp)
@@ -3203,7 +3188,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** Starts the countdown audio of a thrown bomb. */
     private fun startBombAudio(kind: BombKind, distance: Float, timer: Boolean) {
         if (timer) {
-            // timer-countdown.mp3 loops for the whole countdown, then stops and
+            // timer-countdown.ogg loops for the whole countdown, then stops and
             // the explosion takes over.
             audioManager.playLoop(kind.flightSoundKey)
         } else {
@@ -3293,7 +3278,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             msg(if (fromPlayer) t("antiBombIntercept") else t("antiBombSavedYou"))
-            rollRobertFireRange(allowDeception = false)
+            rollRobertFireRange()
             ensureRobertPositioned()
             planRobertStep(400L)
             return
@@ -3309,11 +3294,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             if (fromPlayer) state.robertHp else state.playerHp
         )
         val throwerHit = kind == BombKind.TIMER && BombRules.timerBombKillsThrower(throwerDistance)
-        val playerDamage = if (fromPlayer) {
+        val rawPlayerDamage = if (fromPlayer) {
             if (throwerHit) BombRules.blastDamage(kind, state.playerHp) else 0
         } else {
             targetDamage
         }
+        // Inside the car the blast goes to the car: the user takes nothing.
+        val carHit = if (rawPlayerDamage > 0) {
+            carTakesBlast(BombRules.blastDamage(kind, state.carHp))
+        } else {
+            CarHit.NONE
+        }
+        val playerDamage = if (carHit != CarHit.NONE) 0 else rawPlayerDamage
         val robertDamage = if (fromPlayer) {
             targetDamage
         } else if (throwerHit) {
@@ -3327,7 +3319,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val hitSounds = mutableListOf(kind.blastSoundKey)
         if (robertDamage > 0) hitSounds.add("enemyHit")
         if (playerDamage > 0) hitSounds.add("playerHit")
-        audioManager.playMixed(hitSounds)
+        if (carHit == CarHit.DESTROYED) {
+            audioManager.playSequence(listOf(kind.blastSoundKey, "carBrake", "carCrash"))
+        } else {
+            audioManager.playMixed(hitSounds)
+        }
 
         _gameState.update {
             it.copy(
@@ -3353,12 +3349,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         val reaction = if (fromPlayer && robertRemaining > 0) robertAfterHit(robertDamage) else ""
         val defence = if (playerRemaining > 0 && playerDamage > 0) applyAutomaticDefences() else ""
+        val carText = when (carHit) {
+            CarHit.DESTROYED -> " ${t("carDestroyed")}"
+            CarHit.ABSORBED -> " ${t("carHit")}"
+            CarHit.NONE -> ""
+        }
         val text = "${t("bombExploded")} " +
             (if (fromPlayer) t("bombHitEnemy") else t("bombHitPlayer")) +
             " ${t("hitFor")} $targetDamage. ${t("enemyHealth")} $robertRemaining. " +
             "${t("yourHealth")} $playerRemaining." +
             (if (throwerHit) " ${if (fromPlayer) t("bombKilledYou") else t("bombKilledRobert")}" else "") +
-            reaction + defence
+            reaction + defence + carText
         msg(text)
 
         when {
@@ -3366,7 +3367,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertRemaining == 0 -> endGameAfterExplosion(won = true)
             playerRemaining == 0 -> endGameAfterExplosion(won = false)
             else -> {
-                rollRobertFireRange(allowDeception = false)
+                rollRobertFireRange()
                 ensureRobertPositioned()
             }
         }
@@ -3376,7 +3377,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * Ends the battle only once the explosion has finished. The hit sound and
      * the explosion are already playing together, and cutting them short to
      * speak the result would swallow the blast, so the result waits for the
-     * exact length of explosion.mp3.
+     * exact length of explosion.ogg.
      */
     private fun endGameAfterExplosion(won: Boolean) {
         if (endingJob != null) return
@@ -3404,6 +3405,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         var state = _gameState.value
         if (state.playerHp <= 0 || state.robertHp <= 0) return
+        // The electric shock has no bullets: it is only used by holding the swipe.
+        if (state.activeWeapon.electricShock) {
+            playSound("click")
+            msg(t("electricHoldHint"))
+            return
+        }
         if (state.missileInFlight) {
             playSound("click")
             msg(t("missileInFlight"))
@@ -3654,6 +3661,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (_currentScreen.value != Screen.BATTLE) return
         val state = _gameState.value
         val weapon = state.activeWeapon
+        if (state.carStage == CarStage.INSIDE_ENGINE_ON) {
+            startCarDrive()
+            return
+        }
+        if (weapon.electricShock) {
+            startElectricShock()
+            return
+        }
         if (!weapon.autoFire) {
             fire()
             return
@@ -3726,6 +3741,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * immediately, with no tail and no silence in between.
      */
     fun stopHoldFire() {
+        releaseCarDrive()
+        stopElectricShock()
+        shockSpent = false
         autoFireSession++
         autoFireJob?.cancel()
         autoFireJob = null
@@ -3956,6 +3974,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             BattleMenuItem.COVER,
             BattleMenuItem.GLUE_WALL,
             BattleMenuItem.ANTI_MISSILE,
+            BattleMenuItem.CAR,
             BattleMenuItem.ANTI_BOMB -> {
                 val defence = item.defence ?: return
                 val free = defence == DefenceItem.ANTI_BOMB &&
@@ -3986,6 +4005,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             BattleMenuItem.COVER,
             BattleMenuItem.GLUE_WALL,
             BattleMenuItem.ANTI_MISSILE,
+            BattleMenuItem.CAR,
             BattleMenuItem.ANTI_BOMB -> {
                 val defence = item.defence ?: return
                 useDefenceFromMenu(defence)
@@ -4162,6 +4182,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 ensureRobertPositioned()
                 return if (automatic) t("autoGlueWallUsed") else t("glooWallDeployed")
             }
+            DefenceItem.CAR -> return deployCar()
             DefenceItem.ANTI_MISSILE -> {
                 if (!state.missileInFlight) {
                     playSound("click")
@@ -4257,8 +4278,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
             // The three-finger running speed and the position inside the
             // 25 metre square belong to the own status too.
-            val speedText = "${t("runSpeed")} ${t(state.runSpeedLevel.nameKey)}." +
-                if (inv.extensionEnabled(Extension.MAX_SPEED)) " ${t("maxSpeedOn")}" else ""
+            val speedText = "${t("runSpeed")} ${t(state.runSpeedLevel.nameKey)}."
             val positionText = "${t("yourPosition")} ${state.playerX.roundToInt()}, " +
                 "${state.playerY.roundToInt()} ${t("meters")}."
             // The direction the player is really aiming at: only an enemy
@@ -4337,9 +4357,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * screen is locked for four seconds.
      *
      * A completed level pays one of the five random reward bundles (never
-     * more than one glue wall) with level-complete.mp3, and a completed round
+     * more than one glue wall) with level-complete.ogg, and a completed round
      * always pays two glue walls, two medikits and three covers with
-     * round-complete.mp3.
+     * round-complete.ogg.
      */
     private fun endGame(won: Boolean, timeUp: Boolean = false) {
         stopTimers()
@@ -4546,9 +4566,365 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // Gestures
     // ---------------------------------------------------------------------
 
+    // ---------------------------------------------------------------------
+    // Bulletproof car
+    // ---------------------------------------------------------------------
+
+    private var carDriveJob: Job? = null
+    private var carTurnBackTicks = 0
+
+    /** Result of a missile or bomb meeting the car. */
+    private enum class CarHit { NONE, ABSORBED, DESTROYED }
+
+    /**
+     * Lets the car take a missile or bomb blast meant for the user. Only a
+     * user sitting inside with the door closed is shielded. Bullets never
+     * reach the car. Returns what happened; the caller plays the sound.
+     */
+    private fun carTakesBlast(damage: Int): CarHit {
+        val state = _gameState.value
+        if (!CarRules.shieldsUser(state.carStage) || state.carHp <= 0) return CarHit.NONE
+        val remaining = (state.carHp - damage).coerceAtLeast(0)
+        if (remaining > 0) {
+            _gameState.update { it.copy(carHp = remaining) }
+            return CarHit.ABSORBED
+        }
+        destroyCar()
+        return CarHit.DESTROYED
+    }
+
+    /** Destroys the car for the rest of the match. The user is out in the open. */
+    private fun destroyCar() {
+        stopCarDriveJob()
+        audioManager.stopWeaponLoop("carMoving", AudioManager.LOOP_OWNER_PLAYER)
+        audioManager.stopSound("carEngine")
+        _gameState.update { it.copy(carStage = CarStage.DESTROYED, carHp = 0) }
+        _inventory.value = Shop.loseCar(_inventory.value)
+        prefs.saveInventory(_inventory.value)
+    }
+
+    /**
+     * Deploys the owned car from the defence menu. A battle uses up one of its
+     * games. With no games left the car asks for a refuel instead.
+     */
+    private fun deployCar(): String {
+        val inventory = _inventory.value
+        val current = _gameState.value.carStage
+        val stage = if (current == CarStage.DESTROYED) CarStage.NOT_DEPLOYED else current
+        if (stage != CarStage.NOT_DEPLOYED) return t(CarRules.promptKey(stage))
+        if (inventory.carGamesLeft <= 0) {
+            _gameState.update { it.copy(carStage = CarStage.REFUEL_PENDING) }
+            playSound("click")
+            return t("carRefuelPrompt")
+        }
+        _inventory.value = Shop.useCarGame(inventory)
+        prefs.saveInventory(_inventory.value)
+        _gameState.update {
+            it.copy(carStage = CarStage.DOOR_CLOSED_OUTSIDE, carHp = CarRules.MAX_HP)
+        }
+        playSound("click")
+        return t("carOpenDoor")
+    }
+
+    /** Swipe up with the car waiting: opens or closes the door, starts the engine, or refuels. */
+    private fun carSwipeUp() {
+        when (_gameState.value.carStage) {
+            CarStage.DOOR_CLOSED_OUTSIDE -> {
+                playSound("carDoorOpen")
+                _gameState.update { it.copy(carStage = CarStage.DOOR_OPEN_ENTERING) }
+                msg(t("carCloseDoor"))
+            }
+            CarStage.DOOR_OPEN_ENTERING -> {
+                playSound("carDoorClose")
+                _gameState.update { it.copy(carStage = CarStage.INSIDE_ENGINE_OFF) }
+                msg(t("carStartPrompt"))
+            }
+            CarStage.INSIDE_ENGINE_OFF -> {
+                // The start sound and the engine run as one chain, with no gap.
+                audioManager.playSequence(listOf("carStart"), loopKey = "carEngine")
+                _gameState.update { it.copy(carStage = CarStage.INSIDE_ENGINE_ON) }
+                msg(t("carEngineOnPrompt"))
+            }
+            CarStage.REFUEL_PENDING -> refuelCar()
+            else -> Unit
+        }
+    }
+
+    /** Refuels the empty car when the user has the money, then deploys it again. */
+    private fun refuelCar() {
+        val purchase = Shop.refuelCar(_inventory.value, _stats.value.coins)
+        if (!purchase.success) {
+            when (purchase.reasonKey) {
+                "notEnoughCoins" -> notEnoughCoins()
+                "notOwned" -> msg(t("carNotOwned"))
+                else -> msg(t("carHasFuel"))
+            }
+            return
+        }
+        _inventory.value = purchase.inventory
+        prefs.saveInventory(purchase.inventory)
+        _stats.value = _stats.value.copy(coins = purchase.coins)
+        prefs.saveStats(_stats.value)
+        playSound("spend")
+        _gameState.update { it.copy(carStage = CarStage.NOT_DEPLOYED) }
+        msg("${t("carRefuelled")} ${deployCar()}")
+    }
+
+    /** One-finger swipe down: the brake sounds and the engine goes off. */
+    private fun carStopEngine() {
+        when (_gameState.value.carStage) {
+            CarStage.INSIDE_ENGINE_ON, CarStage.INSIDE_MOVING -> {
+                stopCarDriveJob()
+                audioManager.stopWeaponLoop("carMoving", AudioManager.LOOP_OWNER_PLAYER)
+                audioManager.stopSound("carEngine")
+                playSound("carBrake")
+                _gameState.update { it.copy(carStage = CarStage.INSIDE_ENGINE_OFF) }
+                msg(t("carStopped"))
+            }
+            CarStage.INSIDE_ENGINE_OFF -> msg(t("carAlreadyOff"))
+            else -> Unit
+        }
+    }
+
+    /** Three-finger swipe right: the user gets out (door open), then closes the door. */
+    private fun carExitOrClose() {
+        val stage = _gameState.value.carStage
+        when {
+            CarRules.isInside(stage) -> {
+                stopCarDriveJob()
+                audioManager.stopWeaponLoop("carMoving", AudioManager.LOOP_OWNER_PLAYER)
+                audioManager.stopSound("carEngine")
+                playSound("carDoorOpen")
+                _gameState.update { it.copy(carStage = CarStage.DOOR_OPEN_EXITING) }
+                msg(t("carCloseDoor"))
+            }
+            stage == CarStage.DOOR_OPEN_EXITING -> {
+                playSound("carDoorClose")
+                _gameState.update { it.copy(carStage = CarStage.DOOR_CLOSED_OUTSIDE) }
+                msg(t("carOpenDoor"))
+            }
+            else -> Unit
+        }
+    }
+
+    /**
+     * Routes the car's gestures. Returns true when the gesture belonged to the
+     * car, so the normal battle mapping must not also run.
+     */
+    private fun handleCarGesture(direction: String, fingers: Int): Boolean {
+        val stage = _gameState.value.carStage
+        val inside = CarRules.isInside(stage)
+        return when {
+            fingers == 1 && direction == "up" && CarRules.awaitsSwipeUp(stage) -> {
+                carSwipeUp()
+                true
+            }
+            fingers == 1 && direction == "down" && inside -> {
+                carStopEngine()
+                true
+            }
+            fingers == 2 && direction == "up" && inside -> {
+                fire()
+                true
+            }
+            fingers == 2 && direction == "down" && inside -> {
+                doReload()
+                true
+            }
+            fingers == 3 && direction == "right" &&
+                (inside || stage == CarStage.DOOR_OPEN_EXITING) -> {
+                carExitOrClose()
+                true
+            }
+            else -> false
+        }
+    }
+
+    /** Held up-swipe in the engine-on stage: the car drives at once. */
+    private fun startCarDrive() {
+        if (_gameState.value.carStage != CarStage.INSIDE_ENGINE_ON) return
+        if (battlePaused.value || _currentScreen.value != Screen.BATTLE) return
+        // The engine idles under the brake; while driving only the moving loop plays.
+        audioManager.stopSound("carEngine")
+        audioManager.startWeaponLoop("carMoving", owner = AudioManager.LOOP_OWNER_PLAYER)
+        carTurnBackTicks = 0
+        _gameState.update { it.copy(carStage = CarStage.INSIDE_MOVING) }
+        carDriveJob?.cancel()
+        carDriveJob = viewModelScope.launch {
+            while (true) {
+                if (!foreground || _currentScreen.value != Screen.BATTLE) break
+                val state = _gameState.value
+                if (state.carStage != CarStage.INSIDE_MOVING) break
+                if (state.playerHp <= 0 || state.robertHp <= 0) break
+                if (!battlePaused.value) driveCarOneTick()
+                battleClock.awaitDelay(CarRules.TICK_MS)
+            }
+        }
+    }
+
+    /**
+     * One step of driving: towards Robert, and back the other way for a few
+     * steps after a surrounding wall stops the car.
+     */
+    private fun driveCarOneTick() {
+        val metres = CarRules.SPEED_MPS * CarRules.TICK_MS / 1000f
+        val forward = carTurnBackTicks == 0
+        if (!forward) carTurnBackTicks--
+        if (forward && _gameState.value.distance <= CarRules.STOP_DISTANCE_M) return
+        var blocked = false
+        _gameState.update { current ->
+            val move = current.movePlayer(forward, metres)
+            blocked = move.blockedByWall
+            if (move.moved) move.state else current
+        }
+        if (blocked && forward) carTurnBackTicks = CarRules.TURN_BACK_TICKS
+    }
+
+    private fun stopCarDriveJob() {
+        carDriveJob?.cancel()
+        carDriveJob = null
+    }
+
+    /** Released while driving: the brake sounds, then the engine idles. */
+    private fun releaseCarDrive() {
+        if (_gameState.value.carStage != CarStage.INSIDE_MOVING) return
+        stopCarDriveJob()
+        audioManager.stopWeaponLoop("carMoving", AudioManager.LOOP_OWNER_PLAYER)
+        audioManager.stopSound("carEngine")
+        audioManager.playSequence(listOf("carBrake"), loopKey = "carEngine")
+        _gameState.update { it.copy(carStage = CarStage.INSIDE_ENGINE_ON) }
+    }
+
+    // ---------------------------------------------------------------------
+    // Electric shock
+    // ---------------------------------------------------------------------
+
+    private var shockJob: Job? = null
+    private var shockStartedAtMs = 0L
+    private var shockLastTickMs = 0L
+    private var shockCounterAnnounced = false
+
+    /** True after the 30 second cap, until the finger is lifted again. */
+    private var shockSpent = false
+
+    /** A held up-swipe with the electric shock selected: Robert loses health per second. */
+    private fun startElectricShock() {
+        if (battlePaused.value || _currentScreen.value != Screen.BATTLE) return
+        if (shockJob != null || shockSpent) return
+        val state = _gameState.value
+        if (state.timerSelectActive || state.playerHp <= 0 || state.robertHp <= 0) return
+        markExplicitAction()
+        val now = battleClock.nowMs()
+        shockStartedAtMs = now
+        shockLastTickMs = now
+        shockCounterAnnounced = false
+        _gameState.update { it.copy(shockHolding = true, electricShockInPlay = true) }
+        // The hum plays at once and runs for as long as the swipe is held.
+        audioManager.startWeaponLoop("magicalSound", owner = AudioManager.LOOP_OWNER_PLAYER)
+        shockJob = viewModelScope.launch {
+            while (true) {
+                battleClock.awaitDelay(SHOCK_TICK_MS)
+                if (!foreground || _currentScreen.value != Screen.BATTLE) {
+                    stopElectricShock(playRelease = false)
+                    break
+                }
+                if (!shockTick()) break
+            }
+        }
+    }
+
+    /** One step of the shock. Returns false once the shock has ended. */
+    private fun shockTick(): Boolean {
+        val now = battleClock.nowMs()
+        val dtMs = (now - shockLastTickMs).coerceAtLeast(0L)
+        shockLastTickMs = now
+        if (battlePaused.value) return true
+        val held = now - shockStartedAtMs
+        val state = _gameState.value
+        if (ElectricShockRules.timeUp(held)) {
+            stopElectricShock(timedOut = true)
+            return false
+        }
+        // Robert answers only after the delay. He only ever holds a shock when
+        // the user does, so his answer needs nothing else.
+        val counter = ElectricShockRules.counterOpen(held)
+        val proximity = Combat.proximityOf(state.distance)
+        val robertLoss = ElectricShockRules.damageFor(
+            state.robertMaxHp,
+            ElectricShockRules.playerDrainPercentPerSecond(proximity),
+            dtMs
+        ).roundToInt()
+        val playerLoss = if (counter) {
+            ElectricShockRules.damageFor(
+                state.playerMaxHp,
+                ElectricShockRules.ROBERT_COUNTER_PERCENT_PER_SECOND,
+                dtMs
+            ).roundToInt()
+        } else {
+            0
+        }
+        val newRobertHp = (state.robertHp - robertLoss).coerceAtLeast(0)
+        val newPlayerHp = (state.playerHp - playerLoss).coerceAtLeast(0)
+        _gameState.update {
+            it.copy(robertHp = newRobertHp, playerHp = newPlayerHp, robertShocking = counter)
+        }
+        if (counter && !shockCounterAnnounced) {
+            shockCounterAnnounced = true
+            setLog(t("electricCounter"))
+        }
+        if (newRobertHp <= 0) {
+            stopElectricShock(playRelease = true)
+            endGame(won = true)
+            return false
+        }
+        if (newPlayerHp <= 0) {
+            stopElectricShock(playRelease = true)
+            if (!state.playerSecondChanceUsed) {
+                val revivedHp = Combat.secondChanceHealth(state.playerMaxHp)
+                _gameState.update {
+                    it.copy(playerHp = revivedHp, playerSecondChanceUsed = true)
+                }
+                msg("${t("playerSecondChance")} ${t("yourHealth")} $revivedHp.")
+            } else {
+                endGame(won = false)
+            }
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Ends the shock. Releasing it plays the shock sound mixed with Robert's
+     * hit sound. The 30 second cap ends it without a finger lift; the user
+     * must lift and swipe again.
+     */
+    private fun stopElectricShock(timedOut: Boolean = false, playRelease: Boolean = true) {
+        val wasShocking = shockJob != null
+        shockJob?.cancel()
+        shockJob = null
+        if (timedOut) shockSpent = true
+        audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
+        _gameState.update { it.copy(shockHolding = false, robertShocking = false) }
+        if (wasShocking && playRelease) {
+            audioManager.playMixed(listOf("electricShock", "enemyHit"))
+        }
+    }
+
+    /** True when a held up-swipe starts something: the car drive, the shock or an automatic burst. */
+    fun holdUpSwipeStarts(): Boolean {
+        val state = _gameState.value
+        if (state.carStage == CarStage.INSIDE_ENGINE_ON) return true
+        if (CarRules.isInside(state.carStage) || CarRules.awaitsSwipeUp(state.carStage)) return false
+        return state.activeWeapon.autoFire || state.activeWeapon.electricShock
+    }
+
+    /** True while the selected weapon is the electric shock. */
+    fun activeWeaponIsElectricShock(): Boolean = _gameState.value.activeWeapon.electricShock
+
     fun handleGesture(direction: String, fingers: Int) {
         val action = GestureRouter.route(_currentScreen.value, direction, fingers)
         if (_currentScreen.value == Screen.BATTLE && battlePaused.value && action != GameAction.TOGGLE_PAUSE && action != GameAction.EXIT_BATTLE) return
+        if (_currentScreen.value == Screen.BATTLE && handleCarGesture(direction, fingers)) return
         when (action) {
             GameAction.CONTINUE -> continueToJump()
             GameAction.BACK_TO_MENU -> navigateTo(Screen.MENU)
@@ -4610,6 +4986,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         manuallyPaused = false
         playerMoveJob?.cancel()
         playerMoveJob = null
+        // A screen change stops the car and the shock silently. An engine that
+        // was running is off afterwards, so the car stage says so too.
+        stopCarDriveJob()
+        stopElectricShock(playRelease = false)
+        shockSpent = false
+        audioManager.stopCarSounds()
+        _gameState.update { current ->
+            when (current.carStage) {
+                CarStage.INSIDE_MOVING, CarStage.INSIDE_ENGINE_ON ->
+                    current.copy(carStage = CarStage.INSIDE_ENGINE_OFF)
+                else -> current
+            }
+        }
         stepJob?.cancel()
         stepJob = null
         robertFireJob?.cancel()

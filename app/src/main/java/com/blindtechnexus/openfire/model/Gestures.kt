@@ -251,8 +251,7 @@ object RunPressure {
      * what lets the fast level match Robert's real fleeing speed exactly.
      *
      * It is tuned for the 25 m square arena: a normal run crosses the whole
-     * battlefield in about ten seconds, a fast run in about three, and the
-     * Max Speed extension can push it under two.
+     * battlefield in about ten seconds and a fast run in about three.
      */
     const val BASE_SPEED_MPS = 2.6f
 

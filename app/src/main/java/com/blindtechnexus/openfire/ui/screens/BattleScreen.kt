@@ -81,6 +81,7 @@ fun BattleScreen(viewModel: GameViewModel) {
         BattleMenuItem.COVER -> inventory.covers
         BattleMenuItem.GLUE_WALL -> inventory.glueWalls
         BattleMenuItem.ANTI_MISSILE -> inventory.antiMissiles
+        BattleMenuItem.CAR -> inventory.cars
         BattleMenuItem.ANTI_BOMB -> inventory.antiBombs
         else -> 0
     }
@@ -89,6 +90,7 @@ fun BattleScreen(viewModel: GameViewModel) {
         BattleMenuItem.COVER -> viewModel.t("cover")
         BattleMenuItem.GLUE_WALL -> viewModel.t("glooWall")
         BattleMenuItem.ANTI_MISSILE -> viewModel.t("antiMissile")
+        BattleMenuItem.CAR -> viewModel.t("car")
         BattleMenuItem.ANTI_BOMB -> viewModel.t("antiBomb")
         BattleMenuItem.EXIT -> viewModel.t("exitGame")
         BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
@@ -374,6 +376,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                             BattleMenuItem.COVER -> viewModel.t("cover")
                             BattleMenuItem.GLUE_WALL -> viewModel.t("glooWall")
                             BattleMenuItem.ANTI_MISSILE -> viewModel.t("antiMissile")
+                            BattleMenuItem.CAR -> viewModel.t("car")
                             BattleMenuItem.ANTI_BOMB -> viewModel.t("antiBomb")
                             BattleMenuItem.EXIT -> viewModel.t("exitGame")
                             BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")

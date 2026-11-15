@@ -2,6 +2,7 @@ package com.blindtechnexus.openfire.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.blindtechnexus.openfire.model.CarRules
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.ExtensionState
@@ -214,6 +215,10 @@ class PreferencesManager(context: Context) {
             ?.map { it.id }
             ?.toSet()
             ?: emptySet()
+        // The bulletproof car: at most one, with its games left until a refuel.
+        val cars = map["cars"]?.toIntOrNull()?.coerceIn(0, 1) ?: 0
+        val carGamesLeft = map["carGamesLeft"]?.toIntOrNull()
+            ?.coerceIn(0, CarRules.GAMES_PER_FUEL) ?: 0
         return Inventory(
             weaponIds = migratedWeaponIds + Weapon.defaults().map { it.id },
             medikits = map["medikits"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
@@ -228,7 +233,9 @@ class PreferencesManager(context: Context) {
             bombPowers = bombPowers,
             antiMissileRewardGranted =
                 map["antiMissileRewardGranted"]?.toBooleanStrictOrNull() ?: false,
-            disabledWeapons = disabledWeapons
+            disabledWeapons = disabledWeapons,
+            cars = cars,
+            carGamesLeft = if (cars > 0) carGamesLeft else 0
         )
     }
 
@@ -246,7 +253,9 @@ class PreferencesManager(context: Context) {
             "missilePowers" to inventory.missilePowers.toString(),
             "bombPowers" to inventory.bombPowers.toString(),
             "antiMissileRewardGranted" to inventory.antiMissileRewardGranted.toString(),
-            "disabledWeapons" to inventory.disabledWeapons.joinToString(",")
+            "disabledWeapons" to inventory.disabledWeapons.joinToString(","),
+            "cars" to inventory.cars.toString(),
+            "carGamesLeft" to inventory.carGamesLeft.toString()
         )
         for (extension in Extension.entries) {
             values["ext.${extension.id}"] = inventory.extensionState(extension).name

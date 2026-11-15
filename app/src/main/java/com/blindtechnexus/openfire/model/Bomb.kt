@@ -10,43 +10,43 @@ import kotlin.math.roundToInt
  * always ends exactly when its sound ends instead of guessing.
  */
 object SoundDurations {
-    /** missile.mp3 */
+    /** missile.ogg */
     const val MISSILE_MS = 14_800L
 
-    /** explosion.mp3: the tail every blast waits for. */
+    /** explosion.ogg: the tail every blast waits for. */
     const val EXPLOSION_MS = 6_100L
 
-    /** atom-bomb.mp3 */
+    /** atom-bomb.ogg */
     const val ATOM_BOMB_MS = 7_100L
 
-    /** grenade.mp3 */
+    /** grenade.ogg */
     const val GRENADE_MS = 9_100L
 
-    /** timer-countdown.mp3 (looped until the chosen duration elapses) */
+    /** timer-countdown.ogg (looped until the chosen duration elapses) */
     const val TIMER_LOOP_MS = 4_300L
 
-    /** submachine-gun.mp3 (looped during a continuous burst) */
+    /** submachine-gun.ogg (looped during a continuous burst) */
     const val SUBMACHINE_GUN_MS = 1_300L
 
-    /** ak-47-gun.mp3 (looped during a continuous burst) */
+    /** ak-47-gun.ogg (looped during a continuous burst) */
     const val AK47_MS = 4_400L
 
-    /** machine-gun.mp3 (looped during a continuous burst) */
+    /** machine-gun.ogg (looped during a continuous burst) */
     const val MACHINE_GUN_MS = 1_600L
 
-    /** awm-rifle.mp3 */
+    /** awm-rifle.ogg */
     const val AWM_MS = 2_600L
 
-    /** level-complete.mp3 */
+    /** level-complete.ogg */
     const val LEVEL_COMPLETE_MS = 2_600L
 
-    /** round-complete.mp3 */
+    /** round-complete.ogg */
     const val ROUND_COMPLETE_MS = 28_200L
 
-    /** wall-hit.mp3, the boundary wall impact */
+    /** wall-hit.ogg, the boundary wall impact */
     const val WALL_MS = 1_700L
 
-    /** walk.mp3 */
+    /** walk.ogg */
     const val WALK_MS = 9_800L
 }
 
@@ -112,7 +112,7 @@ enum class BombKind(
  * power), unless an anti-bomb explosive intercepts it in the air.
  *
  *  - the grenade and the atom bomb unlock in round three and fly for exactly
- *    as long as their own sound (grenade.mp3, atom-bomb.mp3); tracking ensures
+ *    as long as their own sound (grenade.ogg, atom-bomb.ogg); tracking ensures
  *    the bomb follows the moving target and explodes on top of them;
  *  - the timer bomb unlocks in round three too. Swiping up asks
  *    \"Select your timer\": swiping left or right walks through 15, 30, 40, 50

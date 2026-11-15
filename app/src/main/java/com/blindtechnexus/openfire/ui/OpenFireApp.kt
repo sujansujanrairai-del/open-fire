@@ -249,7 +249,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                         maxFingers == 1 &&
                                         bestDy < 0f && abs(bestDy) > abs(bestDx) &&
                                         abs(bestDy) >= SWIPE_THRESHOLD_ONE_FINGER &&
-                                        viewModel.activeWeaponIsAutomatic()
+                                        viewModel.holdUpSwipeStarts()
                                     ) {
                                         holdFireStarted = true
                                         viewModel.startHoldFire()
