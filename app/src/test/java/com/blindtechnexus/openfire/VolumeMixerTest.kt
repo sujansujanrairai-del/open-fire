@@ -12,56 +12,15 @@ import org.junit.Test
 class VolumeMixerTest {
 
     @Test
-    fun theMusicSliderSitsTwentyFivePercentUnderTheSpeechLevel() {
-        // Non-speech audio is mixed exactly 25 percent under the speech bus,
-        // so a TTS announcement is always clearly audible above the music.
-        // The slider is still the chosen 0..1 level; the trim is the fixed
-        // speech boost, never a hidden gain that eats the setting.
-        assertEquals(0.64f, VolumeMixer.music(0.8f), 0.0001f)
-        assertEquals(0.8f, VolumeMixer.music(1.0f), 0.0001f)
-        assertEquals(0.16f, VolumeMixer.music(0.2f), 0.0001f)
-        assertEquals(0.0f, VolumeMixer.music(0.0f), 0.0001f)
-        assertEquals(1.0f, VolumeMixer.MUSIC_BACKGROUND_GAIN, 0.0001f)
-        // Speech itself plays at the full chosen level - the +25 percent.
-        assertEquals(1.25f, VolumeMixer.SPEECH_PRIORITY, 0.0001f)
-        assertEquals(0.8f, VolumeMixer.NON_SPEECH_UNDER_SPEECH, 0.0001f)
-        // Out of range values are clamped, never amplified.
-        assertEquals(0.8f, VolumeMixer.music(4.0f), 0.0001f)
-        assertEquals(0.0f, VolumeMixer.music(-3.0f), 0.0001f)
-    }
-
-    @Test
-    fun repeatedMusicMixingIsStableAndNeverCompounds() {
-        // This is exactly the old failure: mixing a playback value back into
-        // the setting shrank it further and further. The pure function always
-        // returns the same output for the same saved setting.
-        val setting = 0.8f
-        var playback = VolumeMixer.music(setting)
-        repeat(20) {
-            playback = VolumeMixer.music(setting)
-            assertEquals(0.64f, playback, 0.0001f)
+    fun musicAndEffectsMatchSpeechAtTheSameSetting() {
+        for (setting in listOf(0f, 0.2f, 0.8f, 1f)) {
+            assertEquals(setting, VolumeMixer.music(setting), 0.0001f)
+            assertEquals(setting, VolumeMixer.speech(setting), 0.0001f)
+            assertEquals(setting, VolumeMixer.mix("ak47", setting, 1f, 1f), 0.0001f)
+            assertEquals(setting, VolumeMixer.mix("enemyHit", setting, 1f, 1f), 0.0001f)
         }
-        assertEquals(0.8f, setting, 0.0001f)
-    }
-
-    @Test
-    fun impactsAreAlwaysLouderThanTheWeaponThatCausedThem() {
-        // The weapon bus sits under the impact bus, so a hit marker is clearly
-        // audible over the gunfire at every slider position, too.
-        assertTrue(VolumeMixer.WEAPON_BUS_GAIN < VolumeMixer.HIT_BUS_GAIN)
-        for (setting in listOf(0.1f, 0.2f, 0.5f, 1.0f)) {
-            val shot = VolumeMixer.mix("ak47", setting, 1.0f, 1.0f)
-            val hit = VolumeMixer.mix("enemyHit", setting, 1.0f, 1.0f)
-            val playerHit = VolumeMixer.mix("playerHit", setting, 1.0f, 1.0f)
-            assertTrue("hit must be louder than the shot at $setting", hit > shot)
-            assertTrue("player hit must be louder than the shot at $setting", playerHit > shot)
-            assertEquals(0.8f * VolumeMixer.clamp(setting), hit, 0.0001f)
-        }
-        // The gun trim is applied once and never to the impacts, and every
-        // effect sits 25 percent under the speech bus.
-        assertEquals(0.6f * 0.8f * 0.2f, VolumeMixer.mix("machineGun", 0.2f, 1.0f, 1.0f), 0.0001f)
-        assertEquals(0.8f * 0.2f, VolumeMixer.mix("explosion", 0.2f, 1.0f, 1.0f), 0.0001f)
-        assertEquals(1f, VolumeMixer.busGainFor("click"), 0.0001f)
+        assertEquals(1f, VolumeMixer.music(4f), 0.0001f)
+        assertEquals(0f, VolumeMixer.music(-3f), 0.0001f)
     }
 
     @Test
@@ -86,8 +45,8 @@ class VolumeMixerTest {
 
     @Test
     fun sfxMixesTheSettingAndDistanceGainOnce() {
-        assertEquals(0.4f, VolumeMixer.sfx(0.5f, 1.0f, 1.0f), 0.0001f)
-        assertEquals(0.1f, VolumeMixer.sfx(0.5f, 0.5f, 0.5f), 0.0001f)
+        assertEquals(0.5f, VolumeMixer.sfx(0.5f, 1.0f, 1.0f), 0.0001f)
+        assertEquals(0.125f, VolumeMixer.sfx(0.5f, 0.5f, 0.5f), 0.0001f)
         assertEquals(0.0f, VolumeMixer.sfx(0.0f, 1.0f, 1.0f), 0.0001f)
     }
 

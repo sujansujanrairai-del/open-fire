@@ -1221,16 +1221,12 @@ object RobertRules {
     /** The robot uses the electric shock from round three onwards. */
     fun robotShockUnlocked(round: Int): Boolean = round >= 3
 
-    /**
-     * True when the robot starts an electric shock of its own: it detects the
-     * player's shock and answers automatically after one second, and it may
-     * also open a shock on its own inside the close band.
-     */
+    /** The enemy counters only an active player shock, immediately. */
     fun shouldCounterShock(playerShocking: Boolean, playerHeldMs: Long): Boolean =
         playerShocking && ElectricShockRules.counterOpen(playerHeldMs)
 
-    /** True when the robot opens a shock on its own initiative. */
-    fun shouldStartShock(round: Int, proximityPercent: Float, robertShocking: Boolean): Boolean =
-        !robertShocking && robotShockUnlocked(round) &&
-            ElectricShockRules.inCloseBand(proximityPercent)
+    /** Autonomous shock attacks are forbidden. */
+    @Suppress("UNUSED_PARAMETER")
+    fun shouldStartShock(round: Int, proximityPercent: Float, robertShocking: Boolean): Boolean = false
+
 }

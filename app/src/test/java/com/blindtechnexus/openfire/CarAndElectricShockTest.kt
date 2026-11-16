@@ -181,6 +181,14 @@ class CarAndElectricShockTest {
         assertEquals(400, CarRules.ALARM_HP)
     }
 
+    @Test
+    fun enemyReceivesCarStartingInRoundFive() {
+        assertFalse(RobertRules.robotCarGranted(4))
+        assertTrue(RobertRules.robotCarGranted(5))
+        assertTrue(RobertRules.shouldEnterCar(5, 399, false))
+        assertFalse(RobertRules.shouldEnterCar(4, 399, false))
+    }
+
     // ------------------------------------------------------------------
     // AR-15 and the electric shock
     // ------------------------------------------------------------------
@@ -197,7 +205,7 @@ class CarAndElectricShockTest {
     }
 
     @Test
-    fun theElectricShockIsNeverAGunButRobertUsesItOnHisOwnFromRoundThree() {
+    fun theElectricShockIsNeverAGunOrAutonomous() {
         assertEquals(1500, Weapon.ELECTRIC_SHOCK.price)
         assertEquals(3, Weapon.ELECTRIC_SHOCK.unlockRound)
         assertTrue(Weapon.ELECTRIC_SHOCK.electricShock)
@@ -211,7 +219,7 @@ class CarAndElectricShockTest {
         assertFalse(RobertRules.ENEMY_WEAPONS.contains(Weapon.ELECTRIC_SHOCK))
         assertFalse(RobertRules.robotShockUnlocked(2))
         assertTrue(RobertRules.robotShockUnlocked(3))
-        assertTrue(RobertRules.shouldStartShock(3, 40f, robertShocking = false))
+        assertFalse(RobertRules.shouldStartShock(3, 40f, robertShocking = false))
         assertFalse(RobertRules.shouldStartShock(3, 39f, robertShocking = false))
         assertFalse(RobertRules.shouldStartShock(3, 40f, robertShocking = true))
     }
@@ -223,15 +231,15 @@ class CarAndElectricShockTest {
     }
 
     @Test
-    fun theShockDrainsEightyPercentPerSecondInTheCloseBand() {
-        assertEquals(80f, ElectricShockRules.playerDrainPercentPerSecond(40f), 0.001f)
-        assertEquals(80f, ElectricShockRules.playerDrainPercentPerSecond(70f), 0.001f)
-        assertEquals(80f, ElectricShockRules.playerDrainPercentPerSecond(100f), 0.001f)
+    fun theShockDrainsSixtyPercentPerSecondInTheCloseBand() {
+        assertEquals(60f, ElectricShockRules.playerDrainPercentPerSecond(40f), 0.001f)
+        assertEquals(60f, ElectricShockRules.playerDrainPercentPerSecond(70f), 0.001f)
+        assertEquals(60f, ElectricShockRules.playerDrainPercentPerSecond(100f), 0.001f)
         assertEquals(10f, ElectricShockRules.playerDrainPercentPerSecond(39.9f), 0.001f)
         assertEquals(10f, ElectricShockRules.playerDrainPercentPerSecond(0f), 0.001f)
         // Alone: the full close-band rate applies no matter who struck first.
-        assertEquals(80f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = true), 0.001f)
-        assertEquals(80f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = false), 0.001f)
+        assertEquals(60f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = true), 0.001f)
+        assertEquals(60f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = false), 0.001f)
     }
 
     @Test
@@ -242,19 +250,19 @@ class CarAndElectricShockTest {
             ElectricShockRules.shockPercentPerSecond(70f, bothShocking = true, activatedFirst = true),
             0.001f
         )
-        // ...while the other drains 10 percent per three seconds.
+        // ...while the other drains 10 percent per two seconds.
         assertEquals(
-            10f / 3f,
+            10f / 2f,
             ElectricShockRules.shockPercentPerSecond(70f, bothShocking = true, activatedFirst = false),
             0.001f
         )
     }
 
     @Test
-    fun robertAnswersAfterOneSecond() {
-        assertFalse(ElectricShockRules.counterOpen(999))
+    fun robertAnswersImmediately() {
+        assertFalse(RobertRules.shouldCounterShock(false, 0))
         assertTrue(ElectricShockRules.counterOpen(1_000))
-        assertEquals(1_000L, ElectricShockRules.COUNTER_DELAY_MS)
+        assertEquals(0L, ElectricShockRules.COUNTER_DELAY_MS)
         assertEquals(10f, ElectricShockRules.FIRST_STRIKER_PERCENT_PER_SECOND, 0.001f)
     }
 

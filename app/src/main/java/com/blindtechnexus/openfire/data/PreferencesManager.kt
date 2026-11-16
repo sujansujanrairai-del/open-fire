@@ -70,7 +70,7 @@ class PreferencesManager(context: Context) {
             voiceName = map["voice"] ?: "",
             ttsRate = map["rate"]?.toFloatOrNull() ?: 1.0f,
             ttsVolume = map["ttsVolume"]?.toFloatOrNull() ?: 1.0f,
-            musicVolume = map["musicVolume"]?.toFloatOrNull() ?: 0.5f,
+            musicVolume = map["musicVolume"]?.toFloatOrNull() ?: 1.0f,
             sfxVolume = map["sfxVolume"]?.toFloatOrNull() ?: 1.0f,
             soundTheme = theme,
             hapticsEnabled = map["haptics"]?.toBooleanStrictOrNull() ?: true,
@@ -290,7 +290,7 @@ class PreferencesManager(context: Context) {
                     voiceName = legacy.getString("of_voice", "") ?: "",
                     ttsRate = legacy.getFloat("of_rate", 1.0f),
                     ttsVolume = legacy.getFloat("of_ttsvol", 1.0f),
-                    musicVolume = legacy.getFloat("of_musicvol", 0.5f),
+                    musicVolume = legacy.getFloat("of_musicvol", 1.0f),
                     sfxVolume = legacy.getFloat("of_sfxvol", 1.0f),
                     soundTheme = theme,
                     hapticsEnabled = legacy.getBoolean("of_haptics", true)

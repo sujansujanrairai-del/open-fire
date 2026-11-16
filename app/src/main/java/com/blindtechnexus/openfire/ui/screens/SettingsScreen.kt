@@ -79,26 +79,11 @@ fun SettingsScreen(viewModel: GameViewModel) {
     var keepScreenOnState by remember { mutableStateOf(currentSettings.keepScreenOn) }
     var voiceGuidanceState by remember { mutableStateOf(currentSettings.voiceGuidance) }
 
-    // The stored settings are the single source of truth: whenever they
-    // change (a saved value, a language switch, a voice that had to be
-    // dropped because it cannot speak the new language) the controls follow.
-    // Without this the screen kept showing the values it remembered from the
-    // first composition, which is what made a chosen volume appear to revert.
-    LaunchedEffect(currentSettings) {
-        nameState = currentSettings.name
-        langState = currentSettings.lang
-        engineState = currentSettings.ttsEnginePackage
-        ttsLangState = currentSettings.ttsLanguage
-        voiceState = currentSettings.voiceName
-        rateState = currentSettings.ttsRate
-        ttsVolState = currentSettings.ttsVolume
-        musicVolState = currentSettings.musicVolume
-        sfxVolState = currentSettings.sfxVolume
-        soundThemeState = currentSettings.soundTheme
-        hapticsState = currentSettings.hapticsEnabled
-        keepScreenOnState = currentSettings.keepScreenOn
-        voiceGuidanceState = currentSettings.voiceGuidance
-    }
+    // Slider changes must not reset other fields still being edited.
+    LaunchedEffect(currentSettings.ttsVolume) { ttsVolState = currentSettings.ttsVolume }
+    LaunchedEffect(currentSettings.musicVolume) { musicVolState = currentSettings.musicVolume }
+    LaunchedEffect(currentSettings.sfxVolume) { sfxVolState = currentSettings.sfxVolume }
+    LaunchedEffect(currentSettings.voiceName) { voiceState = currentSettings.voiceName }
 
     Column(
         modifier = Modifier

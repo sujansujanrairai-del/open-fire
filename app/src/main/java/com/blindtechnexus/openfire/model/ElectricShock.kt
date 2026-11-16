@@ -1,33 +1,15 @@
 package com.blindtechnexus.openfire.model
 
-/**
- * The electric shock. Holding the up-swipe shocks the opponent; the opponent
- * can answer with a shock of their own, and both shocks may run at once.
- *
- *  - Alone, a shock drains 80 percent of the opponent's maximum health per
- *    second inside the close band (40%-100% proximity) and 10 percent per
- *    second outside it.
- *  - When BOTH fighters shock at the same time, the sounds play mixed
- *    together and the fighter who activated FIRST keeps the upper hand: the
- *    first striker drains the antagonist at 10 percent per second, while the
- *    second striker only drains the first at 10 percent per three seconds.
- *  - Robert detects the player's shock and answers one second later, and he
- *    may also start a shock of his own on his own.
- *  - A single use lasts at most thirty seconds. When the time is up that
- *    shock stops, and the user has to swipe again.
- *  - A shock held for ten seconds inside the 90%-100% band breaks a glue
- *    wall, and a cover withstands the shock for those same ten seconds before
- *    it breaks.
- */
+/** Shock damage and timing rules. The enemy only counters the player's hold. */
 object ElectricShockRules {
     /** Longest single use, in milliseconds. */
     const val MAX_USE_MS = 30_000L
 
-    /** The robot detects a shock and answers after exactly one second. */
-    const val COUNTER_DELAY_MS = 1_000L
+    /** The robot answers immediately when a shock is detected. */
+    const val COUNTER_DELAY_MS = 0L
 
     /** Drain of the opponent's health per second while alone in the close band. */
-    const val PLAYER_CLOSE_PERCENT_PER_SECOND = 80f
+    const val PLAYER_CLOSE_PERCENT_PER_SECOND = 60f
 
     /** Drain of the opponent's health per second while alone outside the close band. */
     const val PLAYER_FAR_PERCENT_PER_SECOND = 10f
@@ -40,13 +22,13 @@ object ElectricShockRules {
 
     /**
      * While both shocks run, the fighter who activated second drains the
-     * first one at 10 percent per three seconds - much weaker, so the first
+     * first one at 10 percent per two seconds - much weaker, so the first
      * activation always wins a duel of shocks.
      */
     const val SECOND_STRIKER_PERCENT_PER_THREE_SECONDS = 10f
 
-    /** The three-second window of the second striker's slow drain. */
-    const val SECOND_STRIKER_WINDOW_MS = 3_000L
+    /** The two-second window of the second striker's slow drain. */
+    const val SECOND_STRIKER_WINDOW_MS = 2_000L
 
     /** Lower edge of the close band, in proximity percent. */
     const val CLOSE_BAND_MIN_PROXIMITY = 40f
@@ -110,10 +92,10 @@ object ElectricShockRules {
 
     /**
      * The drain percentage of one fighter's shock - the whole shock law in
-     * one pure function. Alone, the close band decides (80 or 10 percent per
+     * one pure function. Alone, the close band decides (60 or 10 percent per
      * second). While both shocks run, the activation order decides: the first
      * striker drains 10 percent per second and the second striker only
-     * 10 percent per three seconds.
+     * 10 percent per two seconds.
      *
      * @param proximityPercent closeness of the target (100 = point blank).
      * @param bothShocking true while the antagonist's shock runs as well.

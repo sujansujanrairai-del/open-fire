@@ -73,7 +73,7 @@ data class GameSettings(
     val voiceName: String = "",
     val ttsRate: Float = 1.0f,
     val ttsVolume: Float = 1.0f,
-    val musicVolume: Float = 0.5f,
+    val musicVolume: Float = 1.0f,
     val sfxVolume: Float = 1.0f,
     val soundTheme: SoundTheme = SoundTheme.TACTICAL,
     val hapticsEnabled: Boolean = true,

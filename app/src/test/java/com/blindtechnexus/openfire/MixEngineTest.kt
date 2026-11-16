@@ -1,5 +1,6 @@
 package com.blindtechnexus.openfire
 
+import com.blindtechnexus.openfire.audio.BinauralPosition
 import com.blindtechnexus.openfire.audio.MixEngine
 import com.blindtechnexus.openfire.audio.PcmClip
 import com.blindtechnexus.openfire.audio.Voice
@@ -48,6 +49,57 @@ class MixEngineTest {
         val out = FloatArray(frames * 2)
         engine.renderBlock(out, frames, nowMs = 0L)
         return out
+    }
+
+    @Test
+    fun frontAndRearHaveDifferentReflectionSignWithNoLeftRightBias() {
+        fun impulse(z: Float): FloatArray {
+            val engine = MixEngine()
+            val clip = PcmClip(ShortArray(900) { if (it == 512) 16000 else 0 })
+            val source = voice(engine, "shock", clip)
+            source.spatialPosition = BinauralPosition.fromCoordinates(0f, z)
+            return render(engine, 800)
+        }
+        val front = impulse(-1f)
+        val rear = impulse(1f)
+        assertTrue(front[(512 + 8) * 2] > 0f)
+        assertTrue(rear[(512 + 8) * 2] < 0f)
+        assertEquals(front[512 * 2], front[512 * 2 + 1], 0.0001f)
+        assertEquals(rear[512 * 2], rear[512 * 2 + 1], 0.0001f)
+        assertFalse(front.contentEquals(rear))
+    }
+
+    @Test
+    fun sideSourceArrivesAtNearEarBeforeFarEar() {
+        val engine = MixEngine()
+        val clip = PcmClip(ShortArray(900) { if (it == 512) 16000 else 0 })
+        val source = voice(engine, "walk", clip)
+        source.spatialPosition = BinauralPosition.fromCoordinates(1f, 0f)
+        val out = render(engine, 800)
+        assertTrue(out[512 * 2 + 1] > 0.4f)
+        assertEquals(0f, out[512 * 2], 0.0001f)
+        assertTrue((513..550).any { out[it * 2] > 0.4f })
+    }
+
+    @Test
+    fun liveSfxGainControlsExistingVoiceIncludingMuteAndRestore() {
+        val engine = MixEngine()
+        voice(engine, "walk", constantClip(block * 20), loop = true)
+        assertTrue(render(engine).last() > 0f)
+        engine.sfxGain = 0f
+        assertEquals(0f, render(engine).last(), 0.0001f)
+        engine.sfxGain = 0.5f
+        assertEquals(1000f / 32768f * 0.5f, render(engine).last(), 0.0001f)
+        engine.sfxGain = 1f
+        assertEquals(1000f / 32768f, render(engine).last(), 0.0001f)
+    }
+
+    @Test
+    fun positionConversionHandlesInvalidAndRearCoordinates() {
+        assertEquals(null, BinauralPosition.fromCoordinates(0f, 0f))
+        assertEquals(null, BinauralPosition.fromCoordinates(Float.NaN, 1f))
+        assertTrue(BinauralPosition.fromCoordinates(0f, -1f)!!.rear < 0f)
+        assertTrue(BinauralPosition.fromCoordinates(0f, 1f)!!.rear > 0f)
     }
 
     @Test

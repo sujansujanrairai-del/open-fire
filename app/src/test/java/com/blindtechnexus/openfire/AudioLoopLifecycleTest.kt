@@ -3,6 +3,7 @@ package com.blindtechnexus.openfire
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.blindtechnexus.openfire.audio.AudioManager
+import com.blindtechnexus.openfire.audio.BinauralPosition
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -20,6 +21,55 @@ import org.robolectric.annotation.Config
 class AudioLoopLifecycleTest {
 
     private val automatic = listOf("submachineGun", "ak47", "machineGun")
+
+    @Test
+    fun walkingPositionAndDistanceUpdateWithoutStartingOrReplacingLoop() {
+        val audio = AudioManager(ApplicationProvider.getApplicationContext<Context>())
+        try {
+            val loopsField = AudioManager::class.java.getDeclaredField("loops").apply { isAccessible = true }
+            @Suppress("UNCHECKED_CAST")
+            val loops = loopsField.get(audio) as Map<String, Any>
+            audio.refreshEnemyWalkPosition(5f, 0f, 5f)
+            assertFalse(loops.containsKey("|enemyWalk"))
+            audio.updateEnemyWalk3dAudio(25f, 0f, 5f, depthOffset = 25f)
+            val slot = loops.getValue("|enemyWalk")
+            fun field(name: String): Any? = slot.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(slot)
+            val far = field("left") as Float
+            audio.refreshEnemyWalkPosition(5f, 2f, -4f)
+            assertTrue(loops.getValue("|enemyWalk") === slot)
+            assertTrue((field("left") as Float) > far)
+            assertTrue((field("spatialPosition") as BinauralPosition).rear > 0f)
+            audio.refreshEnemyWalkPosition(25f, 0f, 25f)
+            assertTrue((field("left") as Float) < 0.1f)
+            audio.stopFootsteps()
+            assertFalse(loops.containsKey("|enemyWalk"))
+        } finally {
+            audio.release()
+        }
+    }
+
+    @Test
+    fun directionalShockLoopsKeepIndependentPositionsAndOffsets() {
+        val audio = AudioManager(ApplicationProvider.getApplicationContext<Context>())
+        try {
+            audio.startWeaponLoop("magicalSound", posZ = 0.1f, owner = AudioManager.LOOP_OWNER_PLAYER)
+            audio.startWeaponLoop("magicalSound", posZ = -0.1f, owner = AudioManager.LOOP_OWNER_ENEMY, startOffsetMs = 337L)
+            val field = AudioManager::class.java.getDeclaredField("loops").apply { isAccessible = true }
+            @Suppress("UNCHECKED_CAST")
+            val loops = field.get(audio) as Map<String, Any>
+            fun property(slot: Any, name: String): Any? = slot.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(slot)
+            val player = loops.getValue("${AudioManager.LOOP_OWNER_PLAYER}|magicalSound")
+            val enemy = loops.getValue("${AudioManager.LOOP_OWNER_ENEMY}|magicalSound")
+            assertTrue((property(player, "spatialPosition") as BinauralPosition).rear > 0f)
+            assertTrue((property(enemy, "spatialPosition") as BinauralPosition).rear < 0f)
+            assertEquals(337L, property(enemy, "startMs"))
+            audio.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_ENEMY)
+            assertTrue(audio.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_PLAYER))
+            assertFalse(audio.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_ENEMY))
+        } finally {
+            audio.release()
+        }
+    }
 
     @Test
     fun aFreshManagerOwnsNoFiringLoop() {
