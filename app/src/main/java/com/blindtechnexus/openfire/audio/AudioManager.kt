@@ -283,7 +283,7 @@ class AudioManager(private val context: Context) {
             field = VolumeMixer.clamp(value)
         }
 
-    var musicVolume: Float = 0.5f
+    var musicVolume: Float = 1.0f
         set(value) {
             field = VolumeMixer.clamp(value)
             applyMusicVolume()
@@ -815,6 +815,15 @@ class AudioManager(private val context: Context) {
             right = (base * panRight).coerceIn(0f, 1f),
             speedMps = effectiveSpeed
         )
+    }
+
+    /** Refresh an already moving enemy when the listener moves, without starting a new loop. */
+    fun refreshEnemyWalkPosition(distance: Float, lateralOffset: Float) {
+        val slot = loops["|enemyWalk"] ?: return
+        val safeDistance = distance.coerceIn(0f, Combat.MAX_RANGE)
+        val base = walkVolume * VolumeMixer.walkDistanceGain(safeDistance, Combat.MAX_RANGE)
+        val (left, right) = VolumeMixer.panGains(VolumeMixer.panFor(lateralOffset, safeDistance))
+        loopSlot("enemyWalk", "", base * left, base * right, slot.rate, slot.startMs)
     }
 
     /**

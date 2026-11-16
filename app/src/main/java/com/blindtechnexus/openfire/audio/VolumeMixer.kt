@@ -41,7 +41,7 @@ object VolumeMixer {
      * lives on the non-speech side ([NON_SPEECH_UNDER_SPEECH]), so the rule
      * holds at every slider position without ever clamping or amplifying.
      */
-    const val SPEECH_PRIORITY = 1.25f
+    const val SPEECH_PRIORITY = 1.0f
 
     /** The non-speech buses play at 1 / 1.25 = 0.8 of the speech level. */
     const val NON_SPEECH_UNDER_SPEECH = 1f / SPEECH_PRIORITY
@@ -58,7 +58,7 @@ object VolumeMixer {
      * player can always tell a hit from the shot that caused it, which is
      * the whole point of an audio-only game.
      */
-    const val WEAPON_BUS_GAIN = 0.60f
+    const val WEAPON_BUS_GAIN = 1.0f
 
     /** Impact trim: hits play at the full SFX level the player selected. */
     const val HIT_BUS_GAIN = 1.00f

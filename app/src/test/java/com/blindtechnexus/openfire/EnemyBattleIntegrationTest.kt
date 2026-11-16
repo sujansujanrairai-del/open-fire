@@ -38,6 +38,59 @@ class EnemyBattleIntegrationTest {
     }
 
     @Test
+    fun shockIsDefensiveAndBothLoopsStopOnRelease() {
+        val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
+        try {
+            val state = flow<GameState>(vm, "_gameState")
+            flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            state.value = GameState(round = 3, distance = 5f,
+                weapons = listOf(Weapon.ELECTRIC_SHOCK.id), ammo = listOf(0), damaged = listOf(false),
+                robertWeapons = listOf(Weapon.ASSAULT_GUN.id), robertAmmo = listOf(20),
+                robertDamaged = listOf(false))
+            invoke(vm, "startRobertShock")
+            assertFalse(state.value.robertShocking)
+            vm.startHoldFire()
+            assertTrue(state.value.shockHolding)
+            assertTrue(state.value.robertShocking)
+            assertTrue(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_PLAYER))
+            assertTrue(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_ENEMY))
+            invoke(vm, "stopEnemyFireSound")
+            assertTrue(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_ENEMY))
+            vm.stopHoldFire()
+            assertFalse(state.value.shockHolding)
+            assertFalse(state.value.robertShocking)
+            assertFalse(state.value.electricShockInPlay)
+            assertFalse(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_ENEMY))
+            invoke(vm, "robertAttack")
+            assertEquals(1, state.value.robertShots)
+        } finally {
+            invoke(vm, "stopTimers")
+            vm.onAppPaused()
+            vm.audioManager.release()
+            vm.ttsManager.shutdown()
+        }
+    }
+
+    @Test
+    fun ordinaryWeaponsCanFireDuringProjectileFlight() {
+        val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
+        try {
+            val state = flow<GameState>(vm, "_gameState")
+            flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            for (missile in listOf(false, true)) {
+                state.value = GameState(distance = 5f, missileInFlight = missile, bombInFlight = !missile)
+                vm.fire()
+                assertEquals(1, state.value.playerShots)
+            }
+        } finally {
+            invoke(vm, "stopTimers")
+            vm.onAppPaused()
+            vm.audioManager.release()
+            vm.ttsManager.shutdown()
+        }
+    }
+
+    @Test
     fun defenceDeploymentAndPlayerWallReactionRespectTheHealthBoundary() {
         val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
         try {
