@@ -229,9 +229,9 @@ class CarAndElectricShockTest {
         assertEquals(80f, ElectricShockRules.playerDrainPercentPerSecond(100f), 0.001f)
         assertEquals(10f, ElectricShockRules.playerDrainPercentPerSecond(39.9f), 0.001f)
         assertEquals(10f, ElectricShockRules.playerDrainPercentPerSecond(0f), 0.001f)
-        // Alone: the full close-band and far rates.
+        // Alone: the full close-band rate applies no matter who struck first.
         assertEquals(80f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = true), 0.001f)
-        assertEquals(10f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = false), 0.001f)
+        assertEquals(80f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = false), 0.001f)
     }
 
     @Test

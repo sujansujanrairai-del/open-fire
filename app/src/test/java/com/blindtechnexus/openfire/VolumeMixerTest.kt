@@ -23,7 +23,7 @@ class VolumeMixerTest {
         assertEquals(0.0f, VolumeMixer.music(0.0f), 0.0001f)
         assertEquals(1.0f, VolumeMixer.MUSIC_BACKGROUND_GAIN, 0.0001f)
         // Speech itself plays at the full chosen level - the +25 percent.
-        assertEquals(1.0f, VolumeMixer.SPEECH_PRIORITY, 0.0001f)
+        assertEquals(1.25f, VolumeMixer.SPEECH_PRIORITY, 0.0001f)
         assertEquals(0.8f, VolumeMixer.NON_SPEECH_UNDER_SPEECH, 0.0001f)
         // Out of range values are clamped, never amplified.
         assertEquals(0.8f, VolumeMixer.music(4.0f), 0.0001f)
