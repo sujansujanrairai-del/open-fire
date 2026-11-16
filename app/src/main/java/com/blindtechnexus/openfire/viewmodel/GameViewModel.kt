@@ -322,8 +322,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // The game screen never vibrates: haptics belong to the menus only,
         // so the battle stays pure speech and sound.
         audioManager.hapticsEnabled = s.hapticsEnabled && !audioManager.battleActive
-        // Footsteps play at exactly the voice level so movement is always
-        // as clear as the speech announcements.
+        // Footsteps are effects and follow the SFX setting.
         audioManager.walkVolume = s.sfxVolume
 
         ttsManager.speechRate = s.ttsRate

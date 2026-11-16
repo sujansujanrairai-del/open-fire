@@ -36,14 +36,11 @@ import kotlin.math.sqrt
  */
 object VolumeMixer {
     /**
-     * Speech sits exactly 25 percent above the non-speech buses at the same
-     * slider position: speech output = non-speech output * 1.25. The trim
-     * lives on the non-speech side ([NON_SPEECH_UNDER_SPEECH]), so the rule
-     * holds at every slider position without ever clamping or amplifying.
+     * All three buses use the same nominal gain at equal slider positions.
      */
     const val SPEECH_PRIORITY = 1.0f
 
-    /** The non-speech buses play at 1 / 1.25 = 0.8 of the speech level. */
+    /** Non-speech buses use the same nominal gain as speech. */
     const val NON_SPEECH_UNDER_SPEECH = 1f / SPEECH_PRIORITY
 
     /**
@@ -54,9 +51,7 @@ object VolumeMixer {
     const val MUSIC_BACKGROUND_GAIN = 1.0f
 
     /**
-     * Gunfire trim. Weapons are mixed slightly under the impacts so the
-     * player can always tell a hit from the shot that caused it, which is
-     * the whole point of an audio-only game.
+     * Gunfire uses the same nominal bus gain as other effects.
      */
     const val WEAPON_BUS_GAIN = 1.0f
 
@@ -104,8 +99,7 @@ object VolumeMixer {
 
     /**
      * Effective music player volume for a stored 0..1 music setting. Music
-     * sits exactly 25 percent under the speech level, so an announcement is
-     * always clearly audible above the music.
+     * uses the selected level without a hidden speech-priority trim.
      */
     fun music(setting: Float): Float =
         clamp(clamp(setting) * MUSIC_BACKGROUND_GAIN * NON_SPEECH_UNDER_SPEECH)
@@ -115,7 +109,7 @@ object VolumeMixer {
 
     /**
      * Effective SFX volume for a base volume and a 0..1 distance gain. Sound
-     * effects sit exactly 25 percent under the speech level.
+     * effects use the selected level without a hidden speech-priority trim.
      */
     fun sfx(setting: Float, base: Float, distanceGain: Float): Float =
         clamp(clamp(base) * clamp(setting) * clamp(distanceGain) * NON_SPEECH_UNDER_SPEECH)
@@ -123,7 +117,7 @@ object VolumeMixer {
     /**
      * Walking plays at the level of speech itself - the one bus that is not
      * trimmed under the announcements. The stored walk level is the TTS
-     * setting (see AudioManager.walkVolume).
+     * SFX setting (see AudioManager.walkVolume).
      */
     fun walkLevel(setting: Float, distanceGain: Float, speedGain: Float = 1f): Float =
         clamp(speech(setting) * clamp(distanceGain) * runVolumeGain(speedGain))
@@ -141,8 +135,7 @@ object VolumeMixer {
     /**
      * The complete SFX gain of one sound: the player's setting, the sound's
      * own base volume, the distance gain of the 3D position and its bus trim.
-     * A hit is always louder than the weapon that fired it, at every slider
-     * position, and every effect sits 25 percent under speech.
+     * Each bus has the same nominal level at the same slider position.
      */
     fun mix(key: String, setting: Float, base: Float, distanceGain: Float): Float =
         clamp(sfx(setting, base, distanceGain) * busGainFor(key))

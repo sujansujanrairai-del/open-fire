@@ -181,6 +181,14 @@ class CarAndElectricShockTest {
         assertEquals(400, CarRules.ALARM_HP)
     }
 
+    @Test
+    fun enemyReceivesCarStartingInRoundFive() {
+        assertFalse(RobertRules.robotCarGranted(4))
+        assertTrue(RobertRules.robotCarGranted(5))
+        assertTrue(RobertRules.shouldEnterCar(5, 399, false))
+        assertFalse(RobertRules.shouldEnterCar(4, 399, false))
+    }
+
     // ------------------------------------------------------------------
     // AR-15 and the electric shock
     // ------------------------------------------------------------------

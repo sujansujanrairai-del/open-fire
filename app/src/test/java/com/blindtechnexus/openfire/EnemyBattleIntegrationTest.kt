@@ -56,6 +56,13 @@ class EnemyBattleIntegrationTest {
             assertTrue(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_ENEMY))
             invoke(vm, "stopEnemyFireSound")
             assertTrue(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_ENEMY))
+            val lastTick = GameViewModel::class.java.getDeclaredField("shockLastTickMs").apply { isAccessible = true }
+            repeat(2) { tick ->
+                lastTick.setLong(vm, android.os.SystemClock.elapsedRealtime() - 1_000L)
+                invoke(vm, "shockTick")
+                assertEquals(200 - 20 * (tick + 1), state.value.robertHp)
+                assertEquals(if (tick == 0) 200 else 180, state.value.playerHp)
+            }
             vm.stopHoldFire()
             assertFalse(state.value.shockHolding)
             assertFalse(state.value.robertShocking)
