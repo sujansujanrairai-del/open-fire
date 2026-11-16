@@ -340,13 +340,14 @@ class AudioManager(private val context: Context) {
      */
     private fun clipFor(file: String): PcmClip? {
         clips[file]?.let { return it }
-        return clips.computeIfAbsent(file) { name ->
-            val decoded: ShortArray? = try {
-                context.assets.openFd("sounds/$name").use { PcmDecoder.decode(it) }
-            } catch (_: Exception) {
-                null
+        return try {
+            clips.computeIfAbsent(file) { name ->
+                val decoded = context.assets.openFd("sounds/$name").use { PcmDecoder.decode(it) }
+                    ?: error("undecodable sound: $name")
+                PcmClip(decoded)
             }
-            decoded?.let { PcmClip(it) }
+        } catch (_: Exception) {
+            null
         }
     }
 
