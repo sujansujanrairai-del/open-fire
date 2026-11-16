@@ -322,8 +322,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // The game screen never vibrates: haptics belong to the menus only,
         // so the battle stays pure speech and sound.
         audioManager.hapticsEnabled = s.hapticsEnabled && !audioManager.battleActive
-        // Footsteps are effects and follow the SFX setting.
-        audioManager.walkVolume = s.sfxVolume
 
         ttsManager.speechRate = s.ttsRate
         ttsManager.speechVolume = s.ttsVolume
@@ -1226,12 +1224,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             audioManager.stopSound("enemyWalk")
             return
         }
-        val (lateral, _) = enemyAudioOffsets()
+        val (lateral, depth) = enemyAudioOffsets()
         audioManager.updateEnemyWalk3dAudio(
             distance = distance,
             lateralOffset = lateral,
             speedMps = speedMps,
-            fleeing = fleeing
+            fleeing = fleeing,
+            depthOffset = depth
         )
     }
 
@@ -1439,7 +1438,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 // Our own footsteps are centred at the speech level, follow the
                 // running speed and get louder or quieter with the speed level.
                 audioManager.updatePlayerWalkAudio(speedMps, speed.volumeGain())
-                audioManager.refreshEnemyWalkPosition(_gameState.value.distance, enemyAudioOffsets().first)
+                val (lateral, depth) = enemyAudioOffsets()
+                audioManager.refreshEnemyWalkPosition(_gameState.value.distance, lateral, depth)
                 if (stepJob == null || stepJob?.isActive != true) {
                     planRobertStep(80L)
                 }
@@ -5059,7 +5059,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         // The hum plays at once and runs for as long as the swipe is held.
-        audioManager.startWeaponLoop("magicalSound", owner = AudioManager.LOOP_OWNER_PLAYER)
+        // The outgoing shock is behind the listener; the defensive return is
+        // in front. Separate offsets decorrelate the two copies of the hum.
+        audioManager.startWeaponLoop("magicalSound", volume = 0.75f, posZ = 0.1f,
+            owner = AudioManager.LOOP_OWNER_PLAYER)
         startRobertShock()
         ensureShockTicker()
     }
@@ -5082,8 +5085,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         stopEnemyFireSound()
-        val (lateral, depth) = enemyAudioOffsets()
-        audioManager.startEnemyWeaponLoop("magicalSound", lateralOffset = lateral, depthOffset = depth)
+        audioManager.startWeaponLoop("magicalSound", volume = 0.75f, posZ = -0.1f,
+            owner = AudioManager.LOOP_OWNER_ENEMY, startOffsetMs = 337L)
         if (state.shockHolding) {
             if (!shockCounterAnnounced) {
                 shockCounterAnnounced = true

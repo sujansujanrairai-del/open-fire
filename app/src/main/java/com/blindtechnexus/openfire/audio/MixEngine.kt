@@ -47,6 +47,8 @@ class Voice(
     @Volatile var targetLeft: Float = 1f
     @Volatile var targetRight: Float = 1f
     @Volatile var rate: Float = 1f
+    @Volatile var spatialPosition: BinauralPosition? = null
+    internal var binauralFilter: BinauralFilter? = null
 
     /** Set by the game thread: the voice fades out and is removed. */
     @Volatile var stopping: Boolean = false
@@ -123,6 +125,11 @@ class MixEngine(private val maxVoices: Int = MAX_VOICES) {
     /** The voices the mixer thread renders. Touched by the mixer thread only. */
     private val active = ArrayList<Voice>()
 
+    /** Master SFX bus; changing it also affects voices already playing. */
+    @Volatile
+    var sfxGain: Float = 1f
+    private var currentSfxGain: Float = 1f
+
     @Volatile
     var paused: Boolean = false
 
@@ -190,6 +197,12 @@ class MixEngine(private val maxVoices: Int = MAX_VOICES) {
                 iterator.remove()
                 live.remove(voice.id, voice)
             }
+        }
+        val targetGain = VolumeMixer.clamp(sfxGain)
+        for (frame in 0 until frames) {
+            currentSfxGain += (targetGain - currentSfxGain) * GAIN_SMOOTHING
+            out[frame * 2] *= currentSfxGain
+            out[frame * 2 + 1] *= currentSfxGain
         }
     }
 
@@ -264,6 +277,10 @@ class MixEngine(private val maxVoices: Int = MAX_VOICES) {
         var currentRight = voice.currentRight
         val targetLeft = voice.targetLeft
         val targetRight = voice.targetRight
+        val spatialPosition = voice.spatialPosition
+        val spatializer = if (spatialPosition != null) {
+            voice.binauralFilter ?: BinauralFilter().also { voice.binauralFilter = it }
+        } else null
 
         for (frame in 0 until frames) {
             if (!voice.loop && position >= total) return false
@@ -293,8 +310,12 @@ class MixEngine(private val maxVoices: Int = MAX_VOICES) {
             currentLeft += (targetLeft - currentLeft) * GAIN_SMOOTHING
             currentRight += (targetRight - currentRight) * GAIN_SMOOTHING
             val scaled = sample * fade / 32768f
-            out[frame * 2] += scaled * currentLeft
-            out[frame * 2 + 1] += scaled * currentRight
+            if (spatializer != null && spatialPosition != null) {
+                spatializer.add(scaled, spatialPosition, currentLeft, currentRight, out, frame * 2)
+            } else {
+                out[frame * 2] += scaled * currentLeft
+                out[frame * 2 + 1] += scaled * currentRight
+            }
 
             position += step
             played++

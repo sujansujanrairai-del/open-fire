@@ -1,6 +1,7 @@
 package com.blindtechnexus.openfire.audio
 
 import android.content.Context
+import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.os.Build
 import android.os.VibrationEffect
@@ -218,6 +219,7 @@ class AudioManager(private val context: Context) {
         @Volatile var left: Float,
         @Volatile var right: Float,
         @Volatile var rate: Float,
+        @Volatile var spatialPosition: BinauralPosition?,
         val startMs: Long
     )
 
@@ -281,6 +283,7 @@ class AudioManager(private val context: Context) {
     var sfxVolume: Float = 1.0f
         set(value) {
             field = VolumeMixer.clamp(value)
+            engine.sfxGain = field
         }
 
     var musicVolume: Float = 1.0f
@@ -289,11 +292,10 @@ class AudioManager(private val context: Context) {
             applyMusicVolume()
         }
 
-    /** Walking footsteps play at the speech level, attenuated by their 3D distance. */
-    var walkVolume: Float = 1.0f
-        set(value) {
-            field = VolumeMixer.clamp(value)
-        }
+    /** Compatibility alias: footsteps are on the same SFX bus as other effects. */
+    var walkVolume: Float
+        get() = sfxVolume
+        set(value) { sfxVolume = value }
 
     /**
      * The sound theme names the flavour of the battlefield. It never changes
@@ -370,13 +372,17 @@ class AudioManager(private val context: Context) {
         baseVol: Float = 1.0f,
         key: String = ""
     ): Pair<Float, Float> {
+        val (left, right) = calculateSourceGains(x, y, z, baseVol, key)
+        return Pair(left * sfxVolume, right * sfxVolume)
+    }
+
+    // Source and distance gains are independent of the live master SFX bus.
+    private fun calculateSourceGains(x: Float, y: Float, z: Float, baseVol: Float, key: String): Pair<Float, Float> {
         val dist = sqrt(x * x + y * y + z * z)
-        val clampedDistGain = VolumeMixer.distanceGain(dist, Combat.MAX_RANGE)
-        val (leftGain, rightGain) = VolumeMixer.panGains(VolumeMixer.panFor(x, dist))
-        val totalVol = VolumeMixer.mix(key, sfxVolume, baseVol, clampedDistGain)
-        val left = (totalVol * leftGain).coerceIn(0f, 1f)
-        val right = (totalVol * rightGain).coerceIn(0f, 1f)
-        return Pair(left, right)
+        val distanceGain = VolumeMixer.distanceGain(dist, Combat.MAX_RANGE)
+        val (left, right) = VolumeMixer.panGains(VolumeMixer.panFor(x, dist))
+        val total = VolumeMixer.mix(key, 1f, baseVol, distanceGain)
+        return Pair(total * left, total * right)
     }
 
     /**
@@ -455,7 +461,7 @@ class AudioManager(private val context: Context) {
         offsetFrames: Long,
         volume: Float
     ) {
-        val gains = calculate3dVolume(0f, 0f, 0f, volume, key)
+        val gains = calculateSourceGains(0f, 0f, 0f, volume, key)
         val voice = Voice(
             id = engine.newId(),
             key = key,
@@ -549,7 +555,7 @@ class AudioManager(private val context: Context) {
     ): Int {
         val file = SOUND_FILES[key] ?: return -1
         val id = engine.newId()
-        val gains = calculate3dVolume(posX, posY, posZ, volume, key)
+        val gains = calculateSourceGains(posX, posY, posZ, volume, key)
         val pitch = pitchFor(rate)
         withClip(file) { clip ->
             if (released) return@withClip
@@ -568,6 +574,7 @@ class AudioManager(private val context: Context) {
             voice.currentLeft = gains.first
             voice.currentRight = gains.second
             voice.rate = pitch
+            voice.spatialPosition = BinauralPosition.fromCoordinates(posX, posZ)
             engine.start()
             engine.add(voice)
         }
@@ -606,8 +613,8 @@ class AudioManager(private val context: Context) {
         posZ: Float = 0f
     ) {
         if (released || !SOUND_FILES.containsKey(key)) return
-        val gains = calculate3dVolume(posX, posY, posZ, volume, key)
-        loopSlot(key, owner = "", left = gains.first, right = gains.second, rate = pitchFor(rate), startMs = 0L)
+        val gains = calculateSourceGains(posX, posY, posZ, volume, key)
+        loopSlot(key, owner = "", left = gains.first, right = gains.second, rate = pitchFor(rate), startMs = 0L, spatialPosition = BinauralPosition.fromCoordinates(posX, posZ))
     }
 
     /**
@@ -621,12 +628,13 @@ class AudioManager(private val context: Context) {
         posX: Float = 0f,
         posY: Float = 0f,
         posZ: Float = 0f,
-        owner: String = LOOP_OWNER_PLAYER
+        owner: String = LOOP_OWNER_PLAYER,
+        startOffsetMs: Long = 0L
     ) {
         if (released) return
         val loopKey = holdKeyOf(key) ?: return
-        val gains = calculate3dVolume(posX, posY, posZ, volume, loopKey)
-        loopSlot(loopKey, owner, gains.first, gains.second, 1f, 0L)
+        val gains = calculateSourceGains(posX, posY, posZ, volume, loopKey)
+        loopSlot(loopKey, owner, gains.first, gains.second, 1f, startOffsetMs, BinauralPosition.fromCoordinates(posX, posZ))
     }
 
     /** Robert's held firing loop, placed by his real offset from the player. */
@@ -680,7 +688,8 @@ class AudioManager(private val context: Context) {
         left: Float,
         right: Float,
         rate: Float,
-        startMs: Long
+        startMs: Long,
+        spatialPosition: BinauralPosition? = null
     ) {
         val file = SOUND_FILES[key] ?: return
         synchronized(loopLock) {
@@ -690,14 +699,16 @@ class AudioManager(private val context: Context) {
                 existing.left = left
                 existing.right = right
                 existing.rate = rate
+                existing.spatialPosition = spatialPosition
                 engine.live[existing.id]?.let { voice ->
                     voice.targetLeft = left
                     voice.targetRight = right
                     voice.rate = rate
+                    voice.spatialPosition = spatialPosition
                 }
                 return
             }
-            val slot = LoopSlot(key, owner, engine.newId(), left, right, rate, startMs)
+            val slot = LoopSlot(key, owner, engine.newId(), left, right, rate, spatialPosition, startMs)
             loops[slotKey] = slot
             withClip(file) { clip ->
                 // The slot may have been stopped while the clip was decoding.
@@ -722,6 +733,7 @@ class AudioManager(private val context: Context) {
                 voice.currentLeft = slot.left
                 voice.currentRight = slot.right
                 voice.rate = slot.rate
+                voice.spatialPosition = slot.spatialPosition
                 engine.start()
                 engine.add(voice)
             }
@@ -799,7 +811,8 @@ class AudioManager(private val context: Context) {
         distance: Float,
         lateralOffset: Float = 0f,
         speedMps: Float = 0f,
-        fleeing: Boolean = false
+        fleeing: Boolean = false,
+        depthOffset: Float = distance
     ) {
         val safeDistance = distance.coerceIn(0f, Combat.MAX_RANGE)
         val effectiveSpeed = when {
@@ -807,23 +820,24 @@ class AudioManager(private val context: Context) {
             fleeing -> 12f
             else -> 5f
         }
-        val base = walkVolume * VolumeMixer.walkDistanceGain(safeDistance, Combat.MAX_RANGE)
+        val base = VolumeMixer.walkDistanceGain(safeDistance, Combat.MAX_RANGE)
         val (panLeft, panRight) = VolumeMixer.panGains(VolumeMixer.panFor(lateralOffset, safeDistance))
         updateWalkingTrack(
             key = "enemyWalk",
             left = (base * panLeft).coerceIn(0f, 1f),
             right = (base * panRight).coerceIn(0f, 1f),
-            speedMps = effectiveSpeed
+            speedMps = effectiveSpeed,
+            spatialPosition = BinauralPosition.fromCoordinates(lateralOffset, -depthOffset)
         )
     }
 
     /** Refresh an already moving enemy when the listener moves, without starting a new loop. */
-    fun refreshEnemyWalkPosition(distance: Float, lateralOffset: Float) {
+    fun refreshEnemyWalkPosition(distance: Float, lateralOffset: Float, depthOffset: Float = distance) {
         val slot = loops["|enemyWalk"] ?: return
         val safeDistance = distance.coerceIn(0f, Combat.MAX_RANGE)
-        val base = walkVolume * VolumeMixer.walkDistanceGain(safeDistance, Combat.MAX_RANGE)
+        val base = VolumeMixer.walkDistanceGain(safeDistance, Combat.MAX_RANGE)
         val (left, right) = VolumeMixer.panGains(VolumeMixer.panFor(lateralOffset, safeDistance))
-        loopSlot("enemyWalk", "", base * left, base * right, slot.rate, slot.startMs)
+        loopSlot("enemyWalk", "", base * left, base * right, slot.rate, slot.startMs, BinauralPosition.fromCoordinates(lateralOffset, -depthOffset))
     }
 
     /**
@@ -834,7 +848,7 @@ class AudioManager(private val context: Context) {
         speedMps: Float = RunPressure.BASE_SPEED_MPS,
         volumeGain: Float = 1.0f
     ) {
-        val base = VolumeMixer.walkLevel(walkVolume, distanceGain = 1f, speedGain = volumeGain)
+        val base = VolumeMixer.walkLevel(1f, distanceGain = 1f, speedGain = volumeGain)
         updateWalkingTrack(key = "playerWalk", left = base, right = base, speedMps = speedMps)
     }
 
@@ -843,7 +857,8 @@ class AudioManager(private val context: Context) {
         left: Float,
         right: Float,
         speedMps: Float,
-        rateScale: Float = 1f
+        rateScale: Float = 1f,
+        spatialPosition: BinauralPosition? = null
     ) {
         if (released) return
         loopSlot(
@@ -852,7 +867,8 @@ class AudioManager(private val context: Context) {
             left = left.coerceIn(0f, 1f),
             right = right.coerceIn(0f, 1f),
             rate = VolumeMixer.walkRate(speedMps) * rateScale,
-            startMs = WALK_START_OFFSET_MS[key] ?: 0L
+            startMs = WALK_START_OFFSET_MS[key] ?: 0L,
+            spatialPosition = spatialPosition
         )
     }
 
@@ -975,6 +991,12 @@ class AudioManager(private val context: Context) {
         }
         val player = MediaPlayer()
         try {
+            player.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_GAME)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
             context.assets.openFd("sounds/music.ogg").use { fd ->
                 player.setDataSource(fd.fileDescriptor, fd.startOffset, fd.length)
             }
