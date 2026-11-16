@@ -448,7 +448,22 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "Version 2.7",
+                text = "Version 1.1 Beta",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            listOf(
+                "release11Audio", "release11Car", "release11Shock",
+                "release11Coins", "release11Tts", "release11Ui"
+            ).forEach { key ->
+                Text(text = "• ${viewModel.t(key)}", color = Color.White, modifier = Modifier.padding(vertical = 3.dp))
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = "Version 2.7 (historical)",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = WarnBright,
@@ -867,7 +882,7 @@ fun ResultScreen(viewModel: GameViewModel) {
                 fontWeight = FontWeight.Bold,
                 color = Color.White
             )
-            if (result.won) {
+            if (result.won && result.loanWasActive) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = "${viewModel.t("loanDeducted")}: ${result.loanDeducted} | " +

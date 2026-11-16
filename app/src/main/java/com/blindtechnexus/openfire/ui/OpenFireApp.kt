@@ -16,6 +16,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
@@ -40,6 +41,7 @@ import com.blindtechnexus.openfire.ui.screens.SettingsScreen
 import com.blindtechnexus.openfire.ui.screens.ShopScreen
 import com.blindtechnexus.openfire.ui.screens.WelcomeScreen
 import com.blindtechnexus.openfire.ui.theme.DarkBg
+import com.blindtechnexus.openfire.ui.theme.DarkBgTop
 import com.blindtechnexus.openfire.viewmodel.GameViewModel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -81,7 +83,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(DarkBg)
+                .background(Brush.verticalGradient(listOf(DarkBgTop, DarkBg)))
                 .pointerInput(currentScreen) {
                     coroutineScope {
                         awaitEachGesture {

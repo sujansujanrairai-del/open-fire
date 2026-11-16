@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1 Beta
+
+- Rebuild the sound player around a new low-latency mixer: every interaction - gun switch, reload, fire, menu move, door, car - plays and stops with immediate audio, with no one-second delay and no freezing.
+- Keep every sound at its natural pitch: no theme or rate pitch shifts anywhere. Only the walking rhythm speeds up when the player runs and slows down again.
+- Give enemies real distance volume: Robert grows louder as he approaches and quieter as he moves away, and footsteps gain the same distance effect.
+- Replace the bulletproof car with the fully automatic model: choose Car, open the door, close it, and the car drives itself toward the enemy while the player keeps swiping and firing under its cover. Exit Car brakes and walks the player out through the door prompts, the same car is reused from the menu, it has five uses and a 500-coin refuel, and one missile or two consecutive bomb hits destroy it unless the anti-missile system or anti-bomb explosive neutralises them. Robert takes the wheel of his own car from round five when his health is below 400 percent and answers an occupied car with missiles and bombs.
+- Redesign the electric shock: 80 percent per second at 40 to 100 percent proximity, and when both fighters shock at once the sounds mix together and the first activator drains 10 percent per second while the second drains 10 percent per three seconds. Ten sustained seconds inside the 90 to 100 band break a glue wall or a cover. Robert detects and uses the shock on his own and can counter the player's shock.
+- Award coins by firing power instead of shot counts: powerful weapons and hard hits earn more than sprays of light bullets, up to 1500 coins per game. The result announces the coins received, an active loan deduction only when a loan is really open, then the new level or round completion - and nothing else.
+- Raise speech 25 percent above effects and music so every announcement is clear; footsteps play at the speech level.
+- Redesign the interface with a fresh look and clearer menus. The app is now OpenFire Beta, version 1.1 Beta (version code 13), and every guide and changelog reflects it.
+
 ## 2.8
 
 - Remove the enemy's pre-range gunfire: Robert no longer fires a feint or any shot from the deception band to make the player think he is about to shoot, and the feint logic is deleted. He fires only when he is in his real firing range.

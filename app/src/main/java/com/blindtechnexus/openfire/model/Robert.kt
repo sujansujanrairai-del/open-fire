@@ -1187,4 +1187,50 @@ object RobertRules {
         // situation so a losing Robert really does shoot more slowly.
         return normalTacticalInterval(random)
     }
+
+    // ------------------------------------------------------------------
+    // Bulletproof car and electric shock: the robot's own autonomy.
+    // ------------------------------------------------------------------
+
+    /** True when the robot is granted a bulletproof car in this round (round five). */
+    fun robotCarGranted(round: Int): Boolean = CarRules.robotHasCar(round)
+
+    /**
+     * True when the robot climbs into its bulletproof car: from round five,
+     * once its health falls below the 400 line and the car is not in use yet.
+     */
+    fun shouldEnterCar(round: Int, robertHp: Int, robertInCar: Boolean): Boolean =
+        !robertInCar && CarRules.robotMayUseCar(round, robertHp)
+
+    /**
+     * True when the robot spends a missile or a bomb against the player's
+     * bulletproof car. It checks its own explosives first, then decides
+     * automatically once its health drops below the 400 line - or when the
+     * player's car is already weak enough to finish off.
+     */
+    fun shouldBlastPlayerCar(
+        playerInCar: Boolean,
+        robotHp: Int,
+        playerCarHp: Int,
+        hasExplosives: Boolean
+    ): Boolean {
+        if (!playerInCar || !hasExplosives) return false
+        return robotHp in 1 until CarRules.ALARM_HP || CarRules.alarmed(playerCarHp)
+    }
+
+    /** The robot uses the electric shock from round three onwards. */
+    fun robotShockUnlocked(round: Int): Boolean = round >= 3
+
+    /**
+     * True when the robot starts an electric shock of its own: it detects the
+     * player's shock and answers automatically after one second, and it may
+     * also open a shock on its own inside the close band.
+     */
+    fun shouldCounterShock(playerShocking: Boolean, playerHeldMs: Long): Boolean =
+        playerShocking && ElectricShockRules.counterOpen(playerHeldMs)
+
+    /** True when the robot opens a shock on its own initiative. */
+    fun shouldStartShock(round: Int, proximityPercent: Float, robertShocking: Boolean): Boolean =
+        !robertShocking && robotShockUnlocked(round) &&
+            ElectricShockRules.inCloseBand(proximityPercent)
 }

@@ -1,5 +1,6 @@
 {
-  "name": "Open Fire",
+  "name": "OpenFire Beta",
+  "versionName": "1.1 Beta",
   "description": "Audio battle royale game designed for accessible gaming with 3D audio, gesture controls, speech synthesis, and tactile audio feedback.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

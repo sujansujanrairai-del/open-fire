@@ -23,11 +23,11 @@ class CarAndElectricShockTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun theCarCostsThreeThousandFiveHundredAndRefuelsForTwoThousand() {
+    fun theCarCostsThreeThousandFiveHundredAndRefuelsForFiveHundred() {
         assertEquals(3500, CarRules.PRICE)
         assertEquals(3500, DefenceItem.CAR.price)
-        assertEquals(2000, CarRules.REFUEL_PRICE)
-        assertEquals(2, CarRules.GAMES_PER_FUEL)
+        assertEquals(500, CarRules.REFUEL_PRICE)
+        assertEquals(5, CarRules.GAMES_PER_FUEL)
         assertEquals(1, DefenceItem.CAR.requiredCompletedRounds)
     }
 
@@ -49,11 +49,14 @@ class CarAndElectricShockTest {
         assertTrue(CarRules.awaitsSwipeUp(CarStage.DOOR_CLOSED_OUTSIDE))
         assertTrue(CarRules.awaitsSwipeUp(CarStage.DOOR_OPEN_ENTERING))
         assertTrue(CarRules.awaitsSwipeUp(CarStage.INSIDE_ENGINE_OFF))
+        // The exit flow closes the door with the same swipe.
+        assertTrue(CarRules.awaitsSwipeUp(CarStage.DOOR_OPEN_EXITING))
         assertTrue(CarRules.awaitsSwipeUp(CarStage.REFUEL_PENDING))
-        // Driving and the engine idling use a held swipe, not a tap.
+        // The car drives itself: idle and driving stages need no swipe.
         assertFalse(CarRules.awaitsSwipeUp(CarStage.INSIDE_ENGINE_ON))
         assertFalse(CarRules.awaitsSwipeUp(CarStage.INSIDE_MOVING))
         assertFalse(CarRules.awaitsSwipeUp(CarStage.NOT_DEPLOYED))
+        assertFalse(CarRules.awaitsSwipeUp(CarStage.DESTROYED))
     }
 
     @Test
@@ -65,17 +68,17 @@ class CarAndElectricShockTest {
                 assertNotEquals("$key in $lang", key, Strings.get(key, lang))
             }
         }
-        assertEquals("Open the car door", Strings.get("carOpenDoor", "en"))
-        assertEquals("Close the car door", Strings.get("carCloseDoor", "en"))
+        assertEquals("Open the door", Strings.get("carOpenDoor", "en"))
+        assertEquals("Close the door", Strings.get("carCloseDoor", "en"))
         assertEquals("Start car", Strings.get("carStartPrompt", "en"))
-        assertEquals("Engine on. Swipe up and hold to drive. Two-finger swipe up fires, two-finger swipe down reloads, one-finger swipe down stops the car.", Strings.get("carEngineOnPrompt", "en"))
-        assertEquals("Refuel, swipe up to refuel", Strings.get("carRefuelPrompt", "en"))
+        assertEquals("The car is standing by with the engine on. It starts and follows the enemy again when he moves.", Strings.get("carEngineOnPrompt", "en"))
+        assertEquals("Refuel for 500 coins, swipe up to refuel", Strings.get("carRefuelPrompt", "en"))
     }
 
     @Test
-    fun theAlarmIsBelowThreeHundredHealth() {
-        assertTrue(CarRules.alarmed(299))
-        assertFalse(CarRules.alarmed(300))
+    fun theAlarmIsBelowFourHundredHealth() {
+        assertTrue(CarRules.alarmed(399))
+        assertFalse(CarRules.alarmed(400))
         assertFalse(CarRules.alarmed(CarRules.MAX_HP))
     }
 
@@ -99,12 +102,12 @@ class CarAndElectricShockTest {
     }
 
     @Test
-    fun buyingTheCarGivesOneCarWithTwoGames() {
+    fun buyingTheCarGivesOneCarWithFiveGames() {
         val bought = Shop.buyDefence(Inventory(), 3500, DefenceItem.CAR, completedRounds = 1)
         assertTrue(bought.success)
         assertEquals(0, bought.coins)
         assertEquals(1, bought.inventory.cars)
-        assertEquals(2, bought.inventory.carGamesLeft)
+        assertEquals(5, bought.inventory.carGamesLeft)
     }
 
     @Test
@@ -128,37 +131,37 @@ class CarAndElectricShockTest {
     }
 
     @Test
-    fun refuelingNeedsAnOwnedEmptyCarAndTwoThousandCoins() {
+    fun refuelingNeedsAnOwnedEmptyCarAndFiveHundredCoins() {
         assertEquals("notOwned", Shop.refuelCar(Inventory(), 9_999).reasonKey)
 
         val fuelled = Inventory(cars = 1, carGamesLeft = 1)
         assertEquals("carHasFuel", Shop.refuelCar(fuelled, 9_999).reasonKey)
 
         val empty = Inventory(cars = 1, carGamesLeft = 0)
-        val broke = Shop.refuelCar(empty, 1999)
+        val broke = Shop.refuelCar(empty, 499)
         assertFalse(broke.success)
         assertEquals("notEnoughCoins", broke.reasonKey)
-        assertEquals(1999, broke.coins)
+        assertEquals(499, broke.coins)
 
         val refuelled = Shop.refuelCar(empty, 2500)
         assertTrue(refuelled.success)
-        assertEquals(500, refuelled.coins)
-        assertEquals(2, refuelled.inventory.carGamesLeft)
+        assertEquals(2000, refuelled.coins)
+        assertEquals(5, refuelled.inventory.carGamesLeft)
     }
 
     @Test
-    fun aCarIsUsableInTwoGamesThenNeedsFuel() {
+    fun aCarIsUsableInFiveGamesThenNeedsFuel() {
         var inventory = Shop.buyDefence(Inventory(), 3500, DefenceItem.CAR, completedRounds = 1).inventory
-        inventory = Shop.useCarGame(inventory)
-        assertEquals(1, inventory.carGamesLeft)
-        inventory = Shop.useCarGame(inventory)
+        repeat(5) {
+            inventory = Shop.useCarGame(inventory)
+        }
         assertEquals(0, inventory.carGamesLeft)
         assertEquals(1, inventory.cars)
         // Out of fuel now: the next refuel is allowed and costs the full price.
         val refuelled = Shop.refuelCar(inventory, 2_000)
         assertTrue(refuelled.success)
-        assertEquals(0, refuelled.coins)
-        assertEquals(2, refuelled.inventory.carGamesLeft)
+        assertEquals(1500, refuelled.coins)
+        assertEquals(5, refuelled.inventory.carGamesLeft)
     }
 
     @Test
@@ -175,7 +178,7 @@ class CarAndElectricShockTest {
     @Test
     fun theCarHasAThousandHealth() {
         assertEquals(1000, CarRules.MAX_HP)
-        assertEquals(300, CarRules.ALARM_HP)
+        assertEquals(400, CarRules.ALARM_HP)
     }
 
     // ------------------------------------------------------------------
@@ -194,16 +197,23 @@ class CarAndElectricShockTest {
     }
 
     @Test
-    fun theElectricShockIsNeverAGunAndNeverGivenToRobert() {
+    fun theElectricShockIsNeverAGunButRobertUsesItOnHisOwnFromRoundThree() {
         assertEquals(1500, Weapon.ELECTRIC_SHOCK.price)
         assertEquals(3, Weapon.ELECTRIC_SHOCK.unlockRound)
         assertTrue(Weapon.ELECTRIC_SHOCK.electricShock)
         assertFalse(Weapon.ELECTRIC_SHOCK.isFirearm)
         assertFalse(Weapon.ELECTRIC_SHOCK.needsReload)
+        // It is never a rifle in Robert's hands: he detects and fires the
+        // shock autonomously through the shock rules instead.
         for (round in 1..5) {
             assertFalse(RobertRules.isEnemyAllowed(Weapon.ELECTRIC_SHOCK, round))
         }
         assertFalse(RobertRules.ENEMY_WEAPONS.contains(Weapon.ELECTRIC_SHOCK))
+        assertFalse(RobertRules.robotShockUnlocked(2))
+        assertTrue(RobertRules.robotShockUnlocked(3))
+        assertTrue(RobertRules.shouldStartShock(3, 40f, robertShocking = false))
+        assertFalse(RobertRules.shouldStartShock(3, 39f, robertShocking = false))
+        assertFalse(RobertRules.shouldStartShock(3, 40f, robertShocking = true))
     }
 
     @Test
@@ -219,13 +229,33 @@ class CarAndElectricShockTest {
         assertEquals(80f, ElectricShockRules.playerDrainPercentPerSecond(100f), 0.001f)
         assertEquals(10f, ElectricShockRules.playerDrainPercentPerSecond(39.9f), 0.001f)
         assertEquals(10f, ElectricShockRules.playerDrainPercentPerSecond(0f), 0.001f)
+        // Alone: the full close-band rate applies no matter who struck first.
+        assertEquals(80f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = true), 0.001f)
+        assertEquals(80f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = false), 0.001f)
     }
 
     @Test
-    fun robertAnswersOnlyAfterFiveSeconds() {
-        assertFalse(ElectricShockRules.counterOpen(4_999))
-        assertTrue(ElectricShockRules.counterOpen(5_000))
-        assertEquals(10f, ElectricShockRules.ROBERT_COUNTER_PERCENT_PER_SECOND, 0.001f)
+    fun whenBothShockAtOnceTheFirstActivatorDrainsFasterThanTheSecond() {
+        // The one who activated first drains 10 percent per second...
+        assertEquals(
+            10f,
+            ElectricShockRules.shockPercentPerSecond(70f, bothShocking = true, activatedFirst = true),
+            0.001f
+        )
+        // ...while the other drains 10 percent per three seconds.
+        assertEquals(
+            10f / 3f,
+            ElectricShockRules.shockPercentPerSecond(70f, bothShocking = true, activatedFirst = false),
+            0.001f
+        )
+    }
+
+    @Test
+    fun robertAnswersAfterOneSecond() {
+        assertFalse(ElectricShockRules.counterOpen(999))
+        assertTrue(ElectricShockRules.counterOpen(1_000))
+        assertEquals(1_000L, ElectricShockRules.COUNTER_DELAY_MS)
+        assertEquals(10f, ElectricShockRules.FIRST_STRIKER_PERCENT_PER_SECOND, 0.001f)
     }
 
     @Test

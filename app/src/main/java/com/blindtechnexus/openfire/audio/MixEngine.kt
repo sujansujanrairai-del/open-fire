@@ -3,6 +3,7 @@ package com.blindtechnexus.openfire.audio
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.os.Build
 import android.os.Process
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -66,8 +67,14 @@ class Voice(
  *  - a new sound never waits for a free platform stream, and no sound is ever
  *    cut to make room for another one - voices are summed;
  *  - the game thread never blocks on audio: requests go into a lock-free queue
- *    and are picked up by the mixer at the start of the next block;
- *  - pausing freezes every voice in place and resuming continues it exactly.
+ *    and are picked up by the mixer at the start of the next block (10 ms);
+ *  - pausing freezes every voice in place and resuming continues it exactly;
+ *  - output latency is bounded by [MAX_TRACK_BUFFER_MS] on purpose. Some
+ *    devices report a huge AudioTrack minimum buffer (up to about a second
+ *    of audio), and filling that buffer before anything is heard is exactly
+ *    what delayed every shot, every click and every menu sound. The track is
+ *    therefore created with the smallest buffer that works, preferring the
+ *    low-latency performance mode, and a stop is heard within one block.
  *
  * The mixing arithmetic lives in [renderBlock], which has no Android
  * dependency, so the behaviour is verified on the JVM.
@@ -83,6 +90,14 @@ class MixEngine(private val maxVoices: Int = MAX_VOICES) {
 
         /** Frames rendered per buffer: 10 ms, so a stop is heard within one block. */
         const val BLOCK_FRAMES = 441
+
+        /**
+         * The largest AudioTrack buffer this engine ever asks for, in bytes.
+         * Forty milliseconds of audio: any device minimum above it is refused
+         * on the fast paths and only accepted on the slowest fallback, so the
+         * hardware can never add a perceptible delay to an interaction.
+         */
+        val MAX_TRACK_BUFFER_BYTES: Int = SAMPLE_RATE / 25 * CHANNELS * 2
 
         /** Length of the fade used when a voice stops or runs out. */
         const val FADE_FRAMES = 256
@@ -147,6 +162,9 @@ class MixEngine(private val maxVoices: Int = MAX_VOICES) {
         thread = worker
         worker.start()
     }
+
+    /** True while the output thread runs. */
+    fun isRunning(): Boolean = running
 
     /** Stops the output thread. Voices are dropped. */
     @Synchronized
@@ -320,26 +338,76 @@ class MixEngine(private val maxVoices: Int = MAX_VOICES) {
         }
     }
 
-    private fun createTrack(): AudioTrack? = try {
-        val minBytes = AudioTrack.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_OUT_STEREO,
-            AudioFormat.ENCODING_PCM_16BIT
-        ).coerceAtLeast(BLOCK_FRAMES * CHANNELS * 2 * 4)
-        AudioTrack(
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_GAME)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build(),
-            AudioFormat.Builder()
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(SAMPLE_RATE)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                .build(),
-            minBytes,
-            AudioTrack.MODE_STREAM,
-            android.media.AudioManager.AUDIO_SESSION_ID_GENERATE
-        )
+    /**
+     * Creates the output track with the lowest latency the device allows.
+     *
+     * The AudioTrack buffer is the whole latency budget of the mixer: sound
+     * written into a buffer of N milliseconds is heard N milliseconds later.
+     * Devices that report a huge minimum buffer (some report close to a
+     * second) made every interaction feel delayed by about a second, which is
+     * why the buffer is capped at [MAX_TRACK_BUFFER_BYTES] and the low-latency
+     * performance mode is preferred. Each step is a fallback for the previous
+     * one, so a device that refuses a small buffer still gets sound - just
+     * from the classic path.
+     */
+    private fun createTrack(): AudioTrack? {
+        val minBytes = try {
+            AudioTrack.getMinBufferSize(
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_OUT_STEREO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+        } catch (_: Throwable) {
+            return null
+        }
+        if (minBytes <= 0) return null
+
+        val format = AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setSampleRate(SAMPLE_RATE)
+            .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+            .build()
+        val attributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_GAME)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        // The smallest buffer that still holds two blocks of audio.
+        val fastBytes = maxOf(MAX_TRACK_BUFFER_BYTES, BLOCK_FRAMES * CHANNELS * 2 * 2)
+
+        // 1. Low-latency track with a tiny buffer: the fast mixer path.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            buildTrack(attributes, format, fastBytes, lowLatency = true)?.let { return it }
+            // 2. Low-latency track at the device minimum.
+            buildTrack(attributes, format, minBytes, lowLatency = true)?.let { return it }
+        }
+        // 3. Classic track, still capped so latency stays bounded.
+        buildTrack(attributes, format, fastBytes, lowLatency = false)?.let { return it }
+        // 4. Classic track at the device minimum: sound above all.
+        return buildTrack(attributes, format, minBytes, lowLatency = false)
+    }
+
+    /** Builds one AudioTrack candidate, or null when the device refuses it. */
+    private fun buildTrack(
+        attributes: AudioAttributes,
+        format: AudioFormat,
+        bufferBytes: Int,
+        lowLatency: Boolean
+    ): AudioTrack? = try {
+        val builder = AudioTrack.Builder()
+            .setAudioAttributes(attributes)
+            .setAudioFormat(format)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .setBufferSizeInBytes(bufferBytes)
+        if (lowLatency && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+        }
+        val track = builder.build()
+        if (track.state == AudioTrack.STATE_INITIALIZED) {
+            track
+        } else {
+            track.release()
+            null
+        }
     } catch (_: Throwable) {
         null
     }
