@@ -31,11 +31,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.ui.theme.BtnBlue
+import com.blindtechnexus.openfire.ui.theme.BtnBlueEnd
 import com.blindtechnexus.openfire.ui.theme.BtnDanger
+import com.blindtechnexus.openfire.ui.theme.BtnDangerEnd
 import com.blindtechnexus.openfire.ui.theme.BtnPrimary
+import com.blindtechnexus.openfire.ui.theme.BtnPrimaryEnd
 import com.blindtechnexus.openfire.ui.theme.BtnWarn
+import com.blindtechnexus.openfire.ui.theme.BtnWarnEnd
 import com.blindtechnexus.openfire.ui.theme.CardBg
 import com.blindtechnexus.openfire.ui.theme.CardBorder
+import com.blindtechnexus.openfire.ui.theme.DarkBgTop
 import com.blindtechnexus.openfire.ui.theme.DangerBright
 import com.blindtechnexus.openfire.ui.theme.HintBg
 import com.blindtechnexus.openfire.ui.theme.HintText
@@ -72,20 +77,33 @@ fun GameButton(
         ButtonType.WARN -> BtnWarn
         ButtonType.DEFAULT -> BtnBlue
     }
+    val bgBrush = when (type) {
+        ButtonType.PRIMARY -> Brush.verticalGradient(listOf(BtnPrimary, BtnPrimaryEnd))
+        ButtonType.DANGER -> Brush.verticalGradient(listOf(BtnDanger, BtnDangerEnd))
+        ButtonType.WARN -> Brush.verticalGradient(listOf(BtnWarn, BtnWarnEnd))
+        ButtonType.DEFAULT -> Brush.verticalGradient(listOf(BtnBlue, BtnBlueEnd))
+    }
+    val shape = RoundedCornerShape(14.dp)
 
     Button(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 52.dp)
+            .heightIn(min = 54.dp)
+            .background(
+                brush = if (enabled) bgBrush else Brush.verticalGradient(
+                    listOf(Color(0xFF2A3342), Color(0xFF222A37))
+                ),
+                shape = shape
+            )
             .testTag(testTag),
         colors = ButtonDefaults.buttonColors(
-            containerColor = bgColor,
-            disabledContainerColor = Color(0xFF3A4454),
+            containerColor = Color.Transparent,
+            disabledContainerColor = Color.Transparent,
             disabledContentColor = Color(0xFF9AA5B5)
         ),
-        shape = RoundedCornerShape(10.dp)
+        shape = shape
     ) {
         Text(
             text = text,
@@ -107,16 +125,25 @@ fun GameCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .border(2.dp, borderColor, RoundedCornerShape(10.dp)),
-        colors = CardDefaults.cardColors(containerColor = backgroundColor),
-        shape = RoundedCornerShape(10.dp)
+            .border(2.dp, borderColor, RoundedCornerShape(16.dp)),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        shape = RoundedCornerShape(16.dp)
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(15.dp)
+                .background(
+                    brush = Brush.verticalGradient(listOf(backgroundColor, DarkBgTop)),
+                    shape = RoundedCornerShape(16.dp)
+                )
         ) {
-            content()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                content()
+            }
         }
     }
 }
@@ -127,9 +154,9 @@ fun LogBox(text: String, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(LogBg)
-            .border(2.dp, LogText, RoundedCornerShape(10.dp))
+            .border(2.dp, LogText, RoundedCornerShape(14.dp))
             .padding(14.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -148,9 +175,9 @@ fun TipBox(text: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(TipBg)
-            .border(2.dp, TipText, RoundedCornerShape(10.dp))
+            .border(2.dp, TipText, RoundedCornerShape(14.dp))
             .padding(12.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -169,9 +196,9 @@ fun AlertBox(text: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(BtnDanger)
-            .border(2.dp, DangerBright, RoundedCornerShape(10.dp))
+            .border(2.dp, DangerBright, RoundedCornerShape(14.dp))
             .padding(12.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -190,9 +217,9 @@ fun HintBox(text: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(HintBg)
-            .border(2.dp, BtnPrimary, RoundedCornerShape(10.dp))
+            .border(2.dp, BtnPrimary, RoundedCornerShape(14.dp))
             .padding(12.dp)
     ) {
         Text(

@@ -1,6 +1,6 @@
 # Why Android says "The package appears to be invalid"
 
-This document lists every reason an Open Fire APK can be rejected at install time, what
+This document lists every reason an OpenFire Beta APK can be rejected at install time, what
 the build now does about each one, and how to check a file yourself.
 
 The message itself is useless: `PackageInstaller` maps a whole family of
@@ -27,7 +27,7 @@ From the Android 11 behaviour changes:
 > Users can't install or update apps that are only signed with APK Signature Scheme v1 on
 > devices that run Android 11.
 
-Open Fire targets API 36, so a v1-only signature is unusable on any modern device. Tools
+OpenFire Beta targets API 36, so a v1-only signature is unusable on any modern device. Tools
 that produce it: `jarsigner`, most "APK signer" web sites, several file managers and old
 GUI signers, and `apksigner sign --v2-signing-enabled false`.
 

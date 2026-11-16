@@ -12,11 +12,12 @@ import com.blindtechnexus.openfire.model.RunPressure
 import com.blindtechnexus.openfire.model.SoundDurations
 import com.blindtechnexus.openfire.model.SoundTheme
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -27,11 +28,18 @@ import kotlin.math.sqrt
  *   the same time and are summed, so a sound never stops another sound to
  *   make room for itself, and there is no platform stream budget to run out.
  * - Sounds are decoded from their OGG assets once, on a background thread,
- *   and kept in memory as mono samples. A request never waits for a decoder.
+ *   and kept in memory as mono samples. A request never waits for a decoder:
+ *   a cached clip starts on the very next 10 ms mixing block, and a cold clip
+ *   decodes on its own priority lane instead of queuing behind anything else.
+ * - Every sound plays at its natural pitch. Only the walking footsteps change
+ *   their rate, and only to follow the real movement speed.
  * - A held weapon, a footstep or a charging device is a *loop voice* owned by
  *   the fighter that started it. Loops are keyed by owner, so the player's
  *   channel and Robert's channel can never start, stop or mask each other.
+ * - Positional sounds follow one distance curve: low from far away, swelling
+ *   as the source closes in and fading again as it recedes.
  * - Background music is the only stream left: one [MediaPlayer] that loops.
+ * - Stops are immediate: a stopped voice fades out inside one 10 ms block.
  */
 class AudioManager(private val context: Context) {
 
@@ -213,18 +221,47 @@ class AudioManager(private val context: Context) {
         val startMs: Long
     )
 
-    private val audioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
     /**
-     * One at a time, in request order. Chained sounds are scheduled here and
-     * so is the trailing stop of [stopSound], so a stop can never overtake a
-     * chain that was requested before it (the car start, then a quick stop).
+     * Three dedicated lanes, so no audio work can ever queue behind another:
+     *
+     *  - the warm-up lane quietly decodes the whole library at the lowest
+     *    thread priority and is the only place that may take its time;
+     *  - the decode lane immediately decodes the clip of a sound that was
+     *    requested before its warm-up finished, at high priority;
+     *  - the chain lane schedules back-to-back sounds (the car door, the
+     *    engine start) and the trailing stop of [stopSound].
      */
-    private val chainQueue = Dispatchers.IO.limitedParallelism(1)
+    private val warmExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "OpenFireWarmup").apply {
+            priority = Thread.MIN_PRIORITY
+            isDaemon = true
+        }
+    }
 
-    /** Decoded clips by asset file. Decoding is serialised so one file is decoded once. */
+    private val warmDispatcher = warmExecutor.asCoroutineDispatcher()
+
+    private val decodeExecutor = Executors.newFixedThreadPool(2) { runnable ->
+        Thread(runnable, "OpenFireDecode").apply {
+            priority = Thread.NORM_PRIORITY + 1
+            isDaemon = true
+        }
+    }
+
+    private val decodeDispatcher = decodeExecutor.asCoroutineDispatcher()
+
+    private val chainExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "OpenFireChain").apply {
+            priority = Thread.MAX_PRIORITY - 1
+            isDaemon = true
+        }
+    }
+
+    private val chainDispatcher = chainExecutor.asCoroutineDispatcher()
+
+    private val audioScope = CoroutineScope(SupervisorJob() + decodeDispatcher)
+
+    /** Decoded clips by asset file. Each file is decoded once, lanes never block each other. */
     private val clips = ConcurrentHashMap<String, PcmClip>()
-    private val decodeLock = Any()
 
     private val engine = MixEngine()
 
@@ -258,6 +295,10 @@ class AudioManager(private val context: Context) {
             field = VolumeMixer.clamp(value)
         }
 
+    /**
+     * The sound theme names the flavour of the battlefield. It never changes
+     * the pitch of anything: every sound always plays at its natural pitch.
+     */
     var soundTheme: SoundTheme = SoundTheme.TACTICAL
 
     /** Haptics belong to the menus only. */
@@ -276,8 +317,13 @@ class AudioManager(private val context: Context) {
     }
 
     init {
-        // Decode every sound in the background, so the first shot is never late.
-        audioScope.launch {
+        // Spin the mixer up before anything is requested: the AudioTrack is
+        // already running when the first click happens, so it is heard on the
+        // next 10 ms block instead of after the track starts up.
+        engine.start()
+        // Decode every sound on the quiet warm-up lane, so the first shot is
+        // never late and no decode can ever block an interaction.
+        audioScope.launch(warmDispatcher) {
             for (file in SOUND_FILES.values.distinct()) {
                 if (released) break
                 if (file != "music.ogg") clipFor(file)
@@ -287,19 +333,20 @@ class AudioManager(private val context: Context) {
 
     // ------------------------------------------------------------ decoding
 
-    /** Returns the decoded clip of [file], decoding it on first use. Null if it cannot be decoded. */
+    /**
+     * Returns the decoded clip of [file], decoding it on first use. Null if it
+     * cannot be decoded. Each file is decoded exactly once; different files
+     * decode in parallel and a request for a warm clip never waits at all.
+     */
     private fun clipFor(file: String): PcmClip? {
         clips[file]?.let { return it }
-        synchronized(decodeLock) {
-            clips[file]?.let { return it }
-            val decoded: ShortArray = try {
-                context.assets.openFd("sounds/$file").use { PcmDecoder.decode(it) }
+        return clips.computeIfAbsent(file) { name ->
+            val decoded: ShortArray? = try {
+                context.assets.openFd("sounds/$name").use { PcmDecoder.decode(it) }
             } catch (_: Exception) {
                 null
-            } ?: return null
-            val clip = PcmClip(decoded)
-            clips[file] = clip
-            return clip
+            }
+            decoded?.let { PcmClip(it) }
         }
     }
 
@@ -310,7 +357,10 @@ class AudioManager(private val context: Context) {
      *
      * [x] is the sideways offset, [z] the distance along the line of sight. A
      * sound with no real sideways offset is centred exactly, so running straight
-     * at the enemy never smears the image between the channels.
+     * at the enemy never smears the image between the channels. The distance
+     * gain follows the one distance curve of the game: quiet from far away and
+     * swelling continuously as the source approaches, so an enemy heard from
+     * afar grows louder as he closes in and fades again as he moves away.
      */
     fun calculate3dVolume(
         x: Float = 0f,
@@ -320,8 +370,7 @@ class AudioManager(private val context: Context) {
         key: String = ""
     ): Pair<Float, Float> {
         val dist = sqrt(x * x + y * y + z * z)
-        val distGain = 1.0f / (1.0f + 0.022f * max(0f, dist - 5f))
-        val clampedDistGain = distGain.coerceIn(0.10f, 1.0f)
+        val clampedDistGain = VolumeMixer.distanceGain(dist, Combat.MAX_RANGE)
         val (leftGain, rightGain) = VolumeMixer.panGains(VolumeMixer.panFor(x, dist))
         val totalVol = VolumeMixer.mix(key, sfxVolume, baseVol, clampedDistGain)
         val left = (totalVol * leftGain).coerceIn(0f, 1f)
@@ -329,12 +378,13 @@ class AudioManager(private val context: Context) {
         return Pair(left, right)
     }
 
-    /** The playback rate of a sound under the selected sound theme. */
-    private fun pitchFor(rate: Float): Float = when (soundTheme) {
-        SoundTheme.CYBER -> rate * 1.10f
-        SoundTheme.STEALTH -> rate * 0.92f
-        else -> rate
-    }.coerceIn(0.5f, 2.0f)
+    /**
+     * The playback rate of a sound. Every sound plays at its natural pitch:
+     * [rate] is passed through unchanged apart from the safety clamp, and the
+     * sound theme never shifts the pitch. Only the walking loops change their
+     * rate, and only to follow the real movement speed.
+     */
+    private fun pitchFor(rate: Float): Float = rate.coerceIn(0.5f, 2.0f)
 
     // ------------------------------------------------------- one-shot sounds
 
@@ -373,13 +423,14 @@ class AudioManager(private val context: Context) {
      * followed by the engine, or the brake followed by the engine).
      *
      * The whole chain is scheduled in one pass, so no sample of the chain can
-     * drift behind another.
+     * drift behind another, and the chain lane runs at top priority so a door
+     * or an engine sequence is never queued behind anything.
      */
     fun playSequence(keys: List<String>, loopKey: String? = null, volume: Float = 1.0f) {
         if (released || keys.isEmpty()) return
         if (keys.any { !SOUND_FILES.containsKey(it) }) return
         if (loopKey != null && !SOUND_FILES.containsKey(loopKey)) return
-        audioScope.launch(chainQueue) {
+        audioScope.launch(chainDispatcher) {
             if (released) return@launch
             var offsetFrames = 0L
             for (key in keys) {
@@ -523,14 +574,19 @@ class AudioManager(private val context: Context) {
         return id
     }
 
-    /** Runs [then] with the clip of [file]: at once when cached, otherwise after decoding. */
+    /**
+     * Runs [then] with the clip of [file]: at once when cached, otherwise on
+     * the high-priority decode lane. A warm clip is therefore heard within one
+     * mixing block of the request, and even a cold clip never waits behind the
+     * library warm-up or any other audio work.
+     */
     private fun withClip(file: String, then: (PcmClip) -> Unit) {
         val cached = clips[file]
         if (cached != null) {
             then(cached)
             return
         }
-        audioScope.launch {
+        audioScope.launch(decodeDispatcher) {
             if (released) return@launch
             val clip = clipFor(file) ?: return@launch
             then(clip)
@@ -735,7 +791,8 @@ class AudioManager(private val context: Context) {
     /**
      * Updates Robert's footsteps: louder as he approaches, quieter as he
      * retreats, panned by a genuine sideways offset, and the rate follows his
-     * speed in metres per second.
+     * speed in metres per second. The rate changes ONLY with the speed, so the
+     * recording is never shifted off its natural pitch while he walks.
      */
     fun updateEnemyWalk3dAudio(
         distance: Float,
@@ -755,9 +812,7 @@ class AudioManager(private val context: Context) {
             key = "enemyWalk",
             left = (base * panLeft).coerceIn(0f, 1f),
             right = (base * panRight).coerceIn(0f, 1f),
-            speedMps = effectiveSpeed,
-            // A small rate difference keeps his loop from locking onto the player's steps.
-            rateScale = 0.93f
+            speedMps = effectiveSpeed
         )
     }
 
@@ -769,7 +824,7 @@ class AudioManager(private val context: Context) {
         speedMps: Float = RunPressure.BASE_SPEED_MPS,
         volumeGain: Float = 1.0f
     ) {
-        val base = VolumeMixer.clamp(walkVolume * VolumeMixer.runVolumeGain(volumeGain))
+        val base = VolumeMixer.walkLevel(walkVolume, distanceGain = 1f, speedGain = volumeGain)
         updateWalkingTrack(key = "playerWalk", left = base, right = base, speedMps = speedMps)
     }
 
@@ -804,8 +859,8 @@ class AudioManager(private val context: Context) {
         stopLoopsWhere { it.key == key }
         engine.stopWhere { it.key == key }
         // A chain requested just before this stop may not be in the mixer yet;
-        // the queue runs this second stop after it.
-        audioScope.launch(chainQueue) {
+        // the chain queue runs this second stop after it, at top priority.
+        audioScope.launch(chainDispatcher) {
             engine.stopWhere { it.key == key }
         }
     }
@@ -952,6 +1007,8 @@ class AudioManager(private val context: Context) {
     }
 
     fun updateTheme(theme: SoundTheme) {
+        // The theme is stored for the settings screen; it never changes the
+        // pitch of any sound. Every recording plays at its natural pitch.
         soundTheme = theme
     }
 
@@ -981,6 +1038,9 @@ class AudioManager(private val context: Context) {
         stopLoopsWhere { true }
         engine.shutdown()
         audioScope.cancel()
+        warmExecutor.shutdownNow()
+        decodeExecutor.shutdownNow()
+        chainExecutor.shutdownNow()
         clips.clear()
     }
 }

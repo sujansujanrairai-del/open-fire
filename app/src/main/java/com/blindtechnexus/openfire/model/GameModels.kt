@@ -286,12 +286,32 @@ data class GameState(
     val carStage: CarStage = CarStage.NOT_DEPLOYED,
     /** Health of the car. Bullets can only wear it down to one. */
     val carHp: Int = CarRules.MAX_HP,
+    /**
+     * Bomb hits the car has absorbed in a row. One missile or two consecutive
+     * bomb hits destroy it; an active anti-bomb or anti-missile system
+     * neutralises the explosive and never lets the counter climb.
+     */
+    val carBombHits: Int = 0,
     /** True while the user holds the electric shock. */
     val shockHolding: Boolean = false,
     /** True once the user has used the electric shock in this match. */
     val electricShockInPlay: Boolean = false,
-    /** True while Robert answers the user's shock with his own. */
+    /** True while Robert's own electric shock runs. */
     val robertShocking: Boolean = false,
+    /** Which fighter activated the electric shock first in the current duel. */
+    val shockFirstActivator: String = "",
+
+    // ------------------------------------------------------------------
+    // Robert's bulletproof car (granted from round five).
+    // ------------------------------------------------------------------
+    /** True when the robot was granted its bulletproof car this battle. */
+    val robertCarAvailable: Boolean = false,
+    /** True while the robot drives inside its bulletproof car. */
+    val robertInCar: Boolean = false,
+    /** Health of the robot's bulletproof car. */
+    val robertCarHp: Int = 0,
+    /** Bomb hits the robot's car has absorbed in a row. */
+    val robertCarBombHits: Int = 0,
 
     /** True while the timer bomb duration picker is open. */
     val timerSelectActive: Boolean = false,
@@ -321,6 +341,12 @@ data class GameState(
     val robertDamage: Int = 0,
     val playerShots: Int = 0,
     val playerHits: Int = 0,
+    /**
+     * Fire-power points of the player's landed attacks. Battle coins are
+     * awarded from this score (how powerfully the game was played and which
+     * powerful weapons landed), never from the number of shots fired.
+     */
+    val playerFirePower: Int = 0,
     /**
      * Hits landed inside the current exchange of blows. Robert compares them
      * with the hit-exchange rule: when the player suddenly lands more hits

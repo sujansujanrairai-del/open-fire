@@ -64,6 +64,55 @@ object Rewards {
     /** Wins that complete one level. */
     const val WINS_PER_LEVEL = Progression.WINS_PER_LEVEL
 
+    /**
+     * Battle coins are awarded for the POWER of the gameplay, never for the
+     * number of shots fired. One missile that kills the enemy outright is a
+     * more powerful game than a long spray of light bullets, and it earns
+     * more. A winning game pays at most [MAX_BATTLE_COINS] coins.
+     */
+    const val MAX_BATTLE_COINS = 1500
+
+    /** Every win pays this base before the power of the fight is added. */
+    const val WIN_BASE_COINS = 150
+
+    /** Power points: one landed missile. The most powerful single act. */
+    const val MISSILE_POWER_POINTS = 600
+
+    /** Power points: one landed atom bomb. */
+    const val ATOM_BOMB_POWER_POINTS = 500
+
+    /** Power points: one landed grenade or timer bomb. */
+    const val BOMB_POWER_POINTS = 350
+
+    /** Power points: one round of electric shock that lands. */
+    const val SHOCK_POWER_POINTS = 200
+
+    /**
+     * The power points of one landed hit of [weapon]: explosives and the
+     * electric shock carry the big scores, and every other weapon scores its
+     * point-blank power three times over - the AWM is worth more than the
+     * knife, exactly like the damage ladder.
+     */
+    fun powerPointsFor(weapon: Weapon): Int = when {
+        weapon.missileLauncher -> MISSILE_POWER_POINTS
+        weapon.id == "atomBomb" -> ATOM_BOMB_POWER_POINTS
+        weapon.bomb -> BOMB_POWER_POINTS
+        weapon.electricShock -> SHOCK_POWER_POINTS
+        else -> DamageTable.percentOf(weapon, HitZone.HEAVY) * 3
+    }
+
+    /**
+     * The coins a finished battle pays. A defeat pays nothing here (the
+     * defeat penalty is separate). The score is the win base plus everything
+     * the player's firing power accumulated, capped at [MAX_BATTLE_COINS]:
+     * playing longer never pays less and playing harder always pays more.
+     */
+    fun battleCoins(firePowerPoints: Int, won: Boolean): Int {
+        if (!won) return 0
+        return (WIN_BASE_COINS + firePowerPoints.coerceAtLeast(0))
+            .coerceAtMost(MAX_BATTLE_COINS)
+    }
+
     /** Hard rule: a random level reward carries at most one glue wall. */
     const val MAX_GLUE_WALLS_PER_LEVEL_REWARD = 1
 

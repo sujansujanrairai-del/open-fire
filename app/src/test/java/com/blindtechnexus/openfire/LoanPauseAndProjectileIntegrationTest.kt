@@ -61,9 +61,11 @@ class LoanPauseAndProjectileIntegrationTest {
         flow<GameStats>(vm, "_stats").value = vm.stats.value.copy(coins = 90)
         flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
         flow<GameState>(vm, "_gameState").value = GameState(
-            playerHp = 1900, playerMaxHp = 2600, robertHp = 0, robertMaxHp = 2600, playerHits = 0
+            playerHp = 1900, playerMaxHp = 2600, robertHp = 0, robertMaxHp = 2600, playerHits = 0,
+            // Coins follow firing power, not shots: 150 + 950 = 1100 gross.
+            playerFirePower = 950
         )
-        invoke(vm, "endGame", true, false) // 150 + half of 1900 = 1100 gross
+        invoke(vm, "endGame", true, false) // 1100 gross
         assertEquals(Screen.RESULT, vm.currentScreen.value)
         assertEquals(1100, vm.resultData.value.coins)
         assertEquals(1100, vm.resultData.value.loanDeducted)
@@ -73,7 +75,9 @@ class LoanPauseAndProjectileIntegrationTest {
 
         flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
         flow<GameState>(vm, "_gameState").value = GameState(
-            playerHp = 600, playerMaxHp = 2600, robertHp = 0, robertMaxHp = 2600
+            playerHp = 600, playerMaxHp = 2600, robertHp = 0, robertMaxHp = 2600,
+            // 150 + 300 = 450 gross, 400 withheld, 50 credited.
+            playerFirePower = 300
         )
         invoke(vm, "endGame", true, false) // 450 gross, 400 withheld, 50 credited
         assertEquals(400, vm.resultData.value.loanDeducted)

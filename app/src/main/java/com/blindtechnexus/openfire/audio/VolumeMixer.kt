@@ -8,34 +8,55 @@ import kotlin.math.sqrt
  * Pure volume arithmetic shared by every audio channel.
  *
  * Keeping this logic in one small, testable object is what prevents the
- * "slider silently reverts to a fixed level" bug:
+ * "slider silently reverts to a fixed level" bug and keeps one clear mix
+ * hierarchy:
  *
- *  - [music]  returns the user's music setting as it is. There is no hidden
- *             background gain any more, so a slider at 20% really plays at
- *             20% and a slider at 100% really plays at 100%.
- *  - [speech] returns the user's TTS setting unchanged.
- *  - [sfx]    applies the user's SFX setting and the 3D distance gain to the
- *             sound's own base volume.
+ *  - [speech] is the full-scale reference of the mix. The TTS setting is
+ *             returned as it is.
+ *  - [music]  and [sfx] are trimmed by [NON_SPEECH_UNDER_SPEECH], so speech
+ *             is ALWAYS exactly 25 percent louder than the music and the
+ *             sound effects at the same slider position, under every
+ *             circumstance. An announcement is therefore always clearly
+ *             audible over the battle.
+ *  - Walking footsteps are the one exception: they play at the speech level
+ *    itself (see [walkLevel]), so movement is as clear as an announcement.
  *  - [busGainFor] is the per-sound trim of the mixer. Weapon fire sits below
- *             the impacts, so a hit marker (player hit, enemy hit, gun hit,
- *             explosion) is always louder than the gun that caused it.
- *  - walking helpers keep footsteps at the speech (TTS) level, scale their
+ *    the impacts, so a hit marker (player hit, enemy hit, gun hit,
+ *    explosion) is always louder than the gun that caused it.
+ *  - walking helpers keep footsteps at the speech level, scale their
  *    playback rate with the real movement speed, and pan them only when
  *    the walker is genuinely to the side. A fighter running straight at
  *    the listener (or straight away) stays perfectly centred, exactly like
  *    a head-on opponent heard through earphones or on the phone speaker.
+ *  - [distanceGain] is the one distance curve of the game: a sound from far
+ *    away starts low and swells continuously as the source closes in, and
+ *    fades again as it recedes. Every positional sound - the enemy's
+ *    footsteps, his gun fire, his explosions - follows it, so approaching
+ *    and receding are heard unmistakably.
  */
 object VolumeMixer {
     /**
-     * The music setting is the real output level: no constant gain is applied,
-     * so the chair of the mixer always matches the position of the slider.
+     * Speech sits exactly 25 percent above the non-speech buses at the same
+     * slider position: speech output = non-speech output * 1.25. The trim
+     * lives on the non-speech side ([NON_SPEECH_UNDER_SPEECH]), so the rule
+     * holds at every slider position without ever clamping or amplifying.
+     */
+    const val SPEECH_PRIORITY = 1.25f
+
+    /** The non-speech buses play at 1 / 1.25 = 0.8 of the speech level. */
+    const val NON_SPEECH_UNDER_SPEECH = 1f / SPEECH_PRIORITY
+
+    /**
+     * The music setting is applied through the speech-priority trim: no
+     * constant background gain is added, so the chair of the mixer always
+     * matches the position of the slider, just 25 percent under speech.
      */
     const val MUSIC_BACKGROUND_GAIN = 1.0f
 
     /**
      * Gunfire trim. Weapons are mixed slightly under the impacts so the
-     * player can always tell a hit from the shot that caused it, which is the
-     * whole point of an audio-only game.
+     * player can always tell a hit from the shot that caused it, which is
+     * the whole point of an audio-only game.
      */
     const val WEAPON_BUS_GAIN = 0.60f
 
@@ -81,15 +102,31 @@ object VolumeMixer {
     fun clamp(value: Float): Float =
         if (value.isNaN()) 0f else value.coerceIn(0f, 1f)
 
-    /** Effective music player volume for a stored 0..1 music setting. */
-    fun music(setting: Float): Float = clamp(clamp(setting) * MUSIC_BACKGROUND_GAIN)
+    /**
+     * Effective music player volume for a stored 0..1 music setting. Music
+     * sits exactly 25 percent under the speech level, so an announcement is
+     * always clearly audible above the music.
+     */
+    fun music(setting: Float): Float =
+        clamp(clamp(setting) * MUSIC_BACKGROUND_GAIN * NON_SPEECH_UNDER_SPEECH)
 
-    /** Effective speech volume for a stored 0..1 TTS setting. */
+    /** Effective speech volume for a stored 0..1 TTS setting (full scale). */
     fun speech(setting: Float): Float = clamp(setting)
 
-    /** Effective SFX volume for a base volume and a 0..1 distance gain. */
+    /**
+     * Effective SFX volume for a base volume and a 0..1 distance gain. Sound
+     * effects sit exactly 25 percent under the speech level.
+     */
     fun sfx(setting: Float, base: Float, distanceGain: Float): Float =
-        clamp(clamp(base) * clamp(setting) * clamp(distanceGain))
+        clamp(clamp(base) * clamp(setting) * clamp(distanceGain) * NON_SPEECH_UNDER_SPEECH)
+
+    /**
+     * Walking plays at the level of speech itself - the one bus that is not
+     * trimmed under the announcements. The stored walk level is the TTS
+     * setting (see AudioManager.walkVolume).
+     */
+    fun walkLevel(setting: Float, distanceGain: Float, speedGain: Float = 1f): Float =
+        clamp(speech(setting) * clamp(distanceGain) * runVolumeGain(speedGain))
 
     /**
      * Mixer trim of one sound key: weapons play a little under the impacts,
@@ -105,7 +142,7 @@ object VolumeMixer {
      * The complete SFX gain of one sound: the player's setting, the sound's
      * own base volume, the distance gain of the 3D position and its bus trim.
      * A hit is always louder than the weapon that fired it, at every slider
-     * position.
+     * position, and every effect sits 25 percent under speech.
      */
     fun mix(key: String, setting: Float, base: Float, distanceGain: Float): Float =
         clamp(sfx(setting, base, distanceGain) * busGainFor(key))
@@ -140,19 +177,27 @@ object VolumeMixer {
     }
 
     /**
-     * Distance gain (0..1) for footsteps: almost inaudible at the far edge
-     * of the arena and swelling as the walker closes in, then fading again
-     * while receding. The square curve keeps far footsteps present but
-     * unmistakably distant.
+     * Distance gain (0..1) for every positional sound: almost inaudible at
+     * the far edge of the arena and swelling continuously as the source
+     * closes in, then fading again while it recedes. The square curve keeps
+     * far sounds present but unmistakably distant and close sounds clear and
+     * loud, which is exactly how an approaching or retreating enemy is
+     * heard in the real world.
      */
-    fun walkDistanceGain(distance: Float, maxRange: Float): Float {
+    fun distanceGain(distance: Float, maxRange: Float): Float {
         val safeRange = maxRange.coerceAtLeast(1f)
-        val proximity = (1f - clamp(distance / safeRange)).coerceIn(0f, 1f)
-        // A slightly steeper curve than before: a distant walker is clearly
-        // far away and a close one clearly close, which is what keeps the two
-        // footstep loops from ever sounding like one local source.
-        return (0.08f + proximity * proximity * 0.92f).coerceIn(0.08f, 1f)
+        val safeDistance = if (distance.isNaN()) 0f else distance.coerceIn(0f, safeRange)
+        val proximity = (1f - safeDistance / safeRange).coerceIn(0f, 1f)
+        return (DISTANCE_FLOOR + proximity * proximity * (1f - DISTANCE_FLOOR))
+            .coerceIn(DISTANCE_FLOOR, 1f)
     }
+
+    /** The quietest a positional sound ever becomes at the far edge. */
+    const val DISTANCE_FLOOR = 0.08f
+
+    /** Footsteps use the very same distance curve as everything else. */
+    fun walkDistanceGain(distance: Float, maxRange: Float): Float =
+        distanceGain(distance, maxRange)
 
     /**
      * Playback rate of the enemy's footsteps. He uses the same recording as
@@ -163,17 +208,18 @@ object VolumeMixer {
         (walkRate(speedMps) * 0.93f).coerceIn(0.6f, MAX_WALK_RATE)
 
     /**
-     * Walking-loop volume from the current distance. Kept for the general
-     * SFX path; the live footstep tracks use [walkDistanceGain] directly on
-     * the speech-level base volume so they match the TTS loudness.
+     * Walking-loop volume from the current distance, at the speech level.
+     * Kept for the general path; the live footstep tracks use [walkLevel].
      */
     fun walk(setting: Float, distance: Float, maxRange: Float, distanceGain: Float): Float =
-        sfx(setting, walkDistanceGain(distance, maxRange), distanceGain)
+        walkLevel(setting, distanceGain = walkDistanceGain(distance, maxRange) * clamp(distanceGain))
 
     /**
      * Footstep playback rate for a movement speed in metres per second.
      *
      * Slow movement stretches the steps out and a fast run speeds them up.
+     * This is the ONLY sound whose rate ever changes: every other sound
+     * always plays at its natural pitch.
      */
     fun walkRate(speedMps: Float): Float {
         val safeSpeed = if (speedMps.isNaN()) 0f else speedMps.coerceAtLeast(0f)

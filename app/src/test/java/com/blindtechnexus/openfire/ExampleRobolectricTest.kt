@@ -33,16 +33,16 @@ class ExampleRobolectricTest {
     fun testAppName() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("Open Fire", appName)
+        assertEquals("OpenFire Beta", appName)
     }
 
     @Test
     fun testStringsTranslations() {
-        assertEquals("Open Fire", Strings.get("title", "en"))
-        assertEquals("ओपन फायर", Strings.get("title", "hi"))
-        assertEquals("ओपन फायर", Strings.get("title", "ne"))
+        assertEquals("OpenFire Beta", Strings.get("title", "en"))
+        assertEquals("ओपन फायर बीटा", Strings.get("title", "hi"))
+        assertEquals("ओपन फायर बिटा", Strings.get("title", "ne"))
 
-        assertEquals("Version 2.6", Strings.get("version", "en"))
+        assertEquals("Version 1.1 Beta", Strings.get("version", "en"))
         assertEquals("Changelog", Strings.get("changelog", "en"))
         assertEquals("Join Telegram Channel", Strings.get("joinTelegram", "en"))
         assertEquals("Contact on WhatsApp", Strings.get("contactWhatsApp", "en"))
