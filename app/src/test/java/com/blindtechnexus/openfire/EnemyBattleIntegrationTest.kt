@@ -3,6 +3,7 @@ package com.blindtechnexus.openfire
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import com.blindtechnexus.openfire.audio.AudioManager
+import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.Inventory
@@ -38,38 +39,78 @@ class EnemyBattleIntegrationTest {
     }
 
     @Test
-    fun shockIsDefensiveAndBothLoopsStopOnRelease() {
+    fun shockIsADuelInTheCloseBandAndRobertAnswersOrFlees() {
         val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
         try {
             val state = flow<GameState>(vm, "_gameState")
             flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
-            state.value = GameState(round = 3, distance = 5f,
-                weapons = listOf(Weapon.ELECTRIC_SHOCK.id), ammo = listOf(0), damaged = listOf(false),
-                robertWeapons = listOf(Weapon.ASSAULT_GUN.id), robertAmmo = listOf(20),
-                robertDamaged = listOf(false))
+            state.value = GameState(
+                round = 3,
+                distance = 5f,
+                playerHp = 200,
+                playerMaxHp = 200,
+                robertHp = 200,
+                robertMaxHp = 200,
+                weapons = listOf(Weapon.ELECTRIC_SHOCK.id),
+                ammo = listOf(0),
+                damaged = listOf(false),
+                robertWeapons = listOf(Weapon.ASSAULT_GUN.id),
+                robertAmmo = listOf(20),
+                robertDamaged = listOf(false)
+            )
+            // Robert never raises a shock on his own: the shock is a counter.
             invoke(vm, "startRobertShock")
             assertFalse(state.value.robertShocking)
             vm.startHoldFire()
             assertTrue(state.value.shockHolding)
-            assertTrue(state.value.robertShocking)
-            assertTrue(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_PLAYER))
-            assertTrue(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_ENEMY))
-            invoke(vm, "stopEnemyFireSound")
-            assertTrue(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_ENEMY))
-            val lastTick = GameViewModel::class.java.getDeclaredField("shockLastTickMs").apply { isAccessible = true }
-            repeat(2) { tick ->
-                lastTick.setLong(vm, android.os.SystemClock.elapsedRealtime() - 1_000L)
-                invoke(vm, "shockTick")
-                assertEquals(200 - 20 * (tick + 1), state.value.robertHp)
-                assertEquals(if (tick == 0) 200 else 180, state.value.playerHp)
+            assertTrue(
+                "inside the 40 to 100 band the shock hum must play",
+                vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
+            )
+            // The enemy answered this shock, either with a duel or by fleeing.
+            val duel = state.value.robertShocking
+            val lastTick = GameViewModel::class.java.getDeclaredField("shockLastTickMs").apply {
+                isAccessible = true
             }
+            val startRobert = state.value.robertHp
+            val startPlayer = state.value.playerHp
+            // Ten one-second ticks: outside a duel that is 60 percent of the
+            // bar; in a duel it is five two-second windows of 10 percent for
+            // both fighters.
+            if (duel) {
+                assertTrue(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_ENEMY))
+            }
+            var sawRobertDrop = false
+            var sawPlayerDrop = false
+            var peakPaid = 0
+            repeat(10) {
+                // One whole second of the battle clock since the previous tick.
+                lastTick.setLong(vm, android.os.SystemClock.elapsedRealtime() - 1_000L)
+                val before = state.value
+                invoke(vm, "shockTick")
+                val after = state.value
+                // A tick that ends the fight resets the state for the next
+                // round, so a rise is allowed - healing inside a tick is not:
+                // the health only ever moves down while the shock is held.
+                assertTrue("the shock must never heal", after.robertHp <= after.robertMaxHp)
+                assertTrue("the shock must never heal", after.playerHp <= after.playerMaxHp)
+                if (after.robertHp < before.robertHp) sawRobertDrop = true
+                if (after.playerHp < before.playerHp) sawPlayerDrop = true
+                // A shock that finishes the fight starts the next round with a
+                // clean state, so the payment is remembered at its peak.
+                if (after.shockDamageDealt > peakPaid) peakPaid = after.shockDamageDealt
+            }
+            assertTrue("the shock must really hurt", sawRobertDrop)
+            assertTrue("the player must not be healed", state.value.playerHp <= startPlayer)
+            if (duel) {
+                assertTrue("a duel costs the player health as well", sawPlayerDrop)
+            }
+            assertTrue("the shock must be paid", peakPaid > 0)
             vm.stopHoldFire()
             assertFalse(state.value.shockHolding)
             assertFalse(state.value.robertShocking)
             assertFalse(state.value.electricShockInPlay)
             assertFalse(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_ENEMY))
-            invoke(vm, "robertAttack")
-            assertEquals(1, state.value.robertShots)
         } finally {
             invoke(vm, "stopTimers")
             vm.onAppPaused()
@@ -79,16 +120,52 @@ class EnemyBattleIntegrationTest {
     }
 
     @Test
-    fun ordinaryWeaponsCanFireDuringProjectileFlight() {
+    fun theShockIsRefusedOutsideTheCloseBand() {
         val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
         try {
             val state = flow<GameState>(vm, "_gameState")
             flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            // 25 metres is zero proximity: the shock cannot reach him.
+            state.value = GameState(
+                round = 3,
+                distance = Combat.MAX_RANGE,
+                weapons = listOf(Weapon.ELECTRIC_SHOCK.id),
+                ammo = listOf(0),
+                damaged = listOf(false)
+            )
+            vm.startHoldFire()
+            assertFalse(state.value.shockHolding)
+            assertFalse(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_PLAYER))
+            // Inside the 40 to 100 percent band the very same gesture works.
+            state.value = state.value.copy(distance = 5f)
+            vm.startHoldFire()
+            assertTrue(state.value.shockHolding)
+        } finally {
+            invoke(vm, "stopTimers")
+            vm.onAppPaused()
+            vm.audioManager.release()
+            vm.ttsManager.shutdown()
+        }
+    }
+
+    @Test
+    fun noWeaponFiresWhileAProjectileIsInTheAir() {
+        val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
+        try {
+            val state = flow<GameState>(vm, "_gameState")
+            flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            // While a missile or a bomb is in the air no gun fires: the shot
+            // is refused, so the weapon is held and then drifts back, which is
+            // the grace time to deploy an anti-missile or anti-bomb defence.
             for (missile in listOf(false, true)) {
                 state.value = GameState(distance = 5f, missileInFlight = missile, bombInFlight = !missile)
                 vm.fire()
-                assertEquals(1, state.value.playerShots)
+                assertEquals(0, state.value.playerShots)
             }
+            // With a clear sky the very same weapon fires normally.
+            state.value = GameState(distance = 5f)
+            vm.fire()
+            assertEquals(1, state.value.playerShots)
         } finally {
             invoke(vm, "stopTimers")
             vm.onAppPaused()

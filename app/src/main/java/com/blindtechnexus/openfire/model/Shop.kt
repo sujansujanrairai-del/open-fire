@@ -533,6 +533,20 @@ enum class DefenceItem(
         descriptionKey = "defenceAntiBombInfo",
         requiredCompletedRounds = BombRules.FIRST_BOMB_ROUND - 1,
         lockedKey = "antiBombLocked"
+    ),
+    /**
+     * "Lock the Opponent": freezes Robert completely for one minute. It is a
+     * defensive/control item, so it stays usable while he is locked, it is
+     * stackable like every other defence, and the lock never lifts early.
+     */
+    LOCK(
+        id = "lockOpponent",
+        nameKey = "lockOpponent",
+        pluralKey = "lockOpponentsPlural",
+        price = LockRules.PRICE,
+        descriptionKey = "defenceLockInfo",
+        requiredCompletedRounds = LockRules.REQUIRED_COMPLETED_ROUNDS,
+        lockedKey = "lockOpponentLocked"
     );
 
     companion object {
@@ -540,6 +554,13 @@ enum class DefenceItem(
 
         /** The two defences that intercept a projectile already in the air. */
         fun interceptors(): List<DefenceItem> = listOf(ANTI_MISSILE, ANTI_BOMB)
+
+        /**
+         * The purely defensive items, which stay usable while the opponent is
+         * locked: the car, the two interceptors and the two barriers.
+         */
+        fun defensive(): List<DefenceItem> =
+            listOf(CAR, ANTI_MISSILE, ANTI_BOMB, COVER, GLUE_WALL)
     }
 }
 
@@ -615,7 +636,9 @@ data class Inventory(
     /** Bulletproof cars owned: at most one. */
     val cars: Int = 0,
     /** Battles the owned car can still be used in before a refuel. */
-    val carGamesLeft: Int = 0
+    val carGamesLeft: Int = 0,
+    /** Stacked "Lock the Opponent" charges, one freezes him for a minute. */
+    val lockCharges: Int = 0
 ) {
     fun ownsWeapon(weapon: Weapon): Boolean =
         weapon.ownedByDefault || weaponIds.contains(weapon.id)
@@ -659,6 +682,7 @@ data class Inventory(
         DefenceItem.ANTI_MISSILE -> antiMissiles
         DefenceItem.CAR -> cars
         DefenceItem.ANTI_BOMB -> antiBombs
+        DefenceItem.LOCK -> lockCharges
     }
 
     fun withCount(item: DefenceItem, value: Int): Inventory {
@@ -674,6 +698,7 @@ data class Inventory(
                 carGamesLeft = if (safe > 0) carGamesLeft else 0
             )
             DefenceItem.ANTI_BOMB -> copy(antiBombs = safe)
+            DefenceItem.LOCK -> copy(lockCharges = safe)
         }
     }
 

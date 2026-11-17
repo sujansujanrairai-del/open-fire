@@ -128,6 +128,7 @@ class MixEngine(private val maxVoices: Int = MAX_VOICES) {
     /** Master SFX bus; changing it also affects voices already playing. */
     @Volatile
     var sfxGain: Float = 1f
+
     private var currentSfxGain: Float = 1f
 
     @Volatile
@@ -303,9 +304,7 @@ class MixEngine(private val maxVoices: Int = MAX_VOICES) {
 
             val index = position.toInt().coerceIn(0, total - 1)
             val fraction = (position - index).toFloat()
-            val nextIndex = if (index + 1 < total) index + 1 else if (voice.loop) 0 else index
-            val first = samples[index].toFloat()
-            val sample = first + (samples[nextIndex] - first) * fraction
+            val sample = interpolate(samples, index, fraction, voice.loop)
 
             currentLeft += (targetLeft - currentLeft) * GAIN_SMOOTHING
             currentRight += (targetRight - currentRight) * GAIN_SMOOTHING
@@ -325,6 +324,45 @@ class MixEngine(private val maxVoices: Int = MAX_VOICES) {
         voice.currentLeft = currentLeft
         voice.currentRight = currentRight
         return true
+    }
+
+    /**
+     * Catmull-Rom interpolation of one sample position.
+     *
+     * A plain linear interpolation between two samples is audible as a harsh,
+     * "chipped" colour change as soon as a rate is not exactly 1, which is
+     * precisely the distorted pitch the game must never make. The four-point
+     * curve below reconstructs the waveform smoothly, so a rate inside
+     * [VolumeMixer.MIN_RATE]..[VolumeMixer.MAX_RATE] is transparent. At an
+     * exact sample position (fraction 0) it returns that sample unchanged, so
+     * a rate of 1 is bit-identical to the recording.
+     */
+    private fun interpolate(samples: ShortArray, index: Int, fraction: Float, loop: Boolean): Float {
+        val total = samples.size
+        if (total <= 0) return 0f
+        if (fraction <= 0f) return samples[index.coerceIn(0, total - 1)].toFloat()
+        fun at(offset: Int): Float {
+            var position = index + offset
+            if (loop) {
+                position = ((position % total) + total) % total
+            } else {
+                position = position.coerceIn(0, total - 1)
+            }
+            return samples[position].toFloat()
+        }
+        val p0 = at(-1)
+        val p1 = at(0)
+        val p2 = at(1)
+        val p3 = at(2)
+        val t = fraction
+        val t2 = t * t
+        val t3 = t2 * t
+        return 0.5f * (
+            (2f * p1) +
+                (-p0 + p2) * t +
+                (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2 +
+                (-p0 + 3f * p1 - 3f * p2 + p3) * t3
+            )
     }
 
     private fun runOutput() {

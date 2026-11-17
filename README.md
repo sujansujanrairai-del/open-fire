@@ -4,7 +4,7 @@ An audio-first battle royale for Android, built for blind and low-vision players
 3D-positioned sound cues, gesture-only controls, speech feedback and a fully
 spoken interface (English, हिन्दी and नेपाली).
 
-* Version: 1.1 Beta (version code 13)
+* Version: 1.2 Beta (version code 14)
 * Package: `com.blindtechnexus.openfire`
 * Minimum Android: 7.0 (API 24), target API 36
 * Language: Kotlin + Jetpack Compose

@@ -1,6 +1,25 @@
 package com.blindtechnexus.openfire.model
 
-/** Shock damage and timing rules. The enemy only counters the player's hold. */
+/**
+ * Shock damage and timing rules.
+ *
+ * Two situations exist, and they are deliberately described by two different
+ * functions so no caller can mix them up:
+ *
+ *  - **Alone** ([shockPercentPerSecond]) the shock drains the whole proximity
+ *    ladder of the game: 60% of maximum health per second at 40% to 100%
+ *    proximity (the only band in which the shock works at all) and 10% per
+ *    second outside it.
+ *  - **When both fighters shock at once** ([duelPercentPerSecond]) the fight
+ *    turns into a duel of colliding shocks. Both fighters lose exactly 10% of
+ *    their maximum health every [DUEL_WINDOW_MS] (two seconds), so the duel is
+ *    perfectly symmetric and the fighter with the weaker health bar loses
+ *    first.
+ *
+ * The enemy may either counter the player's shock ([RobertRules.shouldCounterShock])
+ * or flee out of it ([RobertRules.shouldFleeShock]); the battle engine rolls
+ * that decision at random.
+ */
 object ElectricShockRules {
     /** Longest single use, in milliseconds. */
     const val MAX_USE_MS = 30_000L
@@ -14,21 +33,28 @@ object ElectricShockRules {
     /** Drain of the opponent's health per second while alone outside the close band. */
     const val PLAYER_FAR_PERCENT_PER_SECOND = 10f
 
-    /**
-     * While both shocks run, the fighter who activated FIRST drains the
-     * antagonist at 10 percent per second.
-     */
-    const val FIRST_STRIKER_PERCENT_PER_SECOND = 10f
+    /** Health percentage both fighters lose in one window of a shock duel. */
+    const val DUEL_PERCENT_PER_WINDOW = 10f
+
+    /** The two-second window of the duel drain: 10 percent every two seconds. */
+    const val DUEL_WINDOW_MS = 2_000L
 
     /**
-     * While both shocks run, the fighter who activated second drains the
-     * first one at 10 percent per two seconds - much weaker, so the first
-     * activation always wins a duel of shocks.
+     * Percentage per second of the duel drain, derived from the two-second
+     * window. Exposed so the guide, the tests and the engine all read the
+     * same number.
      */
-    const val SECOND_STRIKER_PERCENT_PER_THREE_SECONDS = 10f
+    val DUEL_PERCENT_PER_SECOND: Float =
+        DUEL_PERCENT_PER_WINDOW * 1000f / DUEL_WINDOW_MS
+
+    /** Kept for older callers: the single-striker drain in a duel. */
+    const val FIRST_STRIKER_PERCENT_PER_SECOND = DUEL_PERCENT_PER_WINDOW * 1000f / DUEL_WINDOW_MS
+
+    /** Kept for older callers: the mirror-image drain of the other striker. */
+    const val SECOND_STRIKER_PERCENT_PER_THREE_SECONDS = DUEL_PERCENT_PER_WINDOW
 
     /** The two-second window of the second striker's slow drain. */
-    const val SECOND_STRIKER_WINDOW_MS = 2_000L
+    const val SECOND_STRIKER_WINDOW_MS = DUEL_WINDOW_MS
 
     /** Lower edge of the close band, in proximity percent. */
     const val CLOSE_BAND_MIN_PROXIMITY = 40f
@@ -44,6 +70,13 @@ object ElectricShockRules {
 
     /** Continuous seconds of close-band shock needed to break a barrier. */
     const val BREAK_SUSTAINED_MS = 10_000L
+
+    /**
+     * The share of the opponent's health one shock use must drain before the
+     * use is worth the full shock payout. Anything above zero is already a
+     * real use and pays [Rewards.SHOCK_MIN_COINS].
+     */
+    const val MIN_PAYABLE_DRAIN_HP = 1
 
     /** Health the shock drains per second at [proximityPercent] while alone. */
     fun playerDrainPercentPerSecond(proximityPercent: Float): Float =
@@ -63,16 +96,18 @@ object ElectricShockRules {
         proximityPercent >= BREAK_BAND_MIN_PROXIMITY &&
             proximityPercent <= CLOSE_BAND_MAX_PROXIMITY
 
-    /** Health the first striker drains per second while both shocks run. */
-    fun firstStrikerPercentPerSecond(): Float = FIRST_STRIKER_PERCENT_PER_SECOND
+    /** Health percentage per second the first striker drains in a duel. */
+    fun firstStrikerPercentPerSecond(): Float = DUEL_PERCENT_PER_SECOND
+
+    /** Health percentage per second the other striker drains in a duel. */
+    fun secondStrikerPercentPerSecond(): Float = DUEL_PERCENT_PER_SECOND
 
     /**
-     * Health the second striker drains per second while both shocks run:
-     * 10 percent spread over three seconds, so a continuous duel slowly
-     * costs the first striker 10 percent every three seconds.
+     * Health percentage per second each fighter loses while both shocks run.
+     * The duel is symmetric: whoever activated first gains nothing, so the
+     * 10 percent every two seconds applies to both fighters alike.
      */
-    fun secondStrikerPercentPerSecond(): Float =
-        SECOND_STRIKER_PERCENT_PER_THREE_SECONDS * 1000f / SECOND_STRIKER_WINDOW_MS
+    fun duelPercentPerSecond(): Float = DUEL_PERCENT_PER_SECOND
 
     /** True once the opponent may answer with their own shock. */
     fun counterOpen(heldMs: Long): Boolean = heldMs >= COUNTER_DELAY_MS
@@ -92,22 +127,26 @@ object ElectricShockRules {
 
     /**
      * The drain percentage of one fighter's shock - the whole shock law in
-     * one pure function. Alone, the close band decides (60 or 10 percent per
-     * second). While both shocks run, the activation order decides: the first
-     * striker drains 10 percent per second and the second striker only
-     * 10 percent per two seconds.
+     * one pure function.
+     *
+     * Alone, the close band decides (60 or 10 percent per second). While both
+     * shocks run the duel law replaces it: 10 percent of maximum health every
+     * two seconds for both fighters, whatever the proximity and whoever
+     * activated first.
      *
      * @param proximityPercent closeness of the target (100 = point blank).
      * @param bothShocking true while the antagonist's shock runs as well.
-     * @param activatedFirst true when this fighter activated before the antagonist.
+     * @param activatedFirst kept for compatibility; the duel is symmetric.
      */
     fun shockPercentPerSecond(
         proximityPercent: Float,
         bothShocking: Boolean,
         activatedFirst: Boolean
     ): Float = when {
-        bothShocking && activatedFirst -> FIRST_STRIKER_PERCENT_PER_SECOND
-        bothShocking -> secondStrikerPercentPerSecond()
+        bothShocking -> duelPercentPerSecond()
         else -> playerDrainPercentPerSecond(proximityPercent)
     }
+
+    /** True once one shock use has drained enough health to be worth coins. */
+    fun paysCoins(drainedHp: Int): Boolean = drainedHp >= MIN_PAYABLE_DRAIN_HP
 }

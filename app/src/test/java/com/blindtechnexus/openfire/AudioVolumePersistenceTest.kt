@@ -68,6 +68,33 @@ class AudioVolumePersistenceTest {
     }
 
     @Test
+    fun anEffectsChangeScalesWhatIsAlreadyPlayingAndStaysLive() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val audio = AudioManager(context)
+        val mixer = audio.engine
+
+        // The slider is applied by the mixer on every block, so a sound that
+        // is already playing follows the setting at once - it is never stuck
+        // at the level it was created with.
+        audio.sfxVolume = 0.5f
+        assertEquals(0.5f, mixer.sfxGain, 0.0001f)
+        audio.sfxVolume = 1.0f
+        assertEquals(1.0f, mixer.sfxGain, 0.0001f)
+        audio.sfxVolume = 0f
+        assertEquals(0f, mixer.sfxGain, 0.0001f)
+
+        // One slider position means one level: a voice carries only its base
+        // and distance gain, so the mixer applies the slider exactly once.
+        // A centred sound at full base is therefore 1.0 in both channels.
+        audio.sfxVolume = 0.5f
+        val gains = audio.calculate3dVolume(baseVol = 1.0f, key = "machineGun")
+        assertEquals(1.0f, gains.first, 0.0001f)
+        assertEquals(1.0f, gains.second, 0.0001f)
+
+        audio.release()
+    }
+
+    @Test
     fun storedVolumesAreClampedNotScaled() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val audio = AudioManager(context)

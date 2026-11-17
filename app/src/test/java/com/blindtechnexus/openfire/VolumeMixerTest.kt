@@ -2,6 +2,7 @@ package com.blindtechnexus.openfire
 
 import com.blindtechnexus.openfire.audio.VolumeMixer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,15 +13,36 @@ import org.junit.Test
 class VolumeMixerTest {
 
     @Test
-    fun musicAndEffectsMatchSpeechAtTheSameSetting() {
+    fun effectsMatchSpeechAndOnlyMusicIsTrimmedUnderIt() {
         for (setting in listOf(0f, 0.2f, 0.8f, 1f)) {
-            assertEquals(setting, VolumeMixer.music(setting), 0.0001f)
             assertEquals(setting, VolumeMixer.speech(setting), 0.0001f)
             assertEquals(setting, VolumeMixer.mix("ak47", setting, 1f, 1f), 0.0001f)
             assertEquals(setting, VolumeMixer.mix("enemyHit", setting, 1f, 1f), 0.0001f)
+            // A loud weapon is played at exactly the speech level, so the
+            // machine gun can never be quieter than the voice.
+            assertEquals(setting, VolumeMixer.mix("machineGun", setting, 1f, 1f), 0.0001f)
+            assertEquals(setting, VolumeMixer.mix("atomBomb", setting, 1f, 1f), 0.0001f)
+            // Music is the only bus under the speech, and it follows the slider.
+            assertEquals(setting * VolumeMixer.MUSIC_TRIM, VolumeMixer.music(setting), 0.0001f)
+            assertTrue(setting < 0.0001f || VolumeMixer.music(setting) < VolumeMixer.speech(setting))
         }
-        assertEquals(1f, VolumeMixer.music(4f), 0.0001f)
+        assertEquals(VolumeMixer.MUSIC_TRIM, VolumeMixer.music(4f), 0.0001f)
         assertEquals(0f, VolumeMixer.music(-3f), 0.0001f)
+    }
+
+    @Test
+    fun theLoudWeaponsAreOnTheSpeechLevel() {
+        for (key in listOf("machineGun", "submachineGun", "grenade", "atomBomb", "missile")) {
+            assertTrue("$key must be loud", VolumeMixer.isLoudSfx(key))
+            // The trim of a loud weapon is full scale, so it is never quieter
+            // than the speech bus at the same slider position.
+            assertEquals(key, VolumeMixer.LOUD_BUS_GAIN, VolumeMixer.busGainFor(key), 0.0001f)
+            assertEquals(key, VolumeMixer.LOUD_BUS_GAIN, VolumeMixer.mix(key, 1f, 1f, 1f), 0.0001f)
+            assertEquals(key, VolumeMixer.LOUD_BUS_GAIN * 0.5f, VolumeMixer.mix(key, 0.5f, 1f, 1f), 0.0001f)
+        }
+        assertFalse(VolumeMixer.isLoudSfx("click"))
+        // A loud weapon is heard exactly as loudly as the voice at full volume.
+        assertEquals(VolumeMixer.speech(1f), VolumeMixer.mix("machineGun", 1f, 1f, 1f), 0.0001f)
     }
 
     @Test
@@ -70,16 +92,30 @@ class VolumeMixerTest {
     }
 
     @Test
-    fun footstepRateRisesWithMovementSpeed() {
+    fun footstepRateRisesWithMovementSpeedInsideTheNaturalWindow() {
         assertTrue(VolumeMixer.walkRate(2f) < VolumeMixer.walkRate(6f))
         assertTrue(VolumeMixer.walkRate(6f) < VolumeMixer.walkRate(12f))
-        // Slow movement is slowed down, a sprint is sped up, both clamped.
+        // Slow movement is slowed a little, a sprint is sped up, and both stay
+        // inside the narrow natural window that never sounds chipped.
         assertTrue(VolumeMixer.walkRate(1f) < 1f)
         assertTrue(VolumeMixer.walkRate(14f) > 1f)
-        assertEquals(0.6f, VolumeMixer.walkRate(0f), 0.0001f)
-        // A sprint never pushes the rate past the top of the range.
-        assertEquals(2.0f, VolumeMixer.walkRate(100f), 0.0001f)
+        assertEquals(0.90f, VolumeMixer.walkRate(0f), 0.0001f)
         assertEquals(VolumeMixer.MAX_WALK_RATE, VolumeMixer.walkRate(100f), 0.0001f)
+        assertEquals(VolumeMixer.MAX_RATE, VolumeMixer.MAX_WALK_RATE, 0.0001f)
+        for (speed in listOf(0f, 1f, 4f, 9f, 40f)) {
+            val rate = VolumeMixer.walkRate(speed)
+            assertTrue("rate $rate out of window at $speed", rate in VolumeMixer.MIN_RATE..VolumeMixer.MAX_RATE)
+        }
+    }
+
+    @Test
+    fun noPlaybackRateCanEverLeaveTheNaturalWindow() {
+        assertEquals(VolumeMixer.MIN_RATE, VolumeMixer.naturalRate(0.1f), 0.0001f)
+        assertEquals(VolumeMixer.MAX_RATE, VolumeMixer.naturalRate(3f), 0.0001f)
+        assertEquals(1f, VolumeMixer.naturalRate(1f), 0.0001f)
+        assertEquals(1f, VolumeMixer.naturalRate(Float.NaN), 0.0001f)
+        assertTrue(VolumeMixer.naturalRate(2f) < 2f)
+        assertTrue(VolumeMixer.enemyWalkRate(6f) <= VolumeMixer.MAX_RATE)
     }
 
     @Test
@@ -93,11 +129,13 @@ class VolumeMixerTest {
     @Test
     fun theThreeFingerRunningLevelsAreMixedSmoothly() {
         // Slow running is quieter, normal is the base, fast is the loudest the
-        // user setting allows. The gain is clamped so a slow run never
-        // disappears and a fast run never exceeds the chosen volume.
+        // user setting allows. The gain is clamped so a slow run never becomes
+        // inaudible ([MIN_RUN_GAIN]) and a fast run never exceeds the chosen
+        // volume.
         assertEquals(0.60f, VolumeMixer.runVolumeGain(0.6f), 0.0001f)
-        assertEquals(0.80f, VolumeMixer.runVolumeGain(0.8f), 0.0001f)
+        assertTrue(VolumeMixer.runVolumeGain(0.8f) < VolumeMixer.runVolumeGain(1.0f))
         assertEquals(1.0f, VolumeMixer.runVolumeGain(1.0f), 0.0001f)
+        assertTrue(VolumeMixer.runVolumeGain(0.8f) >= VolumeMixer.runVolumeGain(0.6f))
         // Anything below the floor is lifted, anything above the ceiling cut.
         assertEquals(VolumeMixer.MIN_RUN_GAIN, VolumeMixer.runVolumeGain(0.1f), 0.0001f)
         assertEquals(1.0f, VolumeMixer.runVolumeGain(3.0f), 0.0001f)
@@ -113,11 +151,15 @@ class VolumeMixerTest {
         assertEquals(1.0f, VolumeMixer.runRate(0f), 0.0001f)
         assertEquals(1.0f, VolumeMixer.runRate(-2f), 0.0001f)
         assertEquals(1.0f, VolumeMixer.runRate(Float.NaN), 0.0001f)
-        // A real but very slow level stays just above the floor and a sprint is
+        // A real but very slow level stays inside the window and a sprint is
         // capped, so the footsteps can never stop or race away.
-        assertEquals(0.62f, VolumeMixer.runRate(0.05f), 0.0001f)
-        assertEquals(1.9f, VolumeMixer.runRate(100f), 0.0001f)
-        assertTrue(VolumeMixer.runRate(0.05f) >= 0.6f)
+        assertTrue(VolumeMixer.runRate(0.05f) >= VolumeMixer.MIN_RATE)
+        assertTrue(VolumeMixer.runRate(0.05f) < VolumeMixer.runRate(1.0f))
+        assertEquals(VolumeMixer.MAX_RATE, VolumeMixer.runRate(100f), 0.0001f)
+        for (level in listOf(0.05f, 0.5f, 1f, 2f, 100f)) {
+            val rate = VolumeMixer.runRate(level)
+            assertTrue("rate $rate out of window at $level", rate in VolumeMixer.MIN_RATE..VolumeMixer.MAX_RATE)
+        }
     }
 
     @Test

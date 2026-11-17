@@ -104,13 +104,16 @@ class StringsAndGunRulesTest {
             Weapon.TIMER_BOMB to 1700, Weapon.ATOM_BOMB to 2000, Weapon.MISSILE to 2200
         )
         for ((weapon, price) in prices) assertEquals(price, weapon.price)
-        assertEquals(listOf(250, 400, 550, 1700, 1800, 3500), DefenceItem.entries.map { it.price }.sorted())
+        assertEquals(
+            listOf(250, 400, 550, 1000, 1500, 1700, 1800),
+            DefenceItem.entries.map { it.price }.sorted()
+        )
         // Max Speed (250) is gone: the four remaining extensions.
         assertEquals(listOf(75, 140, 180, 200), Extension.entries.map { it.price }.sorted())
         assertEquals(1000, MissileRules.MISSILE_POWER_PRICE)
         assertEquals(Weapon.forSale().map { it.price }.sorted(), Weapon.forSale().map { it.price })
         assertTrue(Weapon.forSale().all { it.price <= 2200 })
-        assertTrue(DefenceItem.entries.all { it.price <= 3500 })
+        assertTrue(DefenceItem.entries.all { it.price <= 1800 })
     }
 
     @Test
@@ -141,6 +144,7 @@ class StringsAndGunRulesTest {
             "heavy hit or repeated", "500, 1000 or 1500", "fewer than 500",
             "1500-coin loan and 1100", "400 owed", "remaining debt", "no interest",
             "missile 2200", "anti-missile 1800", "interceptor", "timer bomb",
+            "lock the opponent", "2500 coins", "1000", "700 to 1000",
             "gloo wall", "second chance", "quick menu", "Settings"
         )) assertTrue("Missing guide rule: $required", en.contains(required, ignoreCase = true))
         assertFalse(en.contains("exclusive channel", ignoreCase = true))
@@ -214,7 +218,7 @@ class StringsAndGunRulesTest {
             assertTrue(Strings.get("itemMissingTail", lang).isNotBlank())
             assertTrue(Strings.get("robertFled", lang).isNotBlank())
             assertTrue(Strings.get("matchWon", lang).isNotBlank())
-            assertTrue(Strings.get("version", lang).contains("1.1") || Strings.get("version", lang).contains("१.१"))
+            assertTrue(Strings.get("version", lang).contains("1.2") || Strings.get("version", lang).contains("१.२"))
             for (key in listOf(
                 "unlockAfterRound1", "unlockAfterRound2", "unlockAfterRound3",
                 "unlockAfterRound4", "antiMissileReward", "flatDamageInfo"

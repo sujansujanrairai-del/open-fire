@@ -408,6 +408,29 @@ object BombRules {
     fun playerAntiBombsFree(round: Int): Boolean = bombsUnlocked(round)
 
     /**
+     * True when the anti-bomb explosive may be activated right now.
+     *
+     * Like the anti-missile system it never needs an active threat: a player
+     * who owns an explosive (or plays a round where it is free) may deploy it
+     * at any moment, and a deployed explosive destroys the next bomb of the
+     * enemy by itself ([autoInterceptPlanned]).
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun canActivateEarly(ownsExplosive: Boolean, enemyBombInFlight: Boolean): Boolean =
+        ownsExplosive
+
+    /**
+     * True while a deployed anti-bomb explosive stands guard and destroys the
+     * next incoming bomb without the player having to react in time.
+     */
+    fun autoInterceptPlanned(activated: Boolean, enemyBombInFlight: Boolean): Boolean =
+        activated && enemyBombInFlight
+
+    /** True when an owned anti-bomb explosive can be spent right now. */
+    fun hasAntiBomb(ownsExplosive: Boolean, freeForRound: Boolean): Boolean =
+        ownsExplosive || freeForRound
+
+    /**
      * The bomb Robert throws next, or null when he has none left. The atom
      * bomb is preferred to finish a weak player, the grenade is his standard
      * throw and the timer bomb is his occasional tactical choice.

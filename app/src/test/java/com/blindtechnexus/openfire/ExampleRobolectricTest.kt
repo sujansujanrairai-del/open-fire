@@ -42,7 +42,7 @@ class ExampleRobolectricTest {
         assertEquals("ओपन फायर बीटा", Strings.get("title", "hi"))
         assertEquals("ओपन फायर बिटा", Strings.get("title", "ne"))
 
-        assertEquals("Version 1.1 Beta", Strings.get("version", "en"))
+        assertEquals("Version 1.2 Beta", Strings.get("version", "en"))
         assertEquals("Changelog", Strings.get("changelog", "en"))
         assertEquals("Join Telegram Channel", Strings.get("joinTelegram", "en"))
         assertEquals("Contact on WhatsApp", Strings.get("contactWhatsApp", "en"))

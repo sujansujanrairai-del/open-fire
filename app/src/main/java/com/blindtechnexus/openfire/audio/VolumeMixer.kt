@@ -11,23 +11,28 @@ import kotlin.math.sqrt
  * "slider silently reverts to a fixed level" bug and keeps one clear mix
  * hierarchy:
  *
- *  - [speech] is the full-scale reference of the mix. The TTS setting is
- *             returned as it is.
- *  - [music]  and [sfx] are trimmed by [NON_SPEECH_UNDER_SPEECH], so speech
- *             is ALWAYS exactly 25 percent louder than the music and the
- *             sound effects at the same slider position, under every
- *             circumstance. An announcement is therefore always clearly
- *             audible over the battle.
- *  - Walking footsteps are the one exception: they play at the speech level
- *    itself (see [walkLevel]), so movement is as clear as an announcement.
- *  - [busGainFor] is the per-sound trim of the mixer. Weapon fire sits below
- *    the impacts, so a hit marker (player hit, enemy hit, gun hit,
- *    explosion) is always louder than the gun that caused it.
- *  - walking helpers keep footsteps at the speech level, scale their
- *    playback rate with the real movement speed, and pan them only when
- *    the walker is genuinely to the side. A fighter running straight at
- *    the listener (or straight away) stays perfectly centred, exactly like
- *    a head-on opponent heard through earphones or on the phone speaker.
+ *  - [speech] is the reference of every announcement. The TTS setting is
+ *             returned as it is, and the engine's own speech output is
+ *             normalised to [SPEECH_REFERENCE] of full scale (see
+ *             [speechInput] / [speechOutput]), so the stored setting is
+ *             always the level the user really hears.
+ *  - [music]  is trimmed under the speech level by [NON_SPEECH_UNDER_SPEECH],
+ *             so the background tune never buries an announcement.
+ *  - [sfx]    plays at the SAME level as speech at the same slider position
+ *             ([SFX_AT_SPEECH_LEVEL]), and every loud weapon - machine gun,
+ *             submachine gun, grenade and atom bomb - is lifted to that level
+ *             as well ([LOUD_BUS_GAIN]). A machine gun is therefore exactly as
+ *             audible as the voice that announces the battle, and moving the
+ *             SFX slider scales it once, without any hidden trim.
+ *  - walking footsteps take the same SFX level ([walkLevel]); they are never
+ *    one bus quieter than the rest of the fight.
+ *  - [busGainFor] is the per-sound trim of the mixer. Loud weapons sit at
+ *    full scale, a hit marker sits slightly above them, and everything else
+ *    is untouched, so feedback of a landed shot is never buried.
+ *  - walking helpers scale their playback rate with the real movement speed
+ *    inside a narrow, natural window and pan them only when the walker is
+ *    genuinely to the side. A fighter running straight at the listener (or
+ *    straight away) stays perfectly centred.
  *  - [distanceGain] is the one distance curve of the game: a sound from far
  *    away starts low and swells continuously as the source closes in, and
  *    fades again as it recedes. Every positional sound - the enemy's
@@ -36,24 +41,56 @@ import kotlin.math.sqrt
  */
 object VolumeMixer {
     /**
-     * All three buses use the same nominal gain at equal slider positions.
+     * No bus is trimmed down relative to another: one slider position means
+     * one level for speech and for the effects.
      */
     const val SPEECH_PRIORITY = 1.0f
 
-    /** Non-speech buses use the same nominal gain as speech. */
-    const val NON_SPEECH_UNDER_SPEECH = 1f / SPEECH_PRIORITY
+    /** Non-speech buses are not cut under speech any more. */
+    const val NON_SPEECH_UNDER_SPEECH = 1f
+
+    /** Speech and effects share the same nominal level. */
+    const val SFX_AT_SPEECH_LEVEL = 1.0f
 
     /**
-     * The music setting is applied through the speech-priority trim: no
-     * constant background gain is added, so the chair of the mixer always
-     * matches the position of the slider, just 25 percent under speech.
+     * Level the speech engine voice is normalised to. Engines that report a
+     * full-scale utterance still come out at the level of the sound effects,
+     * so a machine gun and the voice that describes it are equally audible.
      */
+    const val SPEECH_REFERENCE = 1.0f
+
+    /**
+     * Music sits [MUSIC_TRIM] under speech so the theme never covers an
+     * announcement, and it is the only trimmed bus of the mix.
+     */
+    const val MUSIC_TRIM = 0.75f
+
+    /** No constant background gain is hidden behind the music slider. */
     const val MUSIC_BACKGROUND_GAIN = 1.0f
 
-    /**
-     * Gunfire uses the same nominal bus gain as other effects.
-     */
+    /** Ordinary weapon fire plays at the unmodified SFX level. */
     const val WEAPON_BUS_GAIN = 1.0f
+
+    /**
+     * The loud weapons: the machine gun, the submachine gun, the grenade, the
+     * atom bomb and the missile. Their base level is lifted to full scale
+     * ([LOUD_BUS_GAIN]) so they can never be quieter than the speech, whatever
+     * the distance of the source and whatever the SFX slider says; the slider
+     * still scales them exactly once through [mix].
+     */
+    const val LOUD_BUS_GAIN = 1.0f
+
+    /**
+     * Every sound that must stay at the speech level: the four weapons the
+     * player complained about (machine gun, submachine gun, grenade and atom
+     * bomb) plus the missile and the general blast recordings they share.
+     */
+    val LOUD_SFX_KEYS: Set<String> = setOf(
+        "machineGun", "machineGunShot",
+        "submachineGun", "submachineGunShot",
+        "grenade", "atomBomb", "missile",
+        "explosion", "timerBomb"
+    )
 
     /** Impact trim: hits play at the full SFX level the player selected. */
     const val HIT_BUS_GAIN = 1.00f
@@ -72,12 +109,21 @@ object VolumeMixer {
     const val WALK_UPDATE_FAST_INTERVAL_MS = 250L
 
     /**
-     * The keys of every weapon that fires a shot. They are mixed on the
-     * weapon bus, so a hit is always louder than the weapon sound.
+     * The natural window of every playback rate. A recording is only ever
+     * played inside this window, so no sound can be shifted into the shrill,
+     * chipped pitch the game must never produce.
+     */
+    const val MIN_RATE = 0.8f
+    const val MAX_RATE = 1.25f
+
+    /**
+     * The keys of every weapon that fires a shot. They play at the same level
+     * as the impacts, so the gun that caused a hit is never quieter than its
+     * marker.
      */
     val WEAPON_BUS_KEYS: Set<String> = setOf(
         "assault", "pistol", "shortGun", "sniperRifle", "glueWallBreaker",
-        "awm", "m10",
+        "awm", "m10", "ar15",
         "submachineGun", "ak47", "machineGun",
         "submachineGunShot", "ak47Shot", "machineGunShot",
         // Flight sounds of the launchers are weapon audio as well.
@@ -85,8 +131,8 @@ object VolumeMixer {
     )
 
     /**
-     * The keys of every impact: these are mixed on the hit bus, louder than
-     * any weapon, so the player never misses the feedback of a landed shot.
+     * The keys of every impact: these are mixed on the hit bus, so the player
+     * never misses the feedback of a landed shot.
      */
     val HIT_BUS_KEYS: Set<String> = setOf(
         "gunHit", "enemyHit", "playerHit", "knifeHit", "swordHit",
@@ -99,43 +145,65 @@ object VolumeMixer {
 
     /**
      * Effective music player volume for a stored 0..1 music setting. Music
-     * uses the selected level without a hidden speech-priority trim.
+     * is the only bus trimmed under the announcements.
      */
     fun music(setting: Float): Float =
-        clamp(clamp(setting) * MUSIC_BACKGROUND_GAIN * NON_SPEECH_UNDER_SPEECH)
+        clamp(clamp(setting) * MUSIC_BACKGROUND_GAIN * MUSIC_TRIM)
 
-    /** Effective speech volume for a stored 0..1 TTS setting (full scale). */
-    fun speech(setting: Float): Float = clamp(setting)
+    /** Effective speech volume for a stored 0..1 TTS setting. */
+    fun speech(setting: Float): Float = clamp(setting * SPEECH_REFERENCE)
 
     /**
-     * Effective SFX volume for a base volume and a 0..1 distance gain. Sound
-     * effects use the selected level without a hidden speech-priority trim.
+     * Level handed to the speech engine. The engine receives the selected
+     * level exactly, so the stored setting is the level the user hears.
+     */
+    fun speechInput(setting: Float): Float = clamp(setting)
+
+    /**
+     * Relative loudness of the speech voice compared with the effects. Both
+     * buses are at the same nominal scale, so the announcement and the battle
+     * are equally audible; the value is exposed for tests and for the guide.
+     */
+    fun speechOverSfx(setting: Float = 1f): Float {
+        val sfx = sfx(setting, 1f, 1f)
+        return if (sfx <= 0.0001f) 1f else speech(setting) / sfx
+    }
+
+    /**
+     * Effective SFX volume for a base volume and a 0..1 distance gain. The
+     * player's SFX slider scales the whole bus exactly once.
      */
     fun sfx(setting: Float, base: Float, distanceGain: Float): Float =
         clamp(clamp(base) * clamp(setting) * clamp(distanceGain) * NON_SPEECH_UNDER_SPEECH)
 
     /**
-     * Walking plays at the level of speech itself - the one bus that is not
-     * trimmed under the announcements. The stored walk level is the TTS
-     * SFX setting (see AudioManager.walkVolume).
+     * Walking plays at the SFX level itself, so footsteps are as clear as the
+     * weapons of the fight and follow the same slider.
      */
     fun walkLevel(setting: Float, distanceGain: Float, speedGain: Float = 1f): Float =
-        clamp(speech(setting) * clamp(distanceGain) * runVolumeGain(speedGain))
+        clamp(sfx(setting, 1f, distanceGain) * runVolumeGain(speedGain))
 
     /**
-     * Mixer trim of one sound key: weapons play a little under the impacts,
-     * hits play at full level and everything else is untouched.
+     * Mixer trim of one sound key. The loud weapons are lifted to full scale,
+     * the impacts sit at full scale too, and everything else is untouched.
      */
     fun busGainFor(key: String): Float = when {
+        key in LOUD_SFX_KEYS -> LOUD_BUS_GAIN
         key in HIT_BUS_KEYS -> HIT_BUS_GAIN
         key in WEAPON_BUS_KEYS -> WEAPON_BUS_GAIN
         else -> 1.0f
     }
 
     /**
+     * True when [key] is one of the loud weapons that must be audible at the
+     * speech level (machine gun, submachine gun, grenade, atom bomb).
+     */
+    fun isLoudSfx(key: String): Boolean = key in LOUD_SFX_KEYS
+
+    /**
      * The complete SFX gain of one sound: the player's setting, the sound's
      * own base volume, the distance gain of the 3D position and its bus trim.
-     * Each bus has the same nominal level at the same slider position.
+     * One slider position means one level for every bus.
      */
     fun mix(key: String, setting: Float, base: Float, distanceGain: Float): Float =
         clamp(sfx(setting, base, distanceGain) * busGainFor(key))
@@ -185,7 +253,13 @@ object VolumeMixer {
             .coerceIn(DISTANCE_FLOOR, 1f)
     }
 
-    /** The quietest a positional sound ever becomes at the far edge. */
+    /**
+     * The quietest a positional sound ever becomes at the far edge. A far
+     * sound stays present but unmistakably distant, and the loud weapons are
+     * separately lifted to the speech level ([LOUD_SFX_KEYS]), so a machine gun
+     * or an atom bomb fired from the opposite corner is still clearly audible
+     * without smearing the whole battlefield into one loud mix.
+     */
     const val DISTANCE_FLOOR = 0.08f
 
     /** Footsteps use the very same distance curve as everything else. */
@@ -198,10 +272,10 @@ object VolumeMixer {
      * from ever locking into the same beat while both fighters walk.
      */
     fun enemyWalkRate(speedMps: Float): Float =
-        (walkRate(speedMps) * 0.93f).coerceIn(0.6f, MAX_WALK_RATE)
+        (walkRate(speedMps) * 0.97f).coerceIn(MIN_RATE, MAX_RATE)
 
     /**
-     * Walking-loop volume from the current distance, at the speech level.
+     * Walking-loop volume from the current distance, at the SFX level.
      * Kept for the general path; the live footstep tracks use [walkLevel].
      */
     fun walk(setting: Float, distance: Float, maxRange: Float, distanceGain: Float): Float =
@@ -210,17 +284,19 @@ object VolumeMixer {
     /**
      * Footstep playback rate for a movement speed in metres per second.
      *
-     * Slow movement stretches the steps out and a fast run speeds them up.
-     * This is the ONLY sound whose rate ever changes: every other sound
-     * always plays at its natural pitch.
+     * The steps follow the real speed inside the narrow natural window
+     * [MIN_RATE]..[MAX_RATE]. The old wide range (0.6 to 2.0) is exactly what
+     * made a normal walk sound like a chipmunk: a rate of 2.0 doubles every
+     * frequency of the recording. Nothing outside the window is ever used, and
+     * the same window applies to every other rate in the game.
      */
     fun walkRate(speedMps: Float): Float {
         val safeSpeed = if (speedMps.isNaN()) 0f else speedMps.coerceAtLeast(0f)
-        return (0.55f + safeSpeed * 0.16f).coerceIn(0.6f, 2.0f)
+        return (0.90f + safeSpeed * 0.010f).coerceIn(MIN_RATE, MAX_RATE)
     }
 
     /** Highest playback rate a footstep loop may ever reach. */
-    const val MAX_WALK_RATE = 2.0f
+    const val MAX_WALK_RATE = MAX_RATE
 
     /** True when [speedMps] counts as fast running. */
     fun isFastRun(speedMps: Float): Boolean =
@@ -235,19 +311,26 @@ object VolumeMixer {
         if (speedGain.isNaN()) 1f else speedGain.coerceIn(MIN_RUN_GAIN, 1f)
 
     /** Quietest a running loop may ever become. */
-    const val MIN_RUN_GAIN = 0.45f
+    const val MIN_RUN_GAIN = 0.55f
 
     /**
      * Playback rate for an explicit running-speed multiplier, used when the
      * speed is chosen with the three-finger gesture instead of being derived
-     * from a distance. One is the natural walking rate.
+     * from a distance. One is the natural walking rate and the result stays
+     * inside the natural window [MIN_RATE]..[MAX_RATE].
      */
-    fun runRate(speedMultiplier: Float): Float =
-        if (speedMultiplier.isNaN() || speedMultiplier <= 0f) {
-            1f
-        } else {
-            (0.6f + speedMultiplier * 0.4f).coerceIn(0.6f, 1.9f)
-        }
+    fun runRate(speedMultiplier: Float): Float {
+        if (speedMultiplier.isNaN() || speedMultiplier <= 0f) return 1f
+        return (1f + (speedMultiplier - 1f) * 0.15f).coerceIn(MIN_RATE, MAX_RATE)
+    }
+
+    /**
+     * Clamps any requested playback rate into the natural window. Every sound
+     * of the game passes through this, so a shifted, distorted pitch is not a
+     * recoverable state of the audio engine.
+     */
+    fun naturalRate(rate: Float): Float =
+        if (rate.isNaN()) 1f else rate.coerceIn(MIN_RATE, MAX_RATE)
 
     /**
      * How often the live footstep volume is refreshed: every half second
