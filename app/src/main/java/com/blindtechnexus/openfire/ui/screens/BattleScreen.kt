@@ -83,6 +83,7 @@ fun BattleScreen(viewModel: GameViewModel) {
         BattleMenuItem.ANTI_MISSILE -> inventory.antiMissiles
         BattleMenuItem.CAR -> inventory.cars
         BattleMenuItem.ANTI_BOMB -> inventory.antiBombs
+        BattleMenuItem.LOCK -> inventory.lockCharges
         else -> 0
     }
     val menuLabel = when (menuItem) {
@@ -92,6 +93,7 @@ fun BattleScreen(viewModel: GameViewModel) {
         BattleMenuItem.ANTI_MISSILE -> viewModel.t("antiMissile")
         BattleMenuItem.CAR -> viewModel.t("car")
         BattleMenuItem.ANTI_BOMB -> viewModel.t("antiBomb")
+        BattleMenuItem.LOCK -> viewModel.t("lockOpponent")
         BattleMenuItem.EXIT -> viewModel.t("exitGame")
         BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
     }
@@ -378,6 +380,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                             BattleMenuItem.ANTI_MISSILE -> viewModel.t("antiMissile")
                             BattleMenuItem.CAR -> viewModel.t("car")
                             BattleMenuItem.ANTI_BOMB -> viewModel.t("antiBomb")
+                            BattleMenuItem.LOCK -> viewModel.t("lockOpponent")
                             BattleMenuItem.EXIT -> viewModel.t("exitGame")
                             BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
                         }

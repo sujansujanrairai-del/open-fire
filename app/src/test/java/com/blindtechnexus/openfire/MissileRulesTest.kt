@@ -121,6 +121,41 @@ class MissileRulesTest {
     }
 
     @Test
+    fun theAntiMissileSystemCanBeArmedBeforeAnythingIsInTheAir() {
+        // Owning one system is the only requirement, never an active threat.
+        assertTrue(MissileRules.canActivateEarly(ownsSystem = true, systemsLeft = 1))
+        assertFalse(MissileRules.canActivateEarly(ownsSystem = false, systemsLeft = 1))
+        assertFalse(MissileRules.canActivateEarly(ownsSystem = true, systemsLeft = 0))
+        // An armed system fires by itself the moment a missile appears.
+        assertTrue(MissileRules.autoInterceptPlanned(activated = true, missilesLeft = 3, missileInFlight = true))
+        assertFalse(MissileRules.autoInterceptPlanned(activated = true, missilesLeft = 3, missileInFlight = false))
+        assertFalse(MissileRules.autoInterceptPlanned(activated = true, missilesLeft = 0, missileInFlight = true))
+        assertFalse(MissileRules.autoInterceptPlanned(activated = false, missilesLeft = 3, missileInFlight = true))
+    }
+
+    @Test
+    fun oneSystemCoversThreeMissilesAndOneEnemyBatteryCoversOne() {
+        assertEquals(3, MissileRules.PLAYER_INTERCEPTS_PER_SYSTEM)
+        assertEquals(1, MissileRules.ENEMY_INTERCEPTS_PER_SYSTEM)
+        assertEquals(3, MissileRules.interceptsPerSystem(firedByPlayer = true))
+        assertEquals(1, MissileRules.interceptsPerSystem(firedByPlayer = false))
+        // Robert still answers a real missile whenever a battery is left.
+        assertTrue(MissileRules.enemyIntercepts(4, 2, missileInFlight = true, robertHp = 1500))
+        assertFalse(MissileRules.enemyIntercepts(4, 0, missileInFlight = true, robertHp = 1500))
+        assertFalse(MissileRules.enemyIntercepts(3, 2, missileInFlight = true, robertHp = 50))
+        assertFalse(MissileRules.enemyIntercepts(4, 2, missileInFlight = false, robertHp = 50))
+    }
+
+    @Test
+    fun theAntiBombExplosiveCanAlsoBeArmedInAdvance() {
+        assertTrue(com.blindtechnexus.openfire.model.BombRules.canActivateEarly(ownsExplosive = true, enemyBombInFlight = false))
+        assertFalse(com.blindtechnexus.openfire.model.BombRules.canActivateEarly(ownsExplosive = false, enemyBombInFlight = true))
+        assertTrue(com.blindtechnexus.openfire.model.BombRules.autoInterceptPlanned(activated = true, enemyBombInFlight = true))
+        assertFalse(com.blindtechnexus.openfire.model.BombRules.autoInterceptPlanned(activated = true, enemyBombInFlight = false))
+        assertTrue(com.blindtechnexus.openfire.model.BombRules.hasAntiBomb(ownsExplosive = false, freeForRound = true))
+    }
+
+    @Test
     fun interceptionIsAnEndGameOnlySave() {
         // Below 100 health with a missile in the air: he fires it.
         assertTrue(MissileRules.willIntercept(4, 99, 2, missileInFlight = true))

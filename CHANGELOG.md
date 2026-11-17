@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2 Beta
+
+- Award coins by the capability and power of the whole battle instead of the number of plays: every landed weapon pays its own power points (missile 600, atom bomb 500, grenade and timer bomb 350, guns scaled from their heavy-zone damage), one real electric shock pays 700 to 1000 coins on its own, and surviving health plus true accuracy add their share. A win pays up to 2500 coins and the result still names the shock share separately.
+- Rebalance the sound levels: the machine gun, submachine gun, grenade and atom bomb are played at exactly the speech level, the music is the only bus trimmed under it, the settings sliders scale every sound live, and no recording is ever pitch shifted. Only the footstep rate follows the walking speed, inside a narrow 0.8 to 1.25 natural window, with a smooth four-point interpolation curve so a rate change is transparent.
+- Make both interceptors pre-armable: the anti-missile system and the anti-bomb explosive can be deployed with nothing in the air, and an armed defence then destroys the next projectile by itself. One bought anti-missile system covers three missiles, one enemy battery covers one, and Robert fires a stored interceptor at any missile that is really in the air.
+- Add "Lock the Opponent" between Cover and Exit Game: one minute of complete freeze for a wallet price of 1500 coins. A locked Robert cannot move, fire, throw a bomb, launch a missile or use a defence, no offensive weapon can be used on him either, every defence stays usable, and a second click never extends the lock.
+- Play the car brake exactly once: the brake is a single one-shot sound that is never chained into a sequence and never restarted on top of itself.
+- Fix the electric shock: it works only between 40 and 100 percent proximity (outside the band the swipe is refused with a click), the enemy answers at random either with his own shock - both fighters then lose 10 percent of their maximum health every two seconds - or by fleeing out of the band, and a duel drain is symmetric.
+- Bar the electric shock and every gun while a missile or a bomb is in the air: the weapon is held aiming at the opponent and then drifts back, which is the grace time to deploy a defence.
+- Remove the remaining half-second of playback latency: no sound is held back, queued or truncated before it starts, and every interaction is heard on the next mixing block.
+- Drop the bulletproof car price to 1000 coins, add the lock item to the guide and the shop, and update the guide in all three languages. The app is now OpenFire Beta version 1.2 Beta (version code 14).
+
 ## 1.1 Beta
 
 - Rebuild the sound player around a new low-latency mixer: every interaction - gun switch, reload, fire, menu move, door, car - plays and stops with immediate audio, with no one-second delay and no freezing.

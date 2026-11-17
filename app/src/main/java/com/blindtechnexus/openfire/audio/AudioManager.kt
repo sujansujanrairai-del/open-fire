@@ -265,7 +265,12 @@ class AudioManager(private val context: Context) {
     /** Decoded clips by asset file. Each file is decoded once, lanes never block each other. */
     private val clips = ConcurrentHashMap<String, PcmClip>()
 
-    private val engine = MixEngine()
+    /**
+     * The mixer every effect is rendered by. Exposed read-only so the tests
+     * (and the settings screen) can assert the live effects bus without
+     * reaching into private state.
+     */
+    internal val engine = MixEngine()
 
     /** Held loops by `owner|key`. */
     private val loops = ConcurrentHashMap<String, LoopSlot>()
@@ -279,7 +284,21 @@ class AudioManager(private val context: Context) {
     @Volatile
     private var musicWanted = false
 
-    /** The user's settings. These are the single source of truth. */
+    /**
+     * The user's effects setting. It is the single source of truth and it is
+     * applied LIVE, exactly once:
+     *
+     *  - the base and distance gain of a sound is baked into its voice when it
+     *    is created ([calculateSourceGains] deliberately does NOT apply the
+     *    slider);
+     *  - the slider itself is applied by the mixer on every block it renders,
+     *    so a change is heard on the very next block - including for a gunshot
+     *    or a walking loop that started before the slider moved.
+     *
+     * Applying it in the mixer and not in the voice is what keeps the level
+     * exact: moving the slider can never multiply a level twice, and no sound
+     * is ever stuck at the volume it was created with.
+     */
     var sfxVolume: Float = 1.0f
         set(value) {
             field = VolumeMixer.clamp(value)
@@ -372,8 +391,9 @@ class AudioManager(private val context: Context) {
         baseVol: Float = 1.0f,
         key: String = ""
     ): Pair<Float, Float> {
-        val (left, right) = calculateSourceGains(x, y, z, baseVol, key)
-        return Pair(left * sfxVolume, right * sfxVolume)
+        // The master effects setting is applied by the mixer, once, on every
+        // block; a voice only ever carries its base and distance gain.
+        return calculateSourceGains(x, y, z, baseVol, key)
     }
 
     // Source and distance gains are independent of the live master SFX bus.
@@ -381,17 +401,33 @@ class AudioManager(private val context: Context) {
         val dist = sqrt(x * x + y * y + z * z)
         val distanceGain = VolumeMixer.distanceGain(dist, Combat.MAX_RANGE)
         val (left, right) = VolumeMixer.panGains(VolumeMixer.panFor(x, dist))
-        val total = VolumeMixer.mix(key, 1f, baseVol, distanceGain)
+        // A loud weapon ignores a cautious base volume: it is never mixed
+        // below the speech level of the game.
+        val total = VolumeMixer.mix(key, 1f, effectiveBaseVolume(key, baseVol), distanceGain)
         return Pair(total * left, total * right)
     }
 
     /**
      * The playback rate of a sound. Every sound plays at its natural pitch:
-     * [rate] is passed through unchanged apart from the safety clamp, and the
-     * sound theme never shifts the pitch. Only the walking loops change their
-     * rate, and only to follow the real movement speed.
+     * [rate] is clamped into the natural window of [VolumeMixer.naturalRate]
+     * and the sound theme never shifts the pitch. Only the walking loops leave
+     * the exact natural rate, and only inside that same narrow window, so no
+     * recording can ever be heard chipped or squeaky.
      */
-    private fun pitchFor(rate: Float): Float = rate.coerceIn(0.5f, 2.0f)
+    private fun pitchFor(rate: Float): Float = VolumeMixer.naturalRate(rate)
+
+    /**
+     * The base level one requested sound is played with.
+     *
+     * The loud weapons - the machine gun, the submachine gun, the AK-47, the
+     * grenade, the atom bomb and the missile - are ALWAYS played at full
+     * scale, whatever base volume the caller passed, so they can never end up
+     * quieter than the speech that announces the battle. The SFX slider still
+     * scales the whole bus exactly once in the mixer, and the distance gain of
+     * a positional sound still applies.
+     */
+    private fun effectiveBaseVolume(key: String, requested: Float): Float =
+        if (VolumeMixer.isLoudSfx(key)) 1.0f else requested
 
     // ------------------------------------------------------- one-shot sounds
 
@@ -480,6 +516,21 @@ class AudioManager(private val context: Context) {
         engine.add(voice)
     }
 
+    /**
+     * Plays one sound exactly once, and never twice on top of itself.
+     *
+     * A sound that is already live under the same key is left alone instead of
+     * being restarted, so a repeated request - an automatic brake that fires
+     * on every movement tick, a wall that is touched again and again - plays
+     * the recording once, from beginning to end, with no stutter and no
+     * doubled copy.
+     */
+    fun playOnce(key: String, volume: Float = 1.0f, posX: Float = 0f, posY: Float = 0f, posZ: Float = 0f) {
+        if (released) return
+        if (engine.live.values.any { it.key == key }) return
+        oneShot(key, "", volume, 1f, posX, posY, posZ, deadlineMs = 0L)
+    }
+
     /** Plays several sounds at once, as one mix. */
     fun playMixed(keys: List<String>, volume: Float = 1.0f, posX: Float = 0f, posY: Float = 0f, posZ: Float = 0f) {
         for (key in keys) {
@@ -539,6 +590,9 @@ class AudioManager(private val context: Context) {
         posZ: Float = 0f
     ): Boolean {
         if (released || !SOUND_FILES.containsKey(key)) return false
+        // The shot starts on the next mixing block and is faded out after the
+        // requested beat - never before, never as a whole recording. Nothing
+        // here waits, queues or prepares: an interaction is heard immediately.
         val burstMs = max(holdMs, MIN_BURST_MS)
         return oneShot(key, owner, volume, 1f, posX, posY, posZ, deadlineMs = burstMs) >= 0
     }

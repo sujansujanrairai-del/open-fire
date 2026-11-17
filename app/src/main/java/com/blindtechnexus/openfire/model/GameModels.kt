@@ -24,12 +24,14 @@ enum class SoundTheme(val title: String) {
 }
 
 /**
- * The seven items of the in-game quick menu, in the order they are cycled by a
+ * The eight items of the in-game quick menu, in the order they are cycled by a
  * two-finger swipe up or down: medikit, cover, glue wall, anti-missile system,
- * anti-bomb explosive, exit and recover.
+ * car, anti-bomb explosive, "Lock the Opponent", exit and recover.
  *
- * The old "play" item was replaced by Recovery, which repairs every damaged
- * weapon for [Combat.GUN_RECOVERY_COST] coins.
+ * "Lock the Opponent" sits directly below Cover in the spoken and on-screen
+ * order of the defensive group and directly above Exit Game, exactly where the
+ * design places it. The old "play" item was replaced by Recovery, which
+ * repairs every damaged weapon for [Combat.GUN_RECOVERY_COST] coins.
  */
 enum class BattleMenuItem(
     val nameKey: String,
@@ -41,6 +43,7 @@ enum class BattleMenuItem(
     ANTI_MISSILE("antiMissile", DefenceItem.ANTI_MISSILE),
     CAR("car", DefenceItem.CAR),
     ANTI_BOMB("antiBomb", DefenceItem.ANTI_BOMB),
+    LOCK("lockOpponent", DefenceItem.LOCK),
     EXIT("exitGame", null),
     RECOVER("recoverWeapon", null);
 
@@ -51,6 +54,13 @@ enum class BattleMenuItem(
          * spends a coin.
          */
         val RECOVER_INDEX: Int = RECOVER.ordinal
+
+        /**
+         * The item after Cover (and before Exit Game) is the opponent lock.
+         * Exposed for the HUD, so the interface can never reorder itself away
+         * from the required position.
+         */
+        val LOCK_INDEX: Int = LOCK.ordinal
 
         fun at(index: Int): BattleMenuItem {
             val size = BattleMenuItem.entries.size
@@ -300,6 +310,36 @@ data class GameState(
     val robertShocking: Boolean = false,
     /** Which fighter activated the electric shock first in the current duel. */
     val shockFirstActivator: String = "",
+    /**
+     * The opponent is frozen by "Lock the Opponent" until this battle-clock
+     * timestamp (0 = no lock). A locked Robert has no movement, no firing, no
+     * missile, no bomb and no defence, and no offensive weapon can be aimed at
+     * him until the minute has run out ([LockRules]).
+     */
+    val opponentLockedUntilMs: Long = 0L,
+    /**
+     * True while the player's anti-missile system is deployed and stands
+     * guard. It may be activated at any moment, with no missile in the air,
+     * and then destroys the next incoming missiles by itself.
+     */
+    val antiMissileDeployed: Boolean = false,
+    /** Player interceptors left in the deployed anti-missile system. */
+    val playerInterceptorsLeft: Int = 0,
+    /**
+     * True while the player's anti-bomb explosive stands guard. Like the
+     * anti-missile system it may be activated at any moment and then destroys
+     * the next bomb of the enemy by itself.
+     */
+    val antiBombDeployed: Boolean = false,
+    /** Health the electric shock really took from the opponent this battle. */
+    val shockDamageDealt: Int = 0,
+    /**
+     * Metres the held weapon has drifted back toward the player while a
+     * missile or a bomb was in the air ([GraceRules]). It is the aim of the
+     * held weapon, not the distance of the fighters: it grows while the sky is
+     * not clear and walks back in once the projectile has resolved.
+     */
+    val weaponDriftM: Float = 0f,
 
     // ------------------------------------------------------------------
     // Robert's bulletproof car (granted from round five).
@@ -456,6 +496,20 @@ data class GameState(
     val robertRange: FireRange
         get() = FireRange.fromId(robertFireRange)
 
+    /**
+     * True when the opponent is frozen by "Lock the Opponent". The battle
+     * engine passes the live battle-clock time so a paused battle freezes the
+     * lock exactly like every other timer ([LockRules.isLocked]).
+     */
+    fun opponentLocked(nowMs: Long): Boolean = LockRules.isLocked(opponentLockedUntilMs, nowMs)
+
+    /** Milliseconds the opponent lock has left (0 when not locked). */
+    fun lockRemainingMs(nowMs: Long): Long = LockRules.remainingMs(opponentLockedUntilMs, nowMs)
+
+    /** True while the deployed anti-missile system may still fire. */
+    val antiMissileReady: Boolean
+        get() = antiMissileDeployed && playerInterceptorsLeft > 0
+
     /** Health of both fighters as a percentage of their own maximum. */
     val playerHpPercent: Int
         get() = if (playerMaxHp <= 0) 0 else (playerHp * 100 / playerMaxHp).coerceIn(0, 100)
@@ -467,6 +521,10 @@ data class GameState(
 data class ResultData(
     val won: Boolean = false,
     val coins: Int = 0,
+    /** Coins the electric shock of this battle earned (0 when unused). */
+    val shockCoins: Int = 0,
+    /** Coins of the power ladder: weapons, health kept and accuracy. */
+    val powerCoins: Int = 0,
     val hits: Int = 0,
     val shots: Int = 0,
     val robertShots: Int = 0,

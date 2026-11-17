@@ -37,7 +37,10 @@ class TtsManager(private val context: Context) {
      */
     var speechVolume: Float = 1.0f
         set(value) {
-            field = VolumeMixer.speech(value)
+            // The stored level is the level the user hears: the engine receives
+            // exactly the selected setting, on the same scale as the effects,
+            // so a machine gun and the voice are equally audible.
+            field = VolumeMixer.speechInput(value)
         }
 
     var currentVoiceName: String = ""
@@ -333,7 +336,7 @@ class TtsManager(private val context: Context) {
 
         val queueMode = if (interrupt) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
         val params = Bundle().apply {
-            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, VolumeMixer.speech(speechVolume))
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, VolumeMixer.speechInput(speechVolume))
         }
         val utteranceId = "utterance_${System.currentTimeMillis()}"
         val result = tts?.speak(sanitized, queueMode, params, utteranceId)
@@ -374,7 +377,7 @@ class TtsManager(private val context: Context) {
         }
 
         val params = Bundle().apply {
-            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, VolumeMixer.speech(speechVolume))
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, VolumeMixer.speechInput(speechVolume))
         }
         val sanitized = sanitizeTextForSpeech(text)
         if (sanitized.isNotBlank()) {

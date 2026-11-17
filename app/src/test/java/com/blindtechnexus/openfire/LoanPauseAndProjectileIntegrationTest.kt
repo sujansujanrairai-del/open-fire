@@ -61,9 +61,12 @@ class LoanPauseAndProjectileIntegrationTest {
         flow<GameStats>(vm, "_stats").value = vm.stats.value.copy(coins = 90)
         flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
         flow<GameState>(vm, "_gameState").value = GameState(
-            playerHp = 1900, playerMaxHp = 2600, robertHp = 0, robertMaxHp = 2600, playerHits = 0,
-            // Coins follow firing power, not shots: 150 + 950 = 1100 gross.
-            playerFirePower = 950
+            // A won battle is paid from its performance: the win base 200, the
+            // landed weapon power 750, no shock, no health kept because the
+            // bar is empty, and the full 150 accuracy credit for a fight
+            // without a single shot = 1100 gross.
+            playerHp = 0, playerMaxHp = 2600, robertHp = 0, robertMaxHp = 2600,
+            playerFirePower = 750
         )
         invoke(vm, "endGame", true, false) // 1100 gross
         assertEquals(Screen.RESULT, vm.currentScreen.value)
@@ -75,14 +78,16 @@ class LoanPauseAndProjectileIntegrationTest {
 
         flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
         flow<GameState>(vm, "_gameState").value = GameState(
+            // 200 win base + 300 weapon power + 57 health kept of 2600 +
+            // 150 accuracy credit = 707 gross, 400 withheld, 307 credited.
             playerHp = 600, playerMaxHp = 2600, robertHp = 0, robertMaxHp = 2600,
-            // 150 + 300 = 450 gross, 400 withheld, 50 credited.
             playerFirePower = 300
         )
-        invoke(vm, "endGame", true, false) // 450 gross, 400 withheld, 50 credited
+        invoke(vm, "endGame", true, false) // 707 gross, 400 withheld, 307 credited
+        assertEquals(707, vm.resultData.value.coins)
         assertEquals(400, vm.resultData.value.loanDeducted)
         assertEquals(0, vm.resultData.value.loanRemaining)
-        assertEquals(140, PreferencesManager(app).loadStats().coins)
+        assertEquals(397, PreferencesManager(app).loadStats().coins)
         assertEquals(0, PreferencesManager(app).loadStats().loanBalance)
         flow<Screen>(vm, "_currentScreen").value = Screen.SHOP
         vm.takeLoan(500)

@@ -448,7 +448,7 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "Version 1.1 Beta",
+                text = "Version 1.2 Beta",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = WarnBright,
@@ -456,8 +456,8 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             )
             Spacer(modifier = Modifier.height(8.dp))
             listOf(
-                "release11Audio", "release11Car", "release11Shock",
-                "release11Coins", "release11Tts", "release11Ui"
+                "release12Coins", "release12Audio", "release12Defence",
+                "release12Lock", "release12Shock", "release12Rules"
             ).forEach { key ->
                 Text(text = "• ${viewModel.t(key)}", color = Color.White, modifier = Modifier.padding(vertical = 3.dp))
             }
@@ -882,6 +882,18 @@ fun ResultScreen(viewModel: GameViewModel) {
                 fontWeight = FontWeight.Bold,
                 color = Color.White
             )
+            // The shock share is named separately whenever the electric shock
+            // really drew blood, so a player hears exactly what the 700 to 1000
+            // coins of a real shock use were worth.
+            if (result.won && result.shockCoins > 0) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "${viewModel.t("gunElectricShock")}: ${result.shockCoins} ${viewModel.t("coins")}",
+                    fontSize = 16.sp,
+                    color = Color.White,
+                    modifier = Modifier.testTag("result_shock_coins")
+                )
+            }
             if (result.won && result.loanWasActive) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(

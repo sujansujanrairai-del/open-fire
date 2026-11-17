@@ -11,6 +11,7 @@ import com.blindtechnexus.openfire.data.Strings
 import com.blindtechnexus.openfire.model.Arena
 import com.blindtechnexus.openfire.model.AutomaticFirePowerMap
 import com.blindtechnexus.openfire.model.BattleMenuItem
+import com.blindtechnexus.openfire.model.BattlePerformance
 import com.blindtechnexus.openfire.model.CarRules
 import com.blindtechnexus.openfire.model.CarStage
 import com.blindtechnexus.openfire.model.ElectricShockRules
@@ -30,8 +31,10 @@ import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.GameStats
 import com.blindtechnexus.openfire.model.GestureRouter
+import com.blindtechnexus.openfire.model.GraceRules
 import com.blindtechnexus.openfire.model.HitZone
 import com.blindtechnexus.openfire.model.Inventory
+import com.blindtechnexus.openfire.model.LockRules
 import com.blindtechnexus.openfire.model.Loans
 import com.blindtechnexus.openfire.model.MissileRules
 import com.blindtechnexus.openfire.model.MoveDirection
@@ -95,6 +98,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     val resultReady: StateFlow<Boolean> = _resultReady.asStateFlow()
 
     private var stepJob: Job? = null
+
+    /** Watches a running opponent lock and lifts it the moment its minute ends. */
+    private var lockJob: Job? = null
     private var robertFireJob: Job? = null
     private var resultJob: Job? = null
     private var playerMoveJob: Job? = null
@@ -295,14 +301,28 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         const val AIRPLANE_VOLUME = 0.45f
         const val AIRPLANE_ENGINE_VOLUME = 0.32f
 
-        /** Flight and blast volumes of the launchers. */
-        const val MISSILE_VOLUME = MissileRules.SOUND_VOLUME
-        const val BOMB_VOLUME = 0.95f
+        /**
+         * Flight and blast volumes of the launchers. Every one of them sits at
+         * full scale: a grenade and an atom bomb are as audible as the speech,
+         * and the SFX slider scales them down exactly once if the player asks.
+         */
+        const val MISSILE_VOLUME = 1.0f
+        const val BOMB_VOLUME = 1.0f
         const val WALL_VOLUME = 1.0f
 
-        /** Progression stings, kept a little under the win / lose sounds. */
-        const val LEVEL_COMPLETE_VOLUME = 0.9f
-        const val ROUND_COMPLETE_VOLUME = 0.9f
+        /**
+         * The machine gun, the submachine gun, the AK-47 and every automatic
+         * weapon play at full scale for both fighters, so a burst is never
+         * quieter than the voice that reports it.
+         */
+        const val AUTOMATIC_WEAPON_VOLUME = 1.0f
+
+        /** Progression stings play at the level of every other effect. */
+        const val LEVEL_COMPLETE_VOLUME = 1.0f
+        const val ROUND_COMPLETE_VOLUME = 1.0f
+
+        /** The hum of an electric shock runs for as long as it is held. */
+        const val SHOCK_HUM_VOLUME = 0.8f
 
     }
 
@@ -1154,8 +1174,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertCarAvailable = RobertRules.robotCarGranted(round),
             robertCarHp = if (RobertRules.robotCarGranted(round)) CarRules.MAX_HP else 0,
             log = t("ready"),
-            matchWon = false
+            matchWon = false,
+            // A battle always starts with a clear sky, no guard left over from
+            // the previous fight and no opponent lock.
+            opponentLockedUntilMs = 0L,
+            antiMissileDeployed = false,
+            playerInterceptorsLeft = 0,
+            antiBombDeployed = false,
+            shockDamageDealt = 0,
+            weaponDriftM = 0f
         )
+        lockJob?.cancel()
+        lockJob = null
         // The battle screen itself starts silently: an issued weapon is only
         // shown on screen and in the status, never spoken over the opening.
         if (issued.isNotEmpty()) {
@@ -1488,6 +1518,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Stops Robert's movement loop completely. Used by the opponent lock: a
+     * frozen opponent takes no step at all until the minute has run out.
+     */
+    private fun cancelRobertStep() {
+        stepJob?.cancel()
+        stepJob = null
+    }
+
+    /** Robert's answer to an incoming player missile: a sprint inside the zone. */
+    private fun startRobertMissileFlee() {
+        robertSprintTicks = RobertRules.SPRINT_TICKS
+        if (_gameState.value.robertState != "missileFlee") {
+            _gameState.update { it.copy(robertState = "missileFlee", robertLateral = 0f) }
+        }
+        planRobertStep(MissileRules.FLEE_TICK_MS)
+    }
+
+    /**
      * Wakes Robert's movement loop whenever his situational target band shifts
      * (for example after gaining an advantage or when a glue wall or damaged
      * weapon forces him into close range).
@@ -1616,6 +1664,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (!foreground || _currentScreen.value != Screen.BATTLE) return
         val state = _gameState.value
         if (state.robertHp <= 0 || state.playerHp <= 0) return
+        // "Lock the Opponent": a frozen Robert takes no step at all, and the
+        // loop simply ends. The lock lifts by itself a minute later, and the
+        // next plan of the engine wakes him again.
+        if (state.opponentLocked(battleClock.nowMs())) return
 
         // A damaged weapon in the player's hands stops every retreat: Robert
         // turns around and walks straight back to point blank. Nothing stops a
@@ -2094,6 +2146,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         var state = _gameState.value
+        if (state.opponentLocked(battleClock.nowMs())) {
+            // A locked opponent cannot fire, throw, launch or defend.
+            stopEnemyFireSound()
+            return
+        }
         if (state.robertHp <= 0 || state.playerHp <= 0 || state.timerSelectActive || state.missileInFlight ||
             (state.bombInFlight && state.bombFromPlayer)
         ) {
@@ -2156,6 +2213,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         // During a shock Robert defends; normal attacks resume on release.
+        // A shock that cannot reach him (a missile or a bomb in the air, or a
+        // player out of the 40 to 100 percent band) does not hold him back.
         if (state.shockHolding || state.robertShocking) {
             stopEnemyFireSound()
             return
@@ -2592,6 +2651,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * they are never spent here.
      */
     private fun deployRobertDefence(defence: DefenceItem): String {
+        if (_gameState.value.opponentLocked(battleClock.nowMs())) return ""
+
         val current = _gameState.value
         if (!RobertRules.shouldUseDefence(current.robertHp, current.robertDefenceArmed)) return ""
         return when (defence) {
@@ -2637,7 +2698,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 playEnemySound("glueSound")
                 " ${t("robertGlueWall")}"
             }
-            DefenceItem.ANTI_MISSILE, DefenceItem.ANTI_BOMB, DefenceItem.CAR -> ""
+            // Robert never locks the player and never takes a lock charge.
+            DefenceItem.ANTI_MISSILE, DefenceItem.ANTI_BOMB, DefenceItem.CAR,
+            DefenceItem.LOCK -> ""
         }
     }
 
@@ -2779,6 +2842,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 robertLateral = 0f
             )
         }
+        // From round three Robert owns no anti-missile system at all: his only
+        // answer to a missile is to sprint away at his fast speed, running and
+        // dodging inside the zone until the missile catches him.
+        if (fleeing) startRobertMissileFlee()
         // A fleeing target is chased with the sound on loop; a target with
         // nowhere to run is hit as the single play of the sound ends.
         if (MissileRules.soundLoops(state.distance)) {
@@ -2819,6 +2886,39 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         scheduleMissileImpact(MissileRules.flightMs(state.distance))
     }
 
+    /**
+     * One interceptor of the player's deployed anti-missile system destroys
+     * an incoming missile in the air.
+     *
+     * The magazine is spent one interceptor at a time: a bought system covers
+     * three missiles ([MissileRules.PLAYER_INTERCEPTS_PER_SYSTEM]). Once the
+     * last interceptor is gone the system stands down and has to be bought
+     * (or pre-armed) again.
+     */
+    private fun firePlayerInterceptor() {
+        releaseWeaponDrift()
+        missileJob?.cancel()
+        missileJob = null
+        missileImpactAtMs = 0L
+        audioManager.stopSound("missile")
+        audioManager.stopSound("enemyWalk")
+        val left = (_gameState.value.playerInterceptorsLeft - 1).coerceAtLeast(0)
+        _gameState.update {
+            it.copy(
+                missileInFlight = false,
+                missileFromPlayer = false,
+                missileInterceptPlanned = false,
+                playerInterceptorsLeft = left,
+                antiMissileDeployed = left > 0,
+                robertState = if (it.robertState == "missileFlee") "advance" else it.robertState,
+                robertLateral = 0f
+            )
+        }
+        playSound("explosion")
+        msg(t("antiMissileDestroyed"))
+        planRobertStep(500L)
+    }
+
     private fun scheduleMissileImpact(delayMs: Long) {
         missileJob?.cancel()
         missileImpactAtMs = battleClock.nowMs() + delayMs
@@ -2839,18 +2939,25 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val state = _gameState.value
         if (_currentScreen.value != Screen.BATTLE || !state.missileInFlight) return
         if (state.playerHp <= 0 || state.robertHp <= 0) return
+        // The sky is clear again from here on, so a held weapon walks back in.
+        releaseWeaponDrift()
         missileImpactAtMs = 0L
         audioManager.stopSound("missile")
         audioManager.stopSound("enemyWalk")
 
         if (state.missileFromPlayer) {
-            val intercepted = RobertRules.shouldUseDefence(state.robertHp, true) && (state.missileInterceptPlanned ||
-                MissileRules.willIntercept(
+            // Robert fires an interceptor of his own whenever one is left in
+            // his battery - he may answer a missile that is really in the air
+            // at any time, not only while he is nearly dead - and he always
+            // spends a planned interception. Player activations are handled
+            // before his answer, so a pre-armed system always wins the race.
+            val intercepted = state.missileInterceptPlanned ||
+                MissileRules.enemyIntercepts(
                     round = state.round,
-                    robertHp = state.robertHp,
                     antiMissilesLeft = state.robertAntiMissiles,
-                    missileInFlight = state.missileInFlight
-                ))
+                    missileInFlight = state.missileInFlight,
+                    robertHp = state.robertHp
+                )
             if (intercepted) {
                 playSound("explosion")
                 _gameState.update {
@@ -2912,6 +3019,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             if (remaining == 0) endGameAfterExplosion(won = true)
             else ensureRobertPositioned()
         } else {
+            // A deployed anti-missile system fires by itself the moment an
+            // enemy missile appears: the player does not have to react in time.
+            if (MissileRules.autoInterceptPlanned(
+                    activated = state.antiMissileDeployed,
+                    missilesLeft = state.playerInterceptorsLeft,
+                    missileInFlight = state.missileInFlight
+                )
+            ) {
+                firePlayerInterceptor()
+                return
+            }
             // Inside the car a missile hits the car, not the user. One missile
             // destroys the car. Anti-missile interception already happened above.
             val carHit = carTakesMissile()
@@ -3214,7 +3332,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 bombX = it.playerX,
                 bombY = it.playerY,
                 bombInterceptPlanned = false,
-                bombInterceptedByPlayer = false,
+                // A pre-armed anti-bomb explosive destroys the bomb the
+                // instant it leaves the enemy's hand, with no reaction needed.
+                bombInterceptedByPlayer = it.antiBombDeployed,
                 robertShots = it.robertShots + 1
             )
         }
@@ -3272,6 +3392,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * outcome: a hit or an anti-bomb interception in the air. A finished battle is only ended after the explosion has run out.
      */
     private fun onBombBlast() {
+        // The blast resolves the projectile: the held weapon drifts back in.
+        releaseWeaponDrift()
         val state = _gameState.value
         if (_currentScreen.value != Screen.BATTLE || !state.bombInFlight) return
         if (state.playerHp <= 0 || state.robertHp <= 0) return
@@ -3293,10 +3415,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val throwerDistance =
             if (fromPlayer) state.playerDistanceFromBomb else state.robertDistanceFromBomb
         val intercepted = if (fromPlayer) {
-            RobertRules.shouldUseDefence(state.robertHp, true) && (state.bombInterceptPlanned ||
-                BombRules.willIntercept(state.round, state.robertAntiBombs, bombInFlight = true))
+            // Robert spends one of his explosives whenever one is left, and
+            // always answers a planned interception.
+            state.bombInterceptPlanned ||
+                BombRules.willIntercept(state.round, state.robertAntiBombs, bombInFlight = true)
         } else {
-            state.bombInterceptedByPlayer
+            state.bombInterceptedByPlayer ||
+                BombRules.autoInterceptPlanned(
+                    activated = state.antiBombDeployed,
+                    enemyBombInFlight = state.bombInFlight && !state.bombFromPlayer
+                )
         }
 
         // An anti-bomb explosive destroys the bomb in the air: the explosion
@@ -3315,6 +3443,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     } else {
                         it.robertAntiBombs
                     },
+                    // A paid explosive covers exactly one bomb; the free one of
+                    // rounds three to five re-arms itself, because the player
+                    // never has to buy it.
+                    antiBombDeployed = if (!fromPlayer) it.playerAntiBombFree else it.antiBombDeployed,
                     robertState = if (fromPlayer) "advance" else it.robertState,
                     robertTurnBackTicks = 0
                 )
@@ -3477,6 +3609,31 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (isBattleEnding()) {
             playSound("click")
             msg(t("waitExplosion"))
+            return
+        }
+
+        // A locked opponent freezes the fight: no offensive weapon may be
+        // aimed at him, and only the defences stay usable.
+        if (LockRules.blocksOffensiveWeapons(state.opponentLocked(now))) {
+            playSound("click")
+            msg("${t("lockOpponentActive")} ${t("lockOffenceBlocked")}")
+            return
+        }
+
+        // While a missile or a bomb is in the air no gun fires and no second
+        // projectile starts: the weapon is held aiming at the opponent and
+        // then drifts back toward the player, so the fight pauses until the
+        // sky is clear. This is what gives the player the grace time to
+        // deploy the anti-missile system or the anti-bomb explosive.
+        if (skyNotEmpty(state)) {
+            // The weapon is HELD aiming at the opponent and then drifts back
+            // toward the player ([GraceRules]), which is the grace time to
+            // deploy the anti-missile system or the anti-bomb explosive.
+            _gameState.update {
+                it.copy(weaponDriftM = GraceRules.driftAfter(it.weaponDriftM))
+            }
+            playSound("click")
+            msg(t("waitProjectile"))
             return
         }
 
@@ -4045,12 +4202,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             BattleMenuItem.COVER,
             BattleMenuItem.GLUE_WALL,
             BattleMenuItem.ANTI_MISSILE,
-            BattleMenuItem.ANTI_BOMB -> {
+            BattleMenuItem.ANTI_BOMB,
+            BattleMenuItem.LOCK -> {
                 val defence = item.defence ?: return
                 val free = defence == DefenceItem.ANTI_BOMB &&
                     _gameState.value.playerAntiBombFree
                 val count = if (free) t("freeItem") else "${_inventory.value.count(defence)}"
-                speak("${t("menuNow")}: ${t(defence.nameKey)}. $count.")
+                val lockState = if (item == BattleMenuItem.LOCK) {
+                    val remaining = _gameState.value.lockRemainingMs(battleClock.nowMs())
+                    if (remaining > 0L) {
+                        " ${t("lockOpponentActive")} ${(remaining / 1000L).coerceAtLeast(1L)} ${t("seconds")}."
+                    } else {
+                        ""
+                    }
+                } else {
+                    ""
+                }
+                speak("${t("menuNow")}: ${t(defence.nameKey)}. $count.$lockState")
             }
             BattleMenuItem.EXIT -> speak("${t("menuNow")}: ${t("exitGame")}.")
             BattleMenuItem.RECOVER -> speak(
@@ -4083,7 +4251,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             BattleMenuItem.COVER,
             BattleMenuItem.GLUE_WALL,
             BattleMenuItem.ANTI_MISSILE,
-            BattleMenuItem.ANTI_BOMB -> {
+            BattleMenuItem.ANTI_BOMB,
+            BattleMenuItem.LOCK -> {
                 val defence = item.defence ?: return
                 useDefenceFromMenu(defence)
             }
@@ -4188,6 +4357,50 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Starts the countdown of "Lock the Opponent".
+     *
+     * The lock is a real minute of the battle clock: pausing the battle pauses
+     * the lock as well, and it lifts itself the moment the minute is over,
+     * without the player having to do anything. The remaining time is
+     * announced every fifteen seconds so a Voice Guidance user always knows
+     * how much of the freeze is left.
+     */
+    private fun startLockCountdown() {
+        lockJob?.cancel()
+        lockJob = viewModelScope.launch {
+            var nextAnnouncement = LockRules.ANNOUNCE_EVERY_MS
+            while (true) {
+                battleClock.awaitDelay(500L)
+                if (!foreground || _currentScreen.value != Screen.BATTLE) break
+                val state = _gameState.value
+                val remaining = state.lockRemainingMs(battleClock.nowMs())
+                if (state.opponentLockedUntilMs <= 0L) break
+                if (remaining <= 0L) {
+                    // The minute is over: Robert is free again and walks back
+                    // into the fight by himself.
+                    _gameState.update {
+                        it.copy(
+                            opponentLockedUntilMs = 0L,
+                            robertState = if (it.robertState == "locked") "advance" else it.robertState
+                        )
+                    }
+                    msg(t("lockOpponentExpired"))
+                    rollRobertFireRange()
+                    ensureRobertPositioned()
+                    break
+                }
+                val elapsed = LockRules.DURATION_MS - remaining
+                if (elapsed >= nextAnnouncement) {
+                    nextAnnouncement += LockRules.ANNOUNCE_EVERY_MS
+                    val seconds = (remaining / 1000L).coerceAtLeast(1L)
+                    msg("${t("lockOpponentRemaining")} $seconds ${t("seconds")}.")
+                }
+            }
+            lockJob = null
+        }
+    }
+
     /** Puts the quick menu back on its safe default item. */
     private fun resetMenuSelection() {
         // The navigation is over, so its protection ends with it.
@@ -4261,46 +4474,76 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
             DefenceItem.CAR -> return deployCar()
             DefenceItem.ANTI_MISSILE -> {
-                if (!state.missileInFlight) {
+                // A system is ALWAYS deployable, with or without a missile in
+                // the air. Deployed early it stands guard and destroys the
+                // next incoming missiles by itself; deployed with a missile
+                // already in the air it fires at once.
+                if (state.antiMissileDeployed && state.playerInterceptorsLeft > 0 && !state.missileInFlight) {
                     playSound("click")
-                    return t("noActiveMissile")
+                    return t("antiMissileAlreadyDeployed")
                 }
-                missileJob?.cancel()
-                missileJob = null
-                missileImpactAtMs = 0L
-                audioManager.stopSound("missile")
-                audioManager.stopSound("enemyWalk")
+                val enemyMissile = state.missileInFlight && !state.missileFromPlayer
                 _gameState.update {
                     it.copy(
-                        missileInFlight = false,
-                        missileFromPlayer = false,
-                        missileInterceptPlanned = false,
-                        robertState = if (it.robertState == "missileFlee") "advance" else it.robertState,
-                        robertLateral = 0f
+                        antiMissileDeployed = true,
+                        playerInterceptorsLeft = MissileRules.PLAYER_INTERCEPTS_PER_SYSTEM
                     )
                 }
-                consumeDefence(item)
-                playSound("explosion")
-                planRobertStep(500L)
-                return t("antiMissileDestroyed")
+                if (!automatic) consumeDefence(item)
+                if (enemyMissile) {
+                    firePlayerInterceptor()
+                    return t("antiMissileDestroyed")
+                }
+                playSound("click")
+                return t("antiMissileArmed")
             }
             DefenceItem.ANTI_BOMB -> {
-                // The anti-bomb explosive is deployed on hearing a bomb: it
-                // marks the bomb in the air as destroyed, and the explosion
+                // The anti-bomb explosive is deployable at any moment as well.
+                // Deployed before a bomb is thrown it destroys that bomb in
+                // the air by itself; deployed while the bomb already flies it
+                // marks that bomb as destroyed at once, and the explosion
                 // sound still plays when the countdown ends. From round three
                 // the player's one is free, so no inventory is spent.
-                if (!state.bombInFlight || state.bombFromPlayer) {
-                    playSound("click")
-                    return t("noActiveBomb")
-                }
-                if (state.bombInterceptedByPlayer) {
+                if (state.antiBombDeployed && !state.bombInFlight) {
                     playSound("click")
                     return t("antiBombAlreadyDeployed")
                 }
-                _gameState.update { it.copy(bombInterceptedByPlayer = true) }
-                if (!freeAntiBomb) consumeDefence(item)
+                _gameState.update { it.copy(antiBombDeployed = true) }
+                if (!freeAntiBomb && !automatic) consumeDefence(item)
+                if (state.bombInFlight && !state.bombFromPlayer) {
+                    _gameState.update { it.copy(bombInterceptedByPlayer = true) }
+                }
                 playSound("click")
                 return t("antiBombDeployed")
+            }
+            DefenceItem.LOCK -> {
+                // "Lock the Opponent": one minute of complete freeze. It is a
+                // pure state change - no offence is allowed while he is frozen,
+                // every defence stays usable.
+                val now = battleClock.nowMs()
+                if (state.opponentLocked(now)) {
+                    playSound("click")
+                    val remaining = (state.lockRemainingMs(now) / 1000L).coerceAtLeast(1L)
+                    return "${t("lockOpponentActive")} $remaining ${t("seconds")}."
+                }
+                _gameState.update {
+                    it.copy(
+                        opponentLockedUntilMs = LockRules.endsAt(now),
+                        robertShocking = false,
+                        robertState = "locked",
+                        robertGlueWallProgress = 0,
+                        robertExchangeShots = 0,
+                        robertConsecutiveHits = 0
+                    )
+                }
+                if (!automatic) consumeDefence(item)
+                stopEnemyFireSound()
+                audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_ENEMY)
+                cancelRobertStep()
+                audioManager.stopSound("enemyWalk")
+                startLockCountdown()
+                playSound("click")
+                return "${t("lockOpponentActivated")} ${LockRules.DURATION_MS / 1000L} ${t("seconds")}."
             }
         }
     }
@@ -4447,12 +4690,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // A defeat costs the player 20 coins instead of earning any. A player
         // with no coins is the exception: nothing can be taken from them.
         val coinsLost = if (won) 0 else Progression.coinsLostOnDefeat(oldStats.coins)
-        // Coins follow the POWER of the gameplay - which powerful weapons
-        // landed and how hard the firing was - never the number of shots. One
-        // missile that kills the enemy outright is a more powerful game than a
-        // long spray of light bullets and earns more; playing longer never
-        // earns less. A win pays at most 1500 coins.
-        val grossWinnings = Rewards.battleCoins(state.playerFirePower, won)
+        // Coins follow the CAPABILITY AND POWER of the played battle, never
+        // the number of plays: the power points of the landed weapons, the
+        // share the electric shock really took (700 to 1000 coins on its own
+        // for one real use), the health that survived the fight and the real
+        // accuracy of the firing. A win pays at most MAX_BATTLE_COINS.
+        val shockCoins = Rewards.shockCoins(state.shockDamageDealt, state.robertMaxHp)
+        val performance = BattlePerformance(
+            won = won,
+            firePower = state.playerFirePower,
+            shockCoins = shockCoins,
+            playerHp = state.playerHp,
+            playerMaxHp = state.playerMaxHp,
+            hits = state.playerHits,
+            shots = state.playerShots
+        )
+        val grossWinnings = Rewards.battleCoins(performance)
+        val powerCoins = grossWinnings - shockCoins.coerceIn(0, Rewards.SHOCK_MAX_COINS)
         val repayment = Loans.repay(oldStats.loanBalance, grossWinnings)
         val gain = if (won) repayment.credited else -coinsLost
 
@@ -4516,6 +4770,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _resultData.value = ResultData(
             won = won,
             coins = if (won) grossWinnings else gain,
+            shockCoins = if (won) shockCoins else 0,
+            powerCoins = if (won) powerCoins.coerceAtLeast(0) else 0,
             loanDeducted = repayment.deducted,
             loanRemaining = repayment.remaining,
             loanWasActive = won && oldStats.loanBalance > 0,
@@ -4562,6 +4818,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             // a loan is really active - how much of it was deducted and what
             // is still owed. No "Loans deducted: 0", no filler lines.
             speech += " ${t("earned")} ${repayment.credited}."
+            // The shock share is announced when the electric shock really
+            // took health, so its 700 to 1000 coins are never a silent part
+            // of the total.
+            if (shockCoins > 0) {
+                speech += " ${t("gunElectricShock")}: $shockCoins ${t("coins")}."
+            }
             if (oldStats.loanBalance > 0) {
                 speech += " ${t("loanDeducted")} ${repayment.deducted}."
                 if (repayment.remaining > 0) {
@@ -4878,7 +5140,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** The automatic brake: the moving loop stops and the engine idles. */
     private fun carAutoBrake() {
         audioManager.stopSound("carMoving")
-        audioManager.playSequence(listOf("carBrake"), loopKey = "carEngine")
+        // The brake is one single play: it is never chained into a sequence and
+        // never repeated per movement tick, so the car brakes exactly once and
+        // then idles. `playOnce` also refuses a second copy of the same sound,
+        // so a repeated automatic brake cannot stutter the recording.
+        audioManager.playOnce("carBrake")
+        audioManager.startWeaponLoop("carEngine", owner = AudioManager.LOOP_OWNER_PLAYER)
         _gameState.update { it.copy(carStage = CarStage.INSIDE_ENGINE_ON) }
     }
 
@@ -5012,14 +5279,27 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // ---------------------------------------------------------------------
     // Electric shock
     //
-    // The player initiates; Robert immediately counters only while held.
-    // Player pulses every second, Robert's defensive pulses every two seconds.
+    // The shock is a proximity weapon, not a ray:
+    //  - holding the up-swipe with the shock selected is allowed only while
+    //    the opponent is really inside the 40%-100% band. Out of range nothing
+    //    happens at all - no hum, no hold state, no damage - until he walks
+    //    into the band;
+    //  - while a missile or a bomb is in the air the shock cannot target the
+    //    enemy: the weapon is held aiming at him and then drifts back toward
+    //    the player, giving time to deploy the anti-bomb or anti-missile
+    //    defence instead;
+    //  - Robert detects the shock and answers at random with a counter of his
+    //    own or with a sprint out of the band;
+    //  - while both shocks run, both fighters lose 10% of their maximum health
+    //    every two seconds, and the share the player really took is paid in
+    //    coins at the end of the battle.
+    // ---------------------------------------------------------------------
     private var shockJob: Job? = null
     private var shockStartedAtMs = 0L
     private var shockLastTickMs = 0L
     private var shockCounterAnnounced = false
     private var playerShockDamageMs = 0L
-    private var counterShockDamageMs = 0L
+    private var duelShockDamageMs = 0L
 
     /** When Robert's own shock started. */
     private var robertShockStartedAtMs = 0L
@@ -5036,12 +5316,66 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** True after the 30 second cap, until the finger is lifted again. */
     private var shockSpent = false
 
-    /** A held up-swipe with the electric shock selected: the shock drains health. */
+    /**
+     * True while the shock is deployed but cannot reach the opponent because a
+     * missile or a bomb is in the air: the weapon aims at him and then drifts
+     * back toward the player, and no damage is dealt until the sky is clear.
+     */
+    private var shockDeployLocked = false
+
+    /** True while Robert is sprinting out of the player's shock band. */
+    private var robertFleeingShock = false
+
+    /** True while the proximity gate has already refused one hold. */
+    private var shockOutOfRangeAnnounced = false
+
+    /**
+     * True when the electric shock can reach the opponent right now. The shock
+     * only works - and only produces its hum - between 40% and 100% distance.
+     */
+    private fun shockInRange(state: GameState = _gameState.value): Boolean =
+        ElectricShockRules.inCloseBand(Combat.proximityOf(state.distance))
+
+    /**
+     * True while a guided missile or a bomb is in the air. An electric shock
+     * can never target the enemy through one, and no gun may be fired either.
+     */
+    private fun skyNotEmpty(state: GameState = _gameState.value): Boolean =
+        state.missileInFlight || state.bombInFlight
+
+    /**
+     * Walks a held weapon back in once the sky is clear again: the drift of
+     * [GraceRules] is released, so the next swipe aims at the opponent at the
+     * distance the fighters really have.
+     */
+    private fun releaseWeaponDrift() {
+        if (_gameState.value.weaponDriftM <= 0f) return
+        _gameState.update { it.copy(weaponDriftM = GraceRules.driftReleased(it.weaponDriftM)) }
+    }
+
+    /**
+     * A held up-swipe with the electric shock selected.
+     *
+     * The action is refused completely - no hum, no state, no damage - while
+     * the opponent is out of the 40%-100% band. Nothing is held back to fire
+     * later by itself: the player simply swipes again once the enemy is in
+     * range, exactly as the on-screen hint explains.
+     */
     private fun startElectricShock() {
         if (battlePaused.value || _currentScreen.value != Screen.BATTLE) return
         if (_gameState.value.shockHolding || shockSpent) return
         val state = _gameState.value
         if (state.timerSelectActive || state.playerHp <= 0 || state.robertHp <= 0) return
+        // The range gate: no sound and no hold action out of the band.
+        if (!shockInRange(state)) {
+            playSound("click")
+            if (!shockOutOfRangeAnnounced) {
+                shockOutOfRangeAnnounced = true
+                msg(t("shockOutOfRange"))
+            }
+            return
+        }
+        shockOutOfRangeAnnounced = false
         markExplicitAction()
         val now = battleClock.nowMs()
         shockStartedAtMs = now
@@ -5049,53 +5383,124 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         shockCounterAnnounced = false
         playerShockBreakMs = 0L
         playerShockDamageMs = 0L
-        counterShockDamageMs = 0L
+        duelShockDamageMs = 0L
+        robertFleeingShock = false
+        // A projectile in the air stops the shock from reaching the enemy: the
+        // weapon is deployed aiming at him and drifts back to the player.
+        val deployLocked = skyNotEmpty(state)
+        shockDeployLocked = deployLocked
         _gameState.update {
             it.copy(
                 shockHolding = true,
                 electricShockInPlay = true,
-                // The player struck first unless Robert is already shocking.
                 shockFirstActivator = if (it.robertShocking) it.shockFirstActivator else "player"
             )
         }
-        // The hum plays at once and runs for as long as the swipe is held.
-        // The outgoing shock is behind the listener; the defensive return is
-        // in front. Separate offsets decorrelate the two copies of the hum.
-        audioManager.startWeaponLoop("magicalSound", volume = 0.75f, posZ = 0.1f,
-            owner = AudioManager.LOOP_OWNER_PLAYER)
-        startRobertShock()
+        if (deployLocked) {
+            // Holding the weapon in place, facing the enemy, without a shock:
+            // this is the warning that lets the player deploy a defence.
+            playSound("click")
+            msg(t("shockBlockedByProjectile"))
+            ensureShockTicker()
+            return
+        }
+        audioManager.startWeaponLoop(
+            "magicalSound",
+            volume = SHOCK_HUM_VOLUME,
+            posZ = 0.1f,
+            owner = AudioManager.LOOP_OWNER_PLAYER
+        )
+        respondToPlayerShock()
         ensureShockTicker()
     }
 
     /**
-     * Robert's defensive shock is only active while the player's shock is held.
+     * Robert detects the player's shock and answers it at random: either with
+     * his own shock (a duel, in which both lose 10% of maximum health every two
+     * seconds) or with a sprint out of the 40% shock band. Both options are
+     * always possible; a badly hurt robot merely prefers running.
+     */
+    private fun respondToPlayerShock() {
+        if (!shockInRange() || skyNotEmpty() || shockDeployLocked) return
+        val state = _gameState.value
+        if (state.robertShocking || state.robertHp <= 0) return
+        if (!RobertRules.robotShockUnlocked(state.round)) {
+            // Before round three Robert owns no shock at all: he simply runs
+            // out of the band, which is the silence the player hears.
+            fleeFromShock()
+            return
+        }
+        if (!RobertRules.shouldCounterShock(
+                playerShocking = state.shockHolding,
+                playerHeldMs = battleClock.nowMs() - shockStartedAtMs,
+                proximityPercent = Combat.proximityOf(state.distance)
+            )
+        ) {
+            return
+        }
+        val answer = RobertRules.chooseShockAnswer(
+            round = state.round,
+            robertHp = state.robertHp,
+            robertMaxHp = state.robertMaxHp,
+            random = Random
+        )
+        when (answer) {
+            RobertRules.ShockAnswer.COUNTER -> startRobertShock()
+            RobertRules.ShockAnswer.FLEE -> fleeFromShock()
+        }
+    }
+
+    /**
+     * Robert's half of the duel: his own shock rises at once and both hums are
+     * mixed together. It only ever runs while the player's shock is held.
      */
     private fun startRobertShock() {
         val state = _gameState.value
         if (state.robertShocking || state.robertHp <= 0 || state.playerHp <= 0) return
         if (!state.shockHolding) return
+        if (LockRules.blocksOpponent(state.opponentLocked(battleClock.nowMs()))) return
         robertShockStartedAtMs = battleClock.nowMs()
         robertShockIsCounter = state.shockHolding
         robertShockBreakMs = 0L
+        robertFleeingShock = false
         _gameState.update {
             it.copy(
                 robertShocking = true,
-                // Robert struck first unless the player is already shocking.
                 shockFirstActivator = if (it.shockHolding) it.shockFirstActivator else "enemy"
             )
         }
         stopEnemyFireSound()
-        audioManager.startWeaponLoop("magicalSound", volume = 0.75f, posZ = -0.1f,
-            owner = AudioManager.LOOP_OWNER_ENEMY, startOffsetMs = 337L)
-        if (state.shockHolding) {
-            if (!shockCounterAnnounced) {
-                shockCounterAnnounced = true
-                setLog(t("electricCounter"))
-            }
-        } else {
-            msg(t("enemyShocking"))
+        audioManager.startWeaponLoop(
+            "magicalSound",
+            volume = SHOCK_HUM_VOLUME,
+            posZ = -0.1f,
+            owner = AudioManager.LOOP_OWNER_ENEMY,
+            startOffsetMs = 337L
+        )
+        if (!shockCounterAnnounced) {
+            shockCounterAnnounced = true
+            setLog(t("electricCounter"))
         }
         ensureShockTicker()
+    }
+
+    /**
+     * Robert's other answer: he sprints out of the 40% band instead of trading
+     * shocks. The moment he leaves the band the shock can no longer reach him,
+     * and the player has to close the distance again.
+     */
+    private fun fleeFromShock() {
+        if (_gameState.value.robertShocking) return
+        robertFleeingShock = true
+        msg(t("enemyFleesShock"))
+        stopEnemyFireSound()
+        if (_gameState.value.robertState != "retreat") {
+            _gameState.update {
+                it.copy(robertState = "retreat", robertConsecutiveHits = 0, robertExchangeShots = 0)
+            }
+            robertSprintTicks = RobertRules.SPRINT_TICKS
+            planRobertStep(FLEE_TICK_MS)
+        }
     }
 
     /** The single damage ticker of every active shock, whichever side holds it. */
@@ -5115,7 +5520,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** One step of every active shock. Returns false once no shock is left. */
+    /**
+     * One step of every active shock.
+     *
+     * Returns false once no shock is left. The proximity gate is re-checked on
+     * every tick: an opponent who runs out of the band stops being hurt, and
+     * the hum of a weapon that is out of reach is silenced at once.
+     */
     private fun shockTick(): Boolean {
         val now = battleClock.nowMs()
         val dtMs = (now - shockLastTickMs).coerceAtLeast(0L)
@@ -5124,6 +5535,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val startState = _gameState.value
         if (startState.playerHp <= 0 || startState.robertHp <= 0) return false
         if (!startState.shockHolding && !startState.robertShocking) return false
+        if (startState.opponentLocked(now) && !startState.shockHolding) return false
 
         // The thirty second cap ends one use at a time; the fight goes on.
         if (startState.shockHolding && ElectricShockRules.timeUp(now - shockStartedAtMs)) {
@@ -5133,33 +5545,103 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             stopRobertShock()
         }
 
+        // The range gate: out of the 40%-100% band the shock neither sounds nor
+        // hurts. Robert also stops fleeing once he is really out of the band.
+        val proximity = Combat.proximityOf(_gameState.value.distance)
+        val inBand = ElectricShockRules.inCloseBand(proximity)
+        if (!inBand) {
+            if (_gameState.value.robertShocking) {
+                audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_ENEMY)
+                _gameState.update { it.copy(robertShocking = false, shockFirstActivator = "") }
+            }
+            if (_gameState.value.shockHolding && !shockDeployLocked) {
+                audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
+            }
+            if (robertFleeingShock) robertFleeingShock = false
+            playerShockDamageMs = 0L
+            duelShockDamageMs = 0L
+            return _gameState.value.shockHolding || _gameState.value.robertShocking
+        }
+
         val state = _gameState.value
         if (!state.shockHolding && !state.robertShocking) return false
 
+        // While a missile or a bomb is in the air the shock cannot target the
+        // enemy: the weapon is held in place, aims at him, and drifts back
+        // toward the player. No damage is dealt in that time.
+        val projectileGate = skyNotEmpty(state)
+        if (projectileGate != shockDeployLocked) {
+            shockDeployLocked = projectileGate
+            if (projectileGate) {
+                audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
+                if (state.robertShocking) stopRobertShock()
+                msg(t("shockBlockedByProjectile"))
+            } else if (state.shockHolding) {
+                audioManager.startWeaponLoop(
+                    "magicalSound",
+                    volume = SHOCK_HUM_VOLUME,
+                    posZ = 0.1f,
+                    owner = AudioManager.LOOP_OWNER_PLAYER
+                )
+            }
+        }
+        if (shockDeployLocked) {
+            playerShockDamageMs = 0L
+            duelShockDamageMs = 0L
+            return _gameState.value.shockHolding
+        }
+
         val live = _gameState.value
-        val proximity = Combat.proximityOf(live.distance)
-        // Apply whole damage pulses, rather than rounding each 100 ms tick.
-        playerShockDamageMs += dtMs
-        val playerPulses = playerShockDamageMs / 1_000L
-        playerShockDamageMs %= 1_000L
-        val rateOnRobert = ElectricShockRules.shockPercentPerSecond(
-            proximity, live.robertShocking, activatedFirst = true
-        )
-        val robertLoss = ElectricShockRules.damageFor(
-            live.robertMaxHp, rateOnRobert, playerPulses * 1_000L
-        ).roundToInt()
-        if (live.robertShocking) counterShockDamageMs += dtMs else counterShockDamageMs = 0L
-        val counterPulses = counterShockDamageMs / 2_000L
-        counterShockDamageMs %= 2_000L
-        val playerLoss = ElectricShockRules.damageFor(
-            live.playerMaxHp, 10f, counterPulses * 1_000L
-        ).roundToInt()
+        val bothShocking = live.shockHolding && live.robertShocking
+        // Robert answers once, a moment after the shock really started to burn.
+        if (live.shockHolding && !live.robertShocking && !robertFleeingShock) {
+            respondToPlayerShock()
+        }
+        val duel = _gameState.value.shockHolding && _gameState.value.robertShocking
+
+        var robertLoss = 0
+        var playerLoss = 0
+        if (duel) {
+            // A duel of colliding shocks: BOTH fighters lose 10% of their
+            // maximum health every two seconds, applied as whole pulses.
+            duelShockDamageMs += dtMs
+            playerShockDamageMs = 0L
+            val pulses = duelShockDamageMs / ElectricShockRules.DUEL_WINDOW_MS
+            duelShockDamageMs %= ElectricShockRules.DUEL_WINDOW_MS
+            if (pulses > 0) {
+                // DUEL_PERCENT_PER_SECOND is derived from the window, so one
+                // full window is exactly DUEL_PERCENT_PER_WINDOW of the bar.
+                robertLoss = ElectricShockRules.damageFor(
+                    live.robertMaxHp,
+                    ElectricShockRules.DUEL_PERCENT_PER_SECOND,
+                    pulses * ElectricShockRules.DUEL_WINDOW_MS
+                ).roundToInt()
+                playerLoss = ElectricShockRules.damageFor(
+                    live.playerMaxHp,
+                    ElectricShockRules.DUEL_PERCENT_PER_SECOND,
+                    pulses * ElectricShockRules.DUEL_WINDOW_MS
+                ).roundToInt()
+            }
+        } else {
+            // Alone: the single-striker law, applied in whole one-second pulses.
+            playerShockDamageMs += dtMs
+            duelShockDamageMs = 0L
+            val pulses = playerShockDamageMs / 1_000L
+            playerShockDamageMs %= 1_000L
+            if (pulses > 0) {
+                val rate = ElectricShockRules.playerDrainPercentPerSecond(proximity)
+                robertLoss = ElectricShockRules.damageFor(
+                    live.robertMaxHp, rate, pulses * 1_000L
+                ).roundToInt()
+            }
+        }
         val newRobertHp = (live.robertHp - robertLoss).coerceAtLeast(0)
         val newPlayerHp = (live.playerHp - playerLoss).coerceAtLeast(0)
+        val dealt = (live.robertHp - newRobertHp).coerceAtLeast(0)
 
         // Ten continuous seconds inside the 90%-100% band break a glue wall,
         // and a cover withstands exactly those same ten seconds.
-        playerShockBreakMs = if (live.shockHolding && ElectricShockRules.inBreakBand(proximity)) {
+        playerShockBreakMs = if (!duel && ElectricShockRules.inBreakBand(proximity)) {
             playerShockBreakMs + dtMs
         } else {
             0L
@@ -5169,15 +5651,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             0L
         }
-        val brokeEnemyBarrier = ElectricShockRules.barrierBreakReady(playerShockBreakMs) &&
+        val brokeEnemyBarrier = playerShockBreakMs > 0L &&
+            ElectricShockRules.barrierBreakReady(playerShockBreakMs) &&
             breakBarrierWithShock(enemySide = true)
-        val brokePlayerBarrier = ElectricShockRules.barrierBreakReady(robertShockBreakMs) &&
+        val brokePlayerBarrier = robertShockBreakMs > 0L &&
+            ElectricShockRules.barrierBreakReady(robertShockBreakMs) &&
             breakBarrierWithShock(enemySide = false)
         if (brokeEnemyBarrier) playerShockBreakMs = 0L
         if (brokePlayerBarrier) robertShockBreakMs = 0L
 
         _gameState.update {
-            it.copy(robertHp = newRobertHp, playerHp = newPlayerHp)
+            it.copy(
+                robertHp = newRobertHp,
+                playerHp = newPlayerHp,
+                shockDamageDealt = it.shockDamageDealt + dealt
+            )
         }
         if (newRobertHp <= 0) {
             stopAllShocks(playRelease = true)
@@ -5249,14 +5737,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun stopElectricShock(timedOut: Boolean = false, playRelease: Boolean = true) {
         if (timedOut) shockSpent = true
         val wasHolding = _gameState.value.shockHolding
+        val wasLocked = shockDeployLocked
+        shockDeployLocked = false
         if (wasHolding) {
             audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
             _gameState.update { it.copy(shockHolding = false, electricShockInPlay = false) }
-            if (playRelease) {
+            if (playRelease && !wasLocked) {
                 audioManager.playMixed(listOf("electricShock", "enemyHit"))
             }
         }
         if (robertShockIsCounter) stopRobertShock()
+        robertFleeingShock = false
+        playerShockBreakMs = 0L
+        playerShockDamageMs = 0L
+        duelShockDamageMs = 0L
         if (wasHolding && !_gameState.value.robertShocking) {
             _gameState.update { it.copy(shockFirstActivator = "") }
         }
@@ -5265,10 +5759,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** Ends Robert's shock and silences his hum. */
     private fun stopRobertShock() {
         robertShockIsCounter = false
+        robertShockBreakMs = 0L
+        duelShockDamageMs = 0L
         if (!_gameState.value.robertShocking) return
         audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_ENEMY)
         _gameState.update {
-            it.copy(robertShocking = false, shockFirstActivator = if (it.shockHolding) it.shockFirstActivator else "")
+            it.copy(
+                robertShocking = false,
+                shockFirstActivator = if (it.shockHolding) it.shockFirstActivator else ""
+            )
         }
     }
 
@@ -5279,10 +5778,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         playerShockBreakMs = 0L
         robertShockBreakMs = 0L
         shockSpent = false
+        shockDeployLocked = false
+        robertFleeingShock = false
+        shockOutOfRangeAnnounced = false
+        playerShockDamageMs = 0L
+        duelShockDamageMs = 0L
         shockJob?.cancel()
         shockJob = null
         _gameState.update {
-            it.copy(shockHolding = false, robertShocking = false, electricShockInPlay = false, shockFirstActivator = "")
+            it.copy(
+                shockHolding = false,
+                robertShocking = false,
+                electricShockInPlay = false,
+                shockFirstActivator = ""
+            )
         }
     }
 
@@ -5366,6 +5875,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // that was running is off afterwards, so the car stage says so too.
         stopCarDriveJob()
         stopAllShocks(playRelease = false)
+        // Leaving the battle lifts a running opponent lock as well, so the next
+        // battle starts with a free Robert.
+        lockJob?.cancel()
+        lockJob = null
         audioManager.stopCarSounds()
         _gameState.update { current ->
             when (current.carStage) {

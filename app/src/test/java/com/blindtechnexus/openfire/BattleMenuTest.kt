@@ -20,13 +20,14 @@ import org.junit.Test
  * Locks the quick menu contract.
  *
  * The old "play" item was replaced by Recovery, which repairs every damaged
- * weapon for [Combat.GUN_RECOVERY_COST] coins, and the anti-bomb explosive
- * sits in the menu right after the anti-missile system.
+ * weapon for [Combat.GUN_RECOVERY_COST] coins, the anti-bomb explosive sits in
+ * the menu right after the car, and "Lock the Opponent" sits between Cover's
+ * defensive group and Exit Game.
  */
 class BattleMenuTest {
 
     @Test
-    fun theMenuRunsMedikitCoverGlueWallAntiMissileCarAntiBombExitAndRecover() {
+    fun theMenuRunsMedikitCoverGlueWallAntiMissileCarAntiBombLockExitAndRecover() {
         assertEquals(
             listOf(
                 BattleMenuItem.MEDKIT,
@@ -35,6 +36,7 @@ class BattleMenuTest {
                 BattleMenuItem.ANTI_MISSILE,
                 BattleMenuItem.CAR,
                 BattleMenuItem.ANTI_BOMB,
+                BattleMenuItem.LOCK,
                 BattleMenuItem.EXIT,
                 BattleMenuItem.RECOVER
             ),
@@ -51,7 +53,7 @@ class BattleMenuTest {
     @Test
     fun recoverIsTheSafeDefaultSelection() {
         assertEquals(BattleMenuItem.RECOVER.ordinal, BattleMenuItem.RECOVER_INDEX)
-        assertEquals(7, BattleMenuItem.RECOVER_INDEX)
+        assertEquals(8, BattleMenuItem.RECOVER_INDEX)
         assertEquals(BattleMenuItem.RECOVER_INDEX, GameState().menuIndex)
         assertEquals(BattleMenuItem.RECOVER, GameState().menuItem)
         // Nothing is damaged in a fresh battle, so the default tap is free.
@@ -66,25 +68,28 @@ class BattleMenuTest {
         assertEquals(BattleMenuItem.ANTI_MISSILE, BattleMenuItem.at(3))
         assertEquals(BattleMenuItem.CAR, BattleMenuItem.at(4))
         assertEquals(BattleMenuItem.ANTI_BOMB, BattleMenuItem.at(5))
-        assertEquals(BattleMenuItem.EXIT, BattleMenuItem.at(6))
-        assertEquals(BattleMenuItem.RECOVER, BattleMenuItem.at(7))
-        assertEquals(BattleMenuItem.MEDKIT, BattleMenuItem.at(8))
+        assertEquals(BattleMenuItem.LOCK, BattleMenuItem.at(6))
+        assertEquals(BattleMenuItem.EXIT, BattleMenuItem.at(7))
+        assertEquals(BattleMenuItem.RECOVER, BattleMenuItem.at(8))
+        assertEquals(BattleMenuItem.MEDKIT, BattleMenuItem.at(9))
         assertEquals(BattleMenuItem.RECOVER, BattleMenuItem.at(-1))
         assertEquals(BattleMenuItem.EXIT, BattleMenuItem.at(-2))
-        assertEquals(BattleMenuItem.ANTI_BOMB, BattleMenuItem.at(-3))
+        assertEquals(BattleMenuItem.LOCK, BattleMenuItem.at(-3))
+        assertEquals(BattleMenuItem.ANTI_BOMB, BattleMenuItem.at(-4))
         assertEquals(BattleMenuItem.CAR, BattleMenuItem.at(-4))
         assertEquals(BattleMenuItem.ANTI_MISSILE, BattleMenuItem.at(-5))
         assertEquals(BattleMenuItem.GLUE_WALL, BattleMenuItem.at(-6))
     }
 
     @Test
-    fun onlyTheSixDefencesCarryAnItem() {
+    fun onlyTheSevenDefencesCarryAnItem() {
         assertEquals(DefenceItem.MEDKIT, BattleMenuItem.MEDKIT.defence)
         assertEquals(DefenceItem.COVER, BattleMenuItem.COVER.defence)
         assertEquals(DefenceItem.GLUE_WALL, BattleMenuItem.GLUE_WALL.defence)
         assertEquals(DefenceItem.ANTI_MISSILE, BattleMenuItem.ANTI_MISSILE.defence)
         assertEquals(DefenceItem.CAR, BattleMenuItem.CAR.defence)
         assertEquals(DefenceItem.ANTI_BOMB, BattleMenuItem.ANTI_BOMB.defence)
+        assertEquals(DefenceItem.LOCK, BattleMenuItem.LOCK.defence)
         assertEquals(null, BattleMenuItem.EXIT.defence)
         assertEquals(null, BattleMenuItem.RECOVER.defence)
     }

@@ -31,6 +31,22 @@ package com.blindtechnexus.openfire.model
  *  - from round four Robert also carries one missile power per game (two in
  *    round five). He spends it only as a desperation weapon while he is
  *    clearly losing.
+ *
+ * ## Anti-missile coverage
+ *
+ * An anti-missile system is a magazine of interceptors, never a single shot:
+ *
+ *  - one anti-missile system bought by the player covers
+ *    [PLAYER_INTERCEPTS_PER_SYSTEM] missiles ([INTERCEPTIONS_PER_SYSTEM]), so a
+ *    single purchase can knock three missiles out of the air before it is
+ *    spent;
+ *  - one enemy anti-missile system covers exactly
+ *    [ENEMY_INTERCEPTS_PER_SYSTEM] missile, so Robert's batteries are one-shot
+ *    devices;
+ *  - the player may activate the system even while nothing is in the air
+ *    ([canActivateEarly]). It then fires by itself the moment a missile is
+ *    launched at the player ([autoInterceptPlanned]), and the whole system is
+ *    spent when its coverage runs out.
  */
 object MissileRules {
     /** Shop price of the missile launcher itself (rebalanced). */
@@ -57,8 +73,12 @@ object MissileRules {
     /** The flight sound sits slightly under the other effects. */
     const val SOUND_VOLUME = 0.92f
 
-    /** A chasing missile plays its looped flight sound a touch faster. */
-    const val CHASE_SOUND_RATE = 1.06f
+    /**
+     * The flight sound plays at its natural pitch. A missile is never
+     * speeded up: a shifted recording is exactly the distorted, squeaky
+     * sound the game must never make.
+     */
+    const val CHASE_SOUND_RATE = 1.0f
 
     /** Extra chase time for every metre the target can still run away. */
     const val CHASE_MS_PER_METER = 60L
@@ -77,6 +97,21 @@ object MissileRules {
 
     /** Shots Robert must have fired before he considers his missile. */
     const val ENEMY_LAUNCH_MIN_SHOTS = 3
+
+    /**
+     * Missiles one player anti-missile system destroys before it is spent.
+     * A single purchase therefore covers three incoming missiles.
+     */
+    const val PLAYER_INTERCEPTS_PER_SYSTEM = 3
+
+    /**
+     * Missiles one enemy anti-missile system destroys before it is spent.
+     * The enemy is deliberately weaker: one interceptor per battery.
+     */
+    const val ENEMY_INTERCEPTS_PER_SYSTEM = 1
+
+    /** Alias used by the guide and the shop text. */
+    const val INTERCEPTIONS_PER_SYSTEM = PLAYER_INTERCEPTS_PER_SYSTEM
 
     /**
      * A direct missile hit destroys its target: it deals every health point
@@ -102,6 +137,9 @@ object MissileRules {
 
     /** Extra urgency of a missile escape. */
     const val FLEE_PANIC_FACTOR = 1.15f
+
+    /** Tick length of a missile escape, matching Robert's own flee tick. */
+    const val FLEE_TICK_MS = RobertRules.FLEE_TICK_MS
 
     /** Metres covered per flee tick while escaping a missile. */
     fun fleeStep(round: Int, tickMs: Long): Float =
@@ -164,6 +202,48 @@ object MissileRules {
             round.coerceIn(1, Progression.ROUNDS_PER_MATCH) >= FIRST_MISSILE_ROUND &&
             antiMissilesLeft > 0 &&
             robertHp in 1 until ANTI_MISSILE_MAX_HP
+
+    /**
+     * True when Robert still answers a player missile even after his health
+     * left the end-game window: a resolute enemy spends a stored interceptor
+     * on any missile that is really in the air, as long as one is left. This
+     * is the enemy half of "the defence may be activated at any time".
+     */
+    fun enemyIntercepts(
+        round: Int,
+        antiMissilesLeft: Int,
+        missileInFlight: Boolean,
+        robertHp: Int
+    ): Boolean =
+        missileInFlight &&
+            antiMissilesLeft > 0 &&
+            robertHp > 0 &&
+            round.coerceIn(1, Progression.ROUNDS_PER_MATCH) >= FIRST_MISSILE_ROUND
+
+    /**
+     * Interceptors one anti-missile system of [firedByPlayer] covers. The
+     * player's bought system covers three missiles, the enemy's one.
+     */
+    fun interceptsPerSystem(firedByPlayer: Boolean): Int =
+        if (firedByPlayer) PLAYER_INTERCEPTS_PER_SYSTEM else ENEMY_INTERCEPTS_PER_SYSTEM
+
+    /**
+     * True when the anti-missile system may be activated right now.
+     *
+     * A player who owns at least one system may deploy it at ANY moment, with
+     * or without a missile in the air: deployed early it stands guard and
+     * destroys the next missile by itself. Activation only ever requires an
+     * owned system - never an active threat.
+     */
+    fun canActivateEarly(ownsSystem: Boolean, systemsLeft: Int): Boolean =
+        ownsSystem && systemsLeft > 0
+
+    /**
+     * True while a deployed anti-missile system stands guard and fires by
+     * itself, without the player having to react in time.
+     */
+    fun autoInterceptPlanned(activated: Boolean, missilesLeft: Int, missileInFlight: Boolean): Boolean =
+        activated && missilesLeft > 0 && missileInFlight
 
     /**
      * True when Robert spends his single missile power. It is a desperation

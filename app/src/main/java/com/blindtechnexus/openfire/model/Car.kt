@@ -53,8 +53,11 @@ enum class CarStage(val id: String) {
  * prompts walk the user out. The same car is then reused from that menu.
  */
 object CarRules {
-    /** Price of the car in the shop (see [DefenceItem.CAR]). */
-    const val PRICE = 3500
+    /**
+     * Price of the car in the shop (see [DefenceItem.CAR]). The bulletproof
+     * car is the cheapest permanent defence of the shop at 1000 coins.
+     */
+    const val PRICE = 1_000
 
     /** Price of one refuel once the car is out of fuel. */
     const val REFUEL_PRICE = 500

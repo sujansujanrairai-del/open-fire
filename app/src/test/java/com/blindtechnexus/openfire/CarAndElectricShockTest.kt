@@ -23,9 +23,9 @@ class CarAndElectricShockTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun theCarCostsThreeThousandFiveHundredAndRefuelsForFiveHundred() {
-        assertEquals(3500, CarRules.PRICE)
-        assertEquals(3500, DefenceItem.CAR.price)
+    fun theCarCostsOneThousandAndRefuelsForFiveHundred() {
+        assertEquals(1000, CarRules.PRICE)
+        assertEquals(1000, DefenceItem.CAR.price)
         assertEquals(500, CarRules.REFUEL_PRICE)
         assertEquals(5, CarRules.GAMES_PER_FUEL)
         assertEquals(1, DefenceItem.CAR.requiredCompletedRounds)
@@ -103,7 +103,7 @@ class CarAndElectricShockTest {
 
     @Test
     fun buyingTheCarGivesOneCarWithFiveGames() {
-        val bought = Shop.buyDefence(Inventory(), 3500, DefenceItem.CAR, completedRounds = 1)
+        val bought = Shop.buyDefence(Inventory(), 1000, DefenceItem.CAR, completedRounds = 1)
         assertTrue(bought.success)
         assertEquals(0, bought.coins)
         assertEquals(1, bought.inventory.cars)
@@ -117,7 +117,7 @@ class CarAndElectricShockTest {
         assertFalse(again.success)
         assertEquals("alreadyOwned", again.reasonKey)
 
-        val poor = Shop.buyDefence(Inventory(), 3499, DefenceItem.CAR, completedRounds = 5)
+        val poor = Shop.buyDefence(Inventory(), 999, DefenceItem.CAR, completedRounds = 5)
         assertFalse(poor.success)
         assertEquals("notEnoughCoins", poor.reasonKey)
     }
@@ -151,7 +151,7 @@ class CarAndElectricShockTest {
 
     @Test
     fun aCarIsUsableInFiveGamesThenNeedsFuel() {
-        var inventory = Shop.buyDefence(Inventory(), 3500, DefenceItem.CAR, completedRounds = 1).inventory
+        var inventory = Shop.buyDefence(Inventory(), 1000, DefenceItem.CAR, completedRounds = 1).inventory
         repeat(5) {
             inventory = Shop.useCarGame(inventory)
         }
@@ -160,7 +160,7 @@ class CarAndElectricShockTest {
         // Out of fuel now: the next refuel is allowed and costs the full price.
         val refuelled = Shop.refuelCar(inventory, 2_000)
         assertTrue(refuelled.success)
-        assertEquals(1500, refuelled.coins)
+        assertEquals(2500, refuelled.coins)
         assertEquals(5, refuelled.inventory.carGamesLeft)
     }
 
@@ -243,19 +243,66 @@ class CarAndElectricShockTest {
     }
 
     @Test
-    fun whenBothShockAtOnceTheFirstActivatorDrainsFasterThanTheSecond() {
-        // The one who activated first drains 10 percent per second...
+    fun aShockDuelTakesTenPercentOfBothBarsEveryTwoSeconds() {
+        // The duel is symmetric: both fighters lose 10 percent every two
+        // seconds, whoever activated first, so the weaker bar loses first.
+        for (first in listOf(true, false)) {
+            assertEquals(
+                5f,
+                ElectricShockRules.shockPercentPerSecond(70f, bothShocking = true, activatedFirst = first),
+                0.001f
+            )
+        }
+        assertEquals(5f, ElectricShockRules.duelPercentPerSecond(), 0.001f)
+        assertEquals(2_000L, ElectricShockRules.DUEL_WINDOW_MS)
+        assertEquals(10f, ElectricShockRules.DUEL_PERCENT_PER_WINDOW, 0.001f)
+        // Ten percent of a 200 health bar every two seconds is 20 health.
         assertEquals(
-            10f,
-            ElectricShockRules.shockPercentPerSecond(70f, bothShocking = true, activatedFirst = true),
+            20f,
+            ElectricShockRules.damageFor(200, ElectricShockRules.DUEL_PERCENT_PER_WINDOW, 2_000L),
             0.001f
         )
-        // ...while the other drains 10 percent per two seconds.
-        assertEquals(
-            10f / 2f,
-            ElectricShockRules.shockPercentPerSecond(70f, bothShocking = true, activatedFirst = false),
-            0.001f
-        )
+    }
+
+    @Test
+    fun theShockOnlyWorksInsideTheFortyToHundredBand() {
+        assertTrue(ElectricShockRules.inCloseBand(40f))
+        assertTrue(ElectricShockRules.inCloseBand(70f))
+        assertTrue(ElectricShockRules.inCloseBand(100f))
+        assertFalse(ElectricShockRules.inCloseBand(39.99f))
+        assertFalse(ElectricShockRules.inCloseBand(0f))
+        // The barrier-breaking band is the top ten percent only.
+        assertTrue(ElectricShockRules.inBreakBand(90f))
+        assertFalse(ElectricShockRules.inBreakBand(89f))
+    }
+
+    @Test
+    fun robertEitherCountersTheShockOrFleesFromIt() {
+        // A detected shock inside the band can be answered; outside it cannot.
+        assertTrue(RobertRules.shouldCounterShock(true, 0, 70f))
+        assertFalse(RobertRules.shouldCounterShock(true, 0, 30f))
+        assertFalse(RobertRules.shouldCounterShock(false, 0, 70f))
+        // Both answers stay possible whatever the health and the random draw.
+        val answers = (1..200).map {
+            RobertRules.chooseShockAnswer(
+                round = 3,
+                robertHp = 120,
+                robertMaxHp = 400,
+                random = kotlin.random.Random(it)
+            )
+        }.toSet()
+        assertEquals(setOf(RobertRules.ShockAnswer.COUNTER, RobertRules.ShockAnswer.FLEE), answers)
+        // He cannot raise a shock before round three, so he only ever runs.
+        repeat(50) {
+            assertEquals(
+                RobertRules.ShockAnswer.FLEE,
+                RobertRules.chooseShockAnswer(2, 400, 400, kotlin.random.Random(it))
+            )
+        }
+        // Fleeing only happens while the shock really is in range.
+        assertTrue(RobertRules.shouldFleeShock(70f, playerShocking = true))
+        assertFalse(RobertRules.shouldFleeShock(20f, playerShocking = true))
+        assertFalse(RobertRules.shouldFleeShock(70f, playerShocking = false))
     }
 
     @Test
@@ -263,7 +310,8 @@ class CarAndElectricShockTest {
         assertFalse(RobertRules.shouldCounterShock(false, 0))
         assertTrue(ElectricShockRules.counterOpen(1_000))
         assertEquals(0L, ElectricShockRules.COUNTER_DELAY_MS)
-        assertEquals(10f, ElectricShockRules.FIRST_STRIKER_PERCENT_PER_SECOND, 0.001f)
+        assertEquals(5f, ElectricShockRules.FIRST_STRIKER_PERCENT_PER_SECOND, 0.001f)
+        assertEquals(5f, ElectricShockRules.secondStrikerPercentPerSecond(), 0.001f)
     }
 
     @Test
@@ -275,10 +323,10 @@ class CarAndElectricShockTest {
 
     @Test
     fun damagePerTickIsThePercentageOfMaximumHealth() {
-        // 80 percent of 200 health per second: 16 health in a tenth of a second.
-        assertEquals(16f, ElectricShockRules.damageFor(200, 80f, 100L), 0.001f)
-        assertEquals(160f, ElectricShockRules.damageFor(200, 80f, 1000L), 0.001f)
-        assertEquals(0f, ElectricShockRules.damageFor(200, 80f, -5L), 0.001f)
+        // 60 percent of 200 health per second: 12 health in a tenth of a second.
+        assertEquals(12f, ElectricShockRules.damageFor(200, 60f, 100L), 0.001f)
+        assertEquals(120f, ElectricShockRules.damageFor(200, 60f, 1000L), 0.001f)
+        assertEquals(0f, ElectricShockRules.damageFor(200, 60f, -5L), 0.001f)
     }
 
     @Test

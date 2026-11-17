@@ -1221,9 +1221,59 @@ object RobertRules {
     /** The robot uses the electric shock from round three onwards. */
     fun robotShockUnlocked(round: Int): Boolean = round >= 3
 
-    /** The enemy counters only an active player shock, immediately. */
-    fun shouldCounterShock(playerShocking: Boolean, playerHeldMs: Long): Boolean =
-        playerShocking && ElectricShockRules.counterOpen(playerHeldMs)
+    /**
+     * The enemy counters only an active player shock, immediately, and only
+     * while he really is inside the player's shock range: a shock that cannot
+     * reach him is felt (heard) but cannot be answered.
+     */
+    fun shouldCounterShock(
+        playerShocking: Boolean,
+        playerHeldMs: Long,
+        proximityPercent: Float = ElectricShockRules.CLOSE_BAND_MAX_PROXIMITY
+    ): Boolean =
+        playerShocking &&
+            ElectricShockRules.counterOpen(playerHeldMs) &&
+            ElectricShockRules.inCloseBand(proximityPercent)
+
+    /**
+     * What Robert answers a detected electric shock with. He has exactly two
+     * options and picks one at random ([chooseShockAnswer]):
+     *
+     *  - [COUNTER]: he raises his own shock, and both fighters then lose 10%
+     *    of their maximum health every two seconds;
+     *  - [FLEE]: he sprints out of the player's 40% shock band instead, so the
+     *    shock can no longer reach him and stops hurting him at once.
+     */
+    enum class ShockAnswer(val id: String) { COUNTER("counter"), FLEE("flee") }
+
+    /** Share of his decisions that are a counter when he is healthy. */
+    const val SHOCK_COUNTER_CHANCE = 0.5f
+
+    /**
+     * Picks the answer to a detected shock. A healthy Robert counters about
+     * half of the time, a Robert who is badly hurt prefers to run away - but
+     * both options always stay possible, so the enemy can never be predicted.
+     */
+    fun chooseShockAnswer(
+        round: Int,
+        robertHp: Int,
+        robertMaxHp: Int,
+        random: Random
+    ): ShockAnswer {
+        if (!robotShockUnlocked(round)) return ShockAnswer.FLEE
+        val fraction = if (robertMaxHp <= 0) 0f else robertHp.toFloat() / robertMaxHp.toFloat()
+        // A nearly dead robot prefers flight, a healthy one prefers the duel.
+        val counterChance = (SHOCK_COUNTER_CHANCE + (fraction - 0.5f) * 0.6f).coerceIn(0.15f, 0.85f)
+        return if (random.nextFloat() < counterChance) ShockAnswer.COUNTER else ShockAnswer.FLEE
+    }
+
+    /**
+     * True while Robert is running out of the player's shock band: he keeps
+     * sprinting until the proximity drops below the 40% lower edge of the
+     * band, or until the player releases the shock.
+     */
+    fun shouldFleeShock(proximityPercent: Float, playerShocking: Boolean): Boolean =
+        playerShocking && ElectricShockRules.inCloseBand(proximityPercent)
 
     /** Autonomous shock attacks are forbidden. */
     @Suppress("UNUSED_PARAMETER")
