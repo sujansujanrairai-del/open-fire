@@ -151,11 +151,15 @@ class VolumeMixerTest {
         assertEquals(1.0f, VolumeMixer.runRate(0f), 0.0001f)
         assertEquals(1.0f, VolumeMixer.runRate(-2f), 0.0001f)
         assertEquals(1.0f, VolumeMixer.runRate(Float.NaN), 0.0001f)
-        // A real but very slow level stays just above the floor and a sprint is
+        // A real but very slow level stays inside the window and a sprint is
         // capped, so the footsteps can never stop or race away.
-        assertEquals(VolumeMixer.MIN_RATE, VolumeMixer.runRate(0.05f), 0.0001f)
-        assertEquals(VolumeMixer.MAX_RATE, VolumeMixer.runRate(100f), 0.0001f)
         assertTrue(VolumeMixer.runRate(0.05f) >= VolumeMixer.MIN_RATE)
+        assertTrue(VolumeMixer.runRate(0.05f) < VolumeMixer.runRate(1.0f))
+        assertEquals(VolumeMixer.MAX_RATE, VolumeMixer.runRate(100f), 0.0001f)
+        for (level in listOf(0.05f, 0.5f, 1f, 2f, 100f)) {
+            val rate = VolumeMixer.runRate(level)
+            assertTrue("rate $rate out of window at $level", rate in VolumeMixer.MIN_RATE..VolumeMixer.MAX_RATE)
+        }
     }
 
     @Test

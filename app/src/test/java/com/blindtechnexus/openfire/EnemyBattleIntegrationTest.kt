@@ -80,12 +80,12 @@ class EnemyBattleIntegrationTest {
             if (duel) {
                 assertTrue(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_ENEMY))
             }
-            var now = android.os.SystemClock.elapsedRealtime()
             var sawRobertDrop = false
             var sawPlayerDrop = false
+            var peakPaid = 0
             repeat(10) {
-                now += 1_000L
-                lastTick.setLong(vm, now - 1_000L)
+                // One whole second of the battle clock since the previous tick.
+                lastTick.setLong(vm, android.os.SystemClock.elapsedRealtime() - 1_000L)
                 val before = state.value
                 invoke(vm, "shockTick")
                 val after = state.value
@@ -96,13 +96,16 @@ class EnemyBattleIntegrationTest {
                 assertTrue("the shock must never heal", after.playerHp <= after.playerMaxHp)
                 if (after.robertHp < before.robertHp) sawRobertDrop = true
                 if (after.playerHp < before.playerHp) sawPlayerDrop = true
+                // A shock that finishes the fight starts the next round with a
+                // clean state, so the payment is remembered at its peak.
+                if (after.shockDamageDealt > peakPaid) peakPaid = after.shockDamageDealt
             }
             assertTrue("the shock must really hurt", sawRobertDrop)
             assertTrue("the player must not be healed", state.value.playerHp <= startPlayer)
             if (duel) {
                 assertTrue("a duel costs the player health as well", sawPlayerDrop)
             }
-            assertTrue("the shock must be paid", state.value.shockDamageDealt > 0)
+            assertTrue("the shock must be paid", peakPaid > 0)
             vm.stopHoldFire()
             assertFalse(state.value.shockHolding)
             assertFalse(state.value.robertShocking)
