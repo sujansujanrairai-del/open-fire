@@ -76,9 +76,9 @@ class BattleMenuTest {
         assertEquals(BattleMenuItem.EXIT, BattleMenuItem.at(-2))
         assertEquals(BattleMenuItem.LOCK, BattleMenuItem.at(-3))
         assertEquals(BattleMenuItem.ANTI_BOMB, BattleMenuItem.at(-4))
-        assertEquals(BattleMenuItem.CAR, BattleMenuItem.at(-4))
-        assertEquals(BattleMenuItem.ANTI_MISSILE, BattleMenuItem.at(-5))
-        assertEquals(BattleMenuItem.GLUE_WALL, BattleMenuItem.at(-6))
+        assertEquals(BattleMenuItem.CAR, BattleMenuItem.at(-5))
+        assertEquals(BattleMenuItem.ANTI_MISSILE, BattleMenuItem.at(-6))
+        assertEquals(BattleMenuItem.GLUE_WALL, BattleMenuItem.at(-7))
     }
 
     @Test

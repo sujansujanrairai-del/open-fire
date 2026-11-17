@@ -160,7 +160,7 @@ class CarAndElectricShockTest {
         // Out of fuel now: the next refuel is allowed and costs the full price.
         val refuelled = Shop.refuelCar(inventory, 2_000)
         assertTrue(refuelled.success)
-        assertEquals(2500, refuelled.coins)
+        assertEquals(1500, refuelled.coins)
         assertEquals(5, refuelled.inventory.carGamesLeft)
     }
 
@@ -259,7 +259,7 @@ class CarAndElectricShockTest {
         // Ten percent of a 200 health bar every two seconds is 20 health.
         assertEquals(
             20f,
-            ElectricShockRules.damageFor(200, ElectricShockRules.DUEL_PERCENT_PER_WINDOW, 2_000L),
+            ElectricShockRules.damageFor(200, ElectricShockRules.DUEL_PERCENT_PER_SECOND, 2_000L),
             0.001f
         )
     }

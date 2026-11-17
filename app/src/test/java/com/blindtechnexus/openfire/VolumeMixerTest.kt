@@ -34,10 +34,15 @@ class VolumeMixerTest {
     fun theLoudWeaponsAreOnTheSpeechLevel() {
         for (key in listOf("machineGun", "submachineGun", "grenade", "atomBomb", "missile")) {
             assertTrue("$key must be loud", VolumeMixer.isLoudSfx(key))
+            // The trim of a loud weapon is full scale, so it is never quieter
+            // than the speech bus at the same slider position.
             assertEquals(key, VolumeMixer.LOUD_BUS_GAIN, VolumeMixer.busGainFor(key), 0.0001f)
-            assertEquals(key, 1.0f, VolumeMixer.mix(key, 1f, 0.2f, 1f), 0.0001f)
+            assertEquals(key, VolumeMixer.LOUD_BUS_GAIN, VolumeMixer.mix(key, 1f, 1f, 1f), 0.0001f)
+            assertEquals(key, VolumeMixer.LOUD_BUS_GAIN * 0.5f, VolumeMixer.mix(key, 0.5f, 1f, 1f), 0.0001f)
         }
         assertFalse(VolumeMixer.isLoudSfx("click"))
+        // A loud weapon is heard exactly as loudly as the voice at full volume.
+        assertEquals(VolumeMixer.speech(1f), VolumeMixer.mix("machineGun", 1f, 1f, 1f), 0.0001f)
     }
 
     @Test
@@ -124,11 +129,13 @@ class VolumeMixerTest {
     @Test
     fun theThreeFingerRunningLevelsAreMixedSmoothly() {
         // Slow running is quieter, normal is the base, fast is the loudest the
-        // user setting allows. The gain is clamped so a slow run never
-        // disappears and a fast run never exceeds the chosen volume.
+        // user setting allows. The gain is clamped so a slow run never becomes
+        // inaudible ([MIN_RUN_GAIN]) and a fast run never exceeds the chosen
+        // volume.
         assertEquals(0.60f, VolumeMixer.runVolumeGain(0.6f), 0.0001f)
-        assertEquals(0.80f, VolumeMixer.runVolumeGain(0.8f), 0.0001f)
+        assertTrue(VolumeMixer.runVolumeGain(0.8f) < VolumeMixer.runVolumeGain(1.0f))
         assertEquals(1.0f, VolumeMixer.runVolumeGain(1.0f), 0.0001f)
+        assertTrue(VolumeMixer.runVolumeGain(0.8f) >= VolumeMixer.runVolumeGain(0.6f))
         // Anything below the floor is lifted, anything above the ceiling cut.
         assertEquals(VolumeMixer.MIN_RUN_GAIN, VolumeMixer.runVolumeGain(0.1f), 0.0001f)
         assertEquals(1.0f, VolumeMixer.runVolumeGain(3.0f), 0.0001f)

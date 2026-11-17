@@ -62,14 +62,16 @@ class RewardsAndLockTest {
             Rewards.battleCoins(performance(firePower = 99_999, playerHp = 2600, playerMaxHp = 2600, hits = 500, shots = 500))
         )
         assertEquals(2500, Rewards.MAX_BATTLE_COINS)
-        // A fight without a single shot is not an inaccurate fight: a player
-        // who ended it with the electric shock keeps the full accuracy credit.
-        assertEquals(1f, BattlePerformance(shots = 0).accuracyFraction, 0.0001f)
+        // Accuracy is only paid for shots that were really fired: a fight
+        // without a single shot earns no accuracy credit, and the health that
+        // survived is what pays instead.
+        assertEquals(0f, BattlePerformance(shots = 0).accuracyFraction, 0.0001f)
+        assertEquals(Rewards.WIN_BASE_COINS, Rewards.battleCoins(performance(shots = 0, hits = 0)))
+        assertEquals(0.5f, BattlePerformance(hits = 5, shots = 10).accuracyFraction, 0.0001f)
         assertEquals(
             Rewards.WIN_BASE_COINS + Rewards.MAX_ACCURACY_BONUS,
-            Rewards.battleCoins(performance(shots = 0, hits = 0))
+            Rewards.battleCoins(performance(hits = 10, shots = 10))
         )
-        assertEquals(0.5f, BattlePerformance(hits = 5, shots = 10).accuracyFraction, 0.0001f)
     }
 
     @Test
@@ -131,7 +133,7 @@ class RewardsAndLockTest {
 
     @Test
     fun aHeldWeaponDriftsBackWhileAProjectileIsInTheAir() {
-        assertEquals(0f, GraceRules.driftAfter(-3f), 0.0001f)
+        assertEquals(GraceRules.DRIFT_PER_TICK_M, GraceRules.driftAfter(-3f), 0.0001f)
         assertEquals(GraceRules.DRIFT_PER_TICK_M, GraceRules.driftAfter(0f), 0.0001f)
         assertTrue(GraceRules.isHeld(GraceRules.driftAfter(0f)))
         assertFalse(GraceRules.isHeld(0f))

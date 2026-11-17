@@ -218,7 +218,7 @@ class StringsAndGunRulesTest {
             assertTrue(Strings.get("itemMissingTail", lang).isNotBlank())
             assertTrue(Strings.get("robertFled", lang).isNotBlank())
             assertTrue(Strings.get("matchWon", lang).isNotBlank())
-            assertTrue(Strings.get("version", lang).contains("1.1") || Strings.get("version", lang).contains("१.१"))
+            assertTrue(Strings.get("version", lang).contains("1.2") || Strings.get("version", lang).contains("१.२"))
             for (key in listOf(
                 "unlockAfterRound1", "unlockAfterRound2", "unlockAfterRound3",
                 "unlockAfterRound4", "antiMissileReward", "flatDamageInfo"

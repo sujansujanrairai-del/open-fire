@@ -61,33 +61,33 @@ class LoanPauseAndProjectileIntegrationTest {
         flow<GameStats>(vm, "_stats").value = vm.stats.value.copy(coins = 90)
         flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
         flow<GameState>(vm, "_gameState").value = GameState(
-            // A won battle is paid from its performance: the win base 200, the
-            // landed weapon power 750, no shock, no health kept because the
-            // bar is empty, and the full 150 accuracy credit for a fight
-            // without a single shot = 1100 gross.
+            // A won battle is paid from its performance: the win base 200 plus
+            // the landed weapon power 750; the bar is empty and no shot was
+            // fired, so neither the health nor the accuracy bonus applies.
+            // 950 gross, 950 withheld, 550 still owed.
             playerHp = 0, playerMaxHp = 2600, robertHp = 0, robertMaxHp = 2600,
             playerFirePower = 750
         )
-        invoke(vm, "endGame", true, false) // 1100 gross
+        invoke(vm, "endGame", true, false) // 950 gross
         assertEquals(Screen.RESULT, vm.currentScreen.value)
-        assertEquals(1100, vm.resultData.value.coins)
-        assertEquals(1100, vm.resultData.value.loanDeducted)
-        assertEquals(400, vm.resultData.value.loanRemaining)
+        assertEquals(950, vm.resultData.value.coins)
+        assertEquals(950, vm.resultData.value.loanDeducted)
+        assertEquals(550, vm.resultData.value.loanRemaining)
         assertEquals(90, PreferencesManager(app).loadStats().coins)
-        assertEquals(400, PreferencesManager(app).loadStats().loanBalance)
+        assertEquals(550, PreferencesManager(app).loadStats().loanBalance)
 
         flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
         flow<GameState>(vm, "_gameState").value = GameState(
-            // 200 win base + 300 weapon power + 57 health kept of 2600 +
-            // 150 accuracy credit = 707 gross, 400 withheld, 307 credited.
+            // 200 win base + 300 weapon power + 57 health kept of 2600 =
+            // 557 gross, 550 withheld, 7 credited.
             playerHp = 600, playerMaxHp = 2600, robertHp = 0, robertMaxHp = 2600,
             playerFirePower = 300
         )
-        invoke(vm, "endGame", true, false) // 707 gross, 400 withheld, 307 credited
-        assertEquals(707, vm.resultData.value.coins)
-        assertEquals(400, vm.resultData.value.loanDeducted)
+        invoke(vm, "endGame", true, false) // 557 gross, 550 withheld, 7 credited
+        assertEquals(557, vm.resultData.value.coins)
+        assertEquals(550, vm.resultData.value.loanDeducted)
         assertEquals(0, vm.resultData.value.loanRemaining)
-        assertEquals(397, PreferencesManager(app).loadStats().coins)
+        assertEquals(97, PreferencesManager(app).loadStats().coins)
         assertEquals(0, PreferencesManager(app).loadStats().loanBalance)
         flow<Screen>(vm, "_currentScreen").value = Screen.SHOP
         vm.takeLoan(500)

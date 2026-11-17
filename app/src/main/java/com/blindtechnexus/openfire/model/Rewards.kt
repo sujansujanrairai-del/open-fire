@@ -80,15 +80,9 @@ data class BattlePerformance(
             (playerHp.toFloat() / playerMaxHp.toFloat()).coerceIn(0f, 1f)
         }
 
-    /**
-     * Share of the player's shots that really landed (0..1).
-     *
-     * A fight without a single shot is not an inaccurate fight: a player who
-     * ended it with the electric shock is paid the full accuracy credit, so
-     * the accuracy bonus never punishes a legitimate way of fighting.
-     */
+    /** Share of the player's shots that really landed (0..1). */
     val accuracyFraction: Float
-        get() = if (shots <= 0) 1f else (hits.toFloat() / shots.toFloat()).coerceIn(0f, 1f)
+        get() = if (shots <= 0) 0f else (hits.toFloat() / shots.toFloat()).coerceIn(0f, 1f)
 }
 
 /**

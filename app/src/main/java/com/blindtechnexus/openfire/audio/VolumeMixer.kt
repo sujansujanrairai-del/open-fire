@@ -254,11 +254,13 @@ object VolumeMixer {
     }
 
     /**
-     * The quietest a positional sound ever becomes at the far edge. It is
-     * deliberately high enough that a machine gun or an atom bomb fired from
-     * the opposite corner is still clearly audible.
+     * The quietest a positional sound ever becomes at the far edge. A far
+     * sound stays present but unmistakably distant, and the loud weapons are
+     * separately lifted to the speech level ([LOUD_SFX_KEYS]), so a machine gun
+     * or an atom bomb fired from the opposite corner is still clearly audible
+     * without smearing the whole battlefield into one loud mix.
      */
-    const val DISTANCE_FLOOR = 0.35f
+    const val DISTANCE_FLOOR = 0.08f
 
     /** Footsteps use the very same distance curve as everything else. */
     fun walkDistanceGain(distance: Float, maxRange: Float): Float =
