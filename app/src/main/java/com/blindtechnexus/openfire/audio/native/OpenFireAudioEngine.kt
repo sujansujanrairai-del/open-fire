@@ -75,6 +75,13 @@ class OpenFireAudioEngine(context: Context) {
             }
         }
 
+        /**
+         * How often the live stream is re-checked while the game plays. The
+         * check is one lock-free boolean read in C++, but there is no reason
+         * to ask it for every single shot.
+         */
+        private const val STREAM_CHECK_INTERVAL_MS = 400L
+
         /* ------------------------------------------------------------- natives */
 
         @JvmStatic private external fun create(): Long
@@ -103,6 +110,7 @@ class OpenFireAudioEngine(context: Context) {
         @JvmStatic private external fun info(handle: Long): NativeStreamInfo?
         @JvmStatic private external fun activeVoices(handle: Long): Int
         @JvmStatic private external fun isKeySounding(handle: Long, keyId: Int): Boolean
+        @JvmStatic private external fun isVoiceSounding(handle: Long, voiceId: Int): Boolean
 
         /**
          * The 32-bit hash of a sound key. Every stop-by-key call uses it, so
@@ -131,6 +139,15 @@ class OpenFireAudioEngine(context: Context) {
     private val clipIds = HashMap<String, Int>()
     private val clipLock = Any()
 
+    /** The output rate the uploaded clips were resampled to, or 0. */
+    @Volatile
+    private var loadedSampleRate: Int = 0
+
+    /** When the stream was last checked, so a play never probes on every shot. */
+    @Volatile
+    private var lastStreamCheckMs: Long = 0L
+    private val streamLock = Any()
+
     /** Per-thread parameter buffers: public calls may arrive concurrently. */
     private val scratch = ThreadLocal.withInitial { IntArray(PARAM_COUNT) }
 
@@ -140,10 +157,11 @@ class OpenFireAudioEngine(context: Context) {
                 handle = create()
             } catch (error: Throwable) {
                 Log.e(TAG, "Could not create the native engine", error)
+                unavailableReason = error.message ?: "the native engine could not be created"
                 handle = 0L
             }
         } else {
-            unavailableReason = "library"
+            unavailableReason = "the native audio library could not be loaded"
         }
         if (handle != 0L) {
             val result = try {
@@ -153,8 +171,69 @@ class OpenFireAudioEngine(context: Context) {
                 -1
             }
             available = result == 0
-            if (!available) unavailableReason = "stream"
+            if (!available) {
+                unavailableReason = "the output stream could not be opened"
+            } else {
+                loadedSampleRate = streamInfo()?.sampleRate ?: 0
+            }
         }
+    }
+
+    /**
+     * Makes sure the Oboe stream is still running before a sound is posted.
+     *
+     * A stream really can stop: a route change the error callback could not
+     * recover, a vendor stack that reclaims the device, an app that came back
+     * from a long background pause. Every request would then be posted to a
+     * callback that never runs, and the game would stay silent for the rest of
+     * the process. This re-opens the stream once the check fails, and it is
+     * throttled so a burst of shots still costs one lock-free native read.
+     */
+    fun ensureStream(): Boolean {
+        if (handle == 0L) return false
+        val now = System.nanoTime() / 1_000_000L
+        if (now - lastStreamCheckMs < STREAM_CHECK_INTERVAL_MS) return available
+        var reloadClips = false
+        synchronized(streamLock) {
+            if (now - lastStreamCheckMs < STREAM_CHECK_INTERVAL_MS) return available
+            lastStreamCheckMs = now
+            val running = try {
+                isRunning(handle)
+            } catch (_: Throwable) {
+                false
+            }
+            if (running) {
+                available = true
+                return true
+            }
+            val result = try {
+                start(handle)
+            } catch (error: Throwable) {
+                Log.e(TAG, "Could not restart the native stream", error)
+                -1
+            }
+            if (result != 0) {
+                available = false
+                unavailableReason = "the output stream could not be reopened"
+                return false
+            }
+            available = true
+            unavailableReason = null
+            // Clips are resampled once, at load time: a stream that came back
+            // on another rate needs its catalogue resampled as well. The
+            // catalogue is dropped outside this lock, so a decoder thread that
+            // holds the clip lock can never meet this one head on.
+            val rate = streamInfo()?.sampleRate ?: 0
+            if (rate > 0) {
+                if (loadedSampleRate > 0 && rate != loadedSampleRate) reloadClips = true
+                loadedSampleRate = rate
+            }
+        }
+        if (reloadClips) {
+            Log.i(TAG, "The output rate changed; reloading the sounds")
+            unloadAllClips()
+        }
+        return true
     }
 
     /* ------------------------------------------------------------------ clips */
@@ -165,6 +244,7 @@ class OpenFireAudioEngine(context: Context) {
      */
     fun loadClip(file: String): Int {
         if (handle == 0L) return 0
+        if (!ensureStream()) return 0
         synchronized(clipLock) {
             clipIds[file]?.let { return it }
             val decoded = try {
@@ -173,6 +253,12 @@ class OpenFireAudioEngine(context: Context) {
                 Log.e(TAG, "Could not decode sounds/$file", error)
                 null
             } ?: return 0
+            if (decoded.frames <= 0 || decoded.channels <= 0 ||
+                decoded.frames * decoded.channels > decoded.samples.size
+            ) {
+                Log.e(TAG, "sounds/$file decoded to an impossible geometry")
+                return 0
+            }
             val id = try {
                 loadClip(handle, decoded.samples, decoded.frames, decoded.channels, decoded.sampleRate)
             } catch (error: Throwable) {
@@ -199,6 +285,19 @@ class OpenFireAudioEngine(context: Context) {
             false
         }
     }
+
+    /** True while this exact voice id is still in the mixer pool. */
+    fun isVoiceSounding(voiceId: Int): Boolean {
+        if (handle == 0L || voiceId <= 0) return false
+        return try {
+            isVoiceSounding(handle, voiceId)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /** Number of assets uploaded to the engine right now. */
+    val clipCount: Int get() = synchronized(clipLock) { clipIds.size }
 
     /** Drops every uploaded clip (a full reset of the audio stack). */
     fun unloadAllClips() {
@@ -240,6 +339,7 @@ class OpenFireAudioEngine(context: Context) {
         delayMs: Int = 0
     ): Int {
         if (handle == 0L || clipId <= 0) return 0
+        if (!ensureStream()) return 0
         pack(clipId, key, owner, flags, volume, rate, pan, distance, rear, approach,
             deadlineMs, startOffsetMs, maxDistanceM, delayMs)
         return try {
@@ -371,6 +471,7 @@ class OpenFireAudioEngine(context: Context) {
         val current = handle
         handle = 0L
         available = false
+        loadedSampleRate = 0
         if (current == 0L) return
         try {
             stopStream(current)
@@ -381,6 +482,20 @@ class OpenFireAudioEngine(context: Context) {
         } catch (_: Throwable) {
         }
         synchronized(clipLock) { clipIds.clear() }
+    }
+
+    /**
+     * One line that explains the native audio state: the negotiated stream,
+     * how many sounds are loaded, and - when it is not working - why.
+     */
+    fun diagnostics(): String {
+        if (handle == 0L) {
+            return "Native audio engine unavailable (${unavailableReason ?: "unknown reason"})"
+        }
+        val line = streamInfo()?.summary
+            ?: return "Native audio engine present, stream details unavailable"
+        val state = if (available) "streaming" else "stream stopped"
+        return "$line, $clipCount clips, $state"
     }
 
     /* ------------------------------------------------------------------ pack */

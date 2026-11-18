@@ -40,6 +40,14 @@ class NativeMixer(context: Context) {
 
         /** How many voice handles are remembered at most. */
         private const val MAX_HANDLES = 512
+
+        /**
+         * How long a freshly started loop voice is trusted before its liveness
+         * is questioned. The audio callback publishes a new voice within one
+         * block (a few milliseconds), so a quarter second is far more than the
+         * engine ever needs - and it makes a repeated start safe.
+         */
+        private const val LOOP_START_GRACE_MS = 250L
     }
 
     val engine = OpenFireAudioEngine(context)
@@ -53,6 +61,9 @@ class NativeMixer(context: Context) {
      * refresh does not have to ask the engine for them.
      */
     private val loopVoices = ConcurrentHashMap<String, Int>()
+
+    /** When each loop voice id was handed out, for [loopVoiceIsGone]. */
+    private val loopStartedAtMs = ConcurrentHashMap<String, Long>()
 
     /**
      * Loops that were asked for while their clip was still decoding. They are
@@ -291,9 +302,17 @@ class NativeMixer(context: Context) {
         val slotKey = "$owner|$key"
         val flags = buildFlags(key, place, 0, -1f, loops = true, critical = critical)
         val existing = loopVoices[slotKey]
-        if (existing != null && existing > 0) {
+        if (existing != null && existing > 0 && loopVoiceIsGone(slotKey, existing)) {
+            // The voice behind this slot ended or was stopped by another path
+            // (a stop-by-key, a route change that cleared the mix). Forget it
+            // and open a fresh one instead of updating an id that is gone.
+            loopVoices.remove(slotKey, existing)
+            loopStartedAtMs.remove(slotKey)
+        }
+        val live = loopVoices[slotKey]
+        if (live != null && live > 0) {
             engine.update(
-                voiceId = existing,
+                voiceId = live,
                 key = key,
                 owner = owner,
                 flags = flags,
@@ -305,7 +324,7 @@ class NativeMixer(context: Context) {
                 approach = 0f,
                 maxDistanceM = Combat.MAX_RANGE.toInt()
             )
-            return existing
+            return live
         }
         val cached = engine.loadClipIfPresent(file)
         if (cached <= 0) {
@@ -348,7 +367,10 @@ class NativeMixer(context: Context) {
                 delayMs = startDelayMs
             )
             record.voiceId = id
-            if (id > 0) loopVoices[slotKey] = id
+            if (id > 0) {
+                loopVoices[slotKey] = id
+                loopStartedAtMs[slotKey] = nowMs()
+            }
         }
         return record.voiceId
     }
@@ -366,7 +388,10 @@ class NativeMixer(context: Context) {
             startOffsetMs = pending.startOffsetMs,
             startDelayMs = pending.startDelayMs
         )
-        if (id > 0) loopVoices[slotKey] = id
+        if (id > 0) {
+            loopVoices[slotKey] = id
+            loopStartedAtMs[slotKey] = nowMs()
+        }
     }
 
     /**
@@ -381,7 +406,15 @@ class NativeMixer(context: Context) {
         owner: Int = OpenFireAudioEngine.OWNER_NONE
     ) {
         if (!available) return
-        val id = loopVoices["$owner|$key"] ?: return
+        val slotKey = "$owner|$key"
+        val id = loopVoices[slotKey] ?: return
+        if (loopVoiceIsGone(slotKey, id)) {
+            // Nothing to retune: drop the dead slot so the next start opens a
+            // real voice again.
+            loopVoices.remove(slotKey, id)
+            loopStartedAtMs.remove(slotKey)
+            return
+        }
         val flags = buildFlags(key, place, 0, -1f, loops = true, critical = true)
         engine.update(
             voiceId = id,
@@ -410,6 +443,7 @@ class NativeMixer(context: Context) {
     fun stopLoop(key: String, owner: Int = OpenFireAudioEngine.OWNER_NONE) {
         val slotKey = "$owner|$key"
         pendingLoops.remove(slotKey)
+        loopStartedAtMs.remove(slotKey)
         if (!available) return
         val id = loopVoices.remove(slotKey) ?: return
         engine.stopVoice(id)
@@ -423,6 +457,7 @@ class NativeMixer(context: Context) {
         if (!available) return
         val ids = loopVoices.keys.filter { it.endsWith("|$key") }
         for (slotKey in ids) {
+            loopStartedAtMs.remove(slotKey)
             val id = loopVoices.remove(slotKey) ?: continue
             engine.stopVoice(id)
         }
@@ -434,6 +469,7 @@ class NativeMixer(context: Context) {
         if (!available) return
         val ids = loopVoices.keys.filter { it.startsWith("$owner|") }
         for (slotKey in ids) {
+            loopStartedAtMs.remove(slotKey)
             val id = loopVoices.remove(slotKey) ?: continue
             engine.stopVoice(id)
         }
@@ -449,7 +485,9 @@ class NativeMixer(context: Context) {
     /** Stops every sound of one key that belongs to [owner]. */
     fun stopOwnerKey(owner: Int, key: String) {
         if (!available) return
-        loopVoices.remove("$owner|$key")?.let { engine.stopVoice(it) }
+        val slotKey = "$owner|$key"
+        loopStartedAtMs.remove(slotKey)
+        loopVoices.remove(slotKey)?.let { engine.stopVoice(it) }
         engine.stopOwnerKey(owner, key)
     }
 
@@ -497,6 +535,7 @@ class NativeMixer(context: Context) {
         if (!available) return
         pendingLoops.clear()
         loopVoices.clear()
+        loopStartedAtMs.clear()
         handles.clear()
         engine.stopAll()
     }
@@ -521,18 +560,35 @@ class NativeMixer(context: Context) {
     }
 
     /** Live stream diagnostics; the guide speaks them. */
-    fun diagnostics(): String =
-        engine.streamInfo()?.summary ?: "Native audio engine unavailable"
+    fun diagnostics(): String = engine.diagnostics()
 
     fun release() {
         pendingLoops.clear()
         loopVoices.clear()
+        loopStartedAtMs.clear()
         handles.clear()
         decodeExecutor.shutdownNow()
         engine.release()
     }
 
     // ------------------------------------------------------------- internals
+
+    /**
+     * True when the voice remembered for [slotKey] is really gone.
+     *
+     * The audio callback publishes a new voice a few milliseconds after it was
+     * created, so an id younger than [LOOP_START_GRACE_MS] is always trusted.
+     * Only a voice that never appears - or one that ended or was stopped by
+     * another path - is replaced, which keeps a repeated start from layering a
+     * second copy of the same loop on top of the first one.
+     */
+    private fun loopVoiceIsGone(slotKey: String, voiceId: Int): Boolean {
+        if (engine.isVoiceSounding(voiceId)) return false
+        val startedAt = loopStartedAtMs[slotKey] ?: return true
+        return nowMs() - startedAt > LOOP_START_GRACE_MS
+    }
+
+    private fun nowMs(): Long = System.nanoTime() / 1_000_000L
 
     private fun buildFlags(
         key: String,

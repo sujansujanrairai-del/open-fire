@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Make the native engine play again: `JNI_OnLoad` looked the `NativeStreamInfo` constructor up with the wrong JNI descriptor (`(IIIIZIII)V` instead of `(IIIZZIII)V`), so `System.loadLibrary` failed and every effect of the game was silently dropped. The bridge now uses the exact descriptor, treats a missing diagnostics type as non-fatal, binds the natives wherever the Kotlin compiler places them, and logs the reason when the stream cannot open. The engine also reopens a stream that stopped, reloads its sounds if the output rate changed, and the background music resumes and rebuilds itself instead of staying silent after a paused match.
 - Replace the sound player with a native low-latency engine: a C++17 mixer on top of Oboe 1.11.0 with a 128-voice pool, per-voice gain ramps, a fractional interaural time delay, a head shadow and pitch-preserving rate changes. A voice now carries a position (left/right, distance, front/back), so a projectile really travels in from far away to nearby and back, and every interaction is heard on the next mixing block. If the library or the stream cannot start, the game stays playable in silence instead of crashing.
 - Greet the player on launch, once per process: the title, who made it, and what to do next, in the chosen language.
 - Stop the car from braking in a loop: a parked car tolerates a one-metre gap, so a standing enemy cannot make it start and brake over and over, and the brake is heard once.

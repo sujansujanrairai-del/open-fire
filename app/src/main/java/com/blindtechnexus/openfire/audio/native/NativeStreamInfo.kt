@@ -21,7 +21,12 @@ data class NativeStreamInfo(
 ) {
     /** One line, spoken by the audio diagnostics of the guide. */
     val summary: String
-        get() = "$sampleRate Hz, $framesPerBurst frames per burst, " +
-            if (isLowLatency) "low latency" else "shared" +
-            ", $activeVoices voices"
+        get() {
+            // The path name is built first on purpose: mixing `+` and
+            // `if`/`else` in one expression drops the voices count from the
+            // low-latency branch.
+            val path = if (isLowLatency) "low latency" else "shared"
+            return "$sampleRate Hz, $framesPerBurst frames per burst, $path, " +
+                "$activeVoices voices"
+        }
 }

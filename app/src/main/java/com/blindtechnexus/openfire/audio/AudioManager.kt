@@ -182,6 +182,10 @@ class AudioManager(private val context: Context) {
     @Volatile
     private var musicWanted = false
 
+    /** True once a broken music player has been rebuilt at this level. */
+    @Volatile
+    private var musicRebuildTried = false
+
     /** The handle of the projectile voice that carries the approach cue. */
     @Volatile
     private var projectileHandle: Int = 0
@@ -934,6 +938,11 @@ class AudioManager(private val context: Context) {
     fun startMusic() {
         if (released) return
         musicWanted = true
+        // A menu is never a frozen battle. A match paused with the three-finger
+        // gesture leaves the whole engine paused, and without resuming it here
+        // the theme - and every menu effect after it - would stay silent for
+        // the rest of the process.
+        mixer.resume()
         val existing = music
         if (existing != null) {
             applyMusicVolume()
@@ -945,6 +954,17 @@ class AudioManager(private val context: Context) {
             }
             return
         }
+        buildMusicPlayer()
+    }
+
+    /**
+     * Creates a looping music player and starts it as soon as it is prepared.
+     *
+     * A track the platform refuses (a codec fault, a route that just moved)
+     * drops the player and rebuilds it once instead of leaving the game silent
+     * until the next screen change.
+     */
+    private fun buildMusicPlayer() {
         val player = MediaPlayer()
         try {
             player.setAudioAttributes(
@@ -961,12 +981,20 @@ class AudioManager(private val context: Context) {
             player.setVolume(level, level)
             player.setOnPreparedListener(object : MediaPlayer.OnPreparedListener {
                 override fun onPrepared(prepared: MediaPlayer) {
+                    musicRebuildTried = false
                     if (musicWanted && !mixer.paused) {
                         try {
                             prepared.start()
                         } catch (_: Exception) {
                         }
                     }
+                }
+            })
+            player.setOnErrorListener(object : MediaPlayer.OnErrorListener {
+                override fun onError(broken: MediaPlayer, what: Int, extra: Int): Boolean {
+                    // Only the player that is still current may be replaced.
+                    if (music === broken) handleMusicFailure()
+                    return true
                 }
             })
             player.prepareAsync()
@@ -976,11 +1004,28 @@ class AudioManager(private val context: Context) {
                 player.release()
             } catch (_: Throwable) {
             }
+            handleMusicFailure()
         }
+    }
+
+    /** Drops a broken player and rebuilds it once, never in an endless loop. */
+    private fun handleMusicFailure() {
+        val broken = music
+        music = null
+        if (broken != null) {
+            try {
+                broken.release()
+            } catch (_: Throwable) {
+            }
+        }
+        if (!musicWanted || released || musicRebuildTried) return
+        musicRebuildTried = true
+        buildMusicPlayer()
     }
 
     fun stopMusic() {
         musicWanted = false
+        musicRebuildTried = false
         val player = music ?: return
         music = null
         try {

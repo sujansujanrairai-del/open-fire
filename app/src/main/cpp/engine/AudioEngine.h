@@ -96,7 +96,9 @@ public:
     void setMasterGain(float gain) { mixer_.setMasterGain(gain); }
     void setPaused(bool paused);
 
-    bool isKeySounding(int32_t keyId) { return mixer_.isKeySounding(keyId); }
+    bool isKeySounding(int32_t keyId) const { return mixer_.isKeySounding(keyId); }
+
+    bool isVoiceSounding(int32_t voiceId) const { return mixer_.isVoiceSounding(voiceId); }
 
     of_stream_info info() const;
 
@@ -132,11 +134,6 @@ private:
     std::atomic<int32_t> sampleRate_{kPreferredSampleRate};
     std::atomic<int32_t> framesPerBurst_{0};
     std::atomic<bool> lowLatency_{false};
-
-    /* Scratch buffers, sized when the stream opens; only the mixer touches them. */
-    std::vector<float> mixBuffer_;
-    int32_t mixCapacityFrames_ = 0;
-
 };
 
 }  // namespace openfire

@@ -160,6 +160,15 @@ void of_engine_stop_stream(of_engine* engine);
 /** True (1) while a voice of this sound key is still sounding. */
 int32_t of_engine_is_key_sounding(of_engine* engine, int32_t key_id);
 
+/**
+ * True (1) while this exact voice id is still in the mixer pool.
+ *
+ * A caller that remembers a voice id (a held loop, a projectile) uses this to
+ * notice that the voice has ended or been stopped by another path, so it can
+ * start a fresh one instead of updating an id that no longer exists.
+ */
+int32_t of_engine_is_voice_sounding(of_engine* engine, int32_t voice_id);
+
 /** Reads the current stream information. */
 of_stream_info of_engine_info(of_engine* engine);
 

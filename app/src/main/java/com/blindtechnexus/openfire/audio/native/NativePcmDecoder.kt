@@ -30,10 +30,22 @@ class DecodedClip(
  * Only the decode touches Android; the engine never decodes anything at play
  * time. Both mono and stereo recordings are kept in their own channel count,
  * so a genuine stereo recording (the car engine, the music) keeps its image.
+ *
+ * The decoder is driven to completion here rather than on a timer, and the
+ * frame count that is reported back always matches the samples that were
+ * actually copied: the native loader trusts `frames * channels` and would
+ * otherwise read past the array.
  */
 object NativePcmDecoder {
 
     private const val TIMEOUT_US = 10_000L
+
+    /**
+     * How many consecutive 10 ms stalls are tolerated before the decode is
+     * abandoned. A healthy decoder never stalls for long; a vendor codec that
+     * does must not pin a background thread of the game forever.
+     */
+    private const val MAX_STALLS = 500
 
     /** Decodes the asset behind [afd], or null when it is not an audio file. */
     fun decode(afd: AssetFileDescriptor): DecodedClip? {
@@ -65,12 +77,15 @@ object NativePcmDecoder {
             var floatPcm = false
             var inputDone = false
             var outputDone = false
+            var stalls = 0
             val bufferInfo = MediaCodec.BufferInfo()
 
             while (!outputDone) {
+                var progressed = false
                 if (!inputDone) {
                     val inputIndex = codec.dequeueInputBuffer(TIMEOUT_US)
                     if (inputIndex >= 0) {
+                        progressed = true
                         val buffer = codec.getInputBuffer(inputIndex)
                         val size = if (buffer != null) extractor.readSampleData(buffer, 0) else -1
                         if (size < 0) {
@@ -88,6 +103,7 @@ object NativePcmDecoder {
                 when {
                     outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
                     outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        progressed = true
                         val changed = codec.outputFormat
                         sampleRate = changed.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                         channels = changed.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
@@ -96,16 +112,21 @@ object NativePcmDecoder {
                             AudioFormat.ENCODING_PCM_FLOAT
                     }
                     outputIndex >= 0 -> {
+                        progressed = true
                         val buffer = codec.getOutputBuffer(outputIndex)
                         if (buffer != null && bufferInfo.size > 0) {
-                            buffer.position(bufferInfo.offset)
-                            buffer.limit(bufferInfo.offset + bufferInfo.size)
-                            appendFrames(
-                                builder,
-                                buffer.slice().order(ByteOrder.LITTLE_ENDIAN),
-                                channels,
-                                floatPcm
-                            )
+                            val start = bufferInfo.offset
+                            val end = start + bufferInfo.size
+                            if (start >= 0 && end <= buffer.capacity()) {
+                                buffer.position(start)
+                                buffer.limit(end)
+                                appendFrames(
+                                    builder,
+                                    buffer.slice().order(ByteOrder.LITTLE_ENDIAN),
+                                    channels,
+                                    floatPcm
+                                )
+                            }
                         }
                         codec.releaseOutputBuffer(outputIndex, false)
                         if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
@@ -113,13 +134,24 @@ object NativePcmDecoder {
                         }
                     }
                 }
+                if (progressed) {
+                    stalls = 0
+                } else if (++stalls > MAX_STALLS) {
+                    return null
+                }
             }
+
             val samples = builder.toArray()
-            if (samples.isEmpty() || sampleRate <= 0 || channels <= 0) return null
+            // One channel count is used for the whole clip: a recording with
+            // more than two channels is folded to stereo by `appendFrames`,
+            // and the frame count has to describe exactly that layout.
+            val outputChannels = channels.coerceIn(1, 2)
+            if (samples.isEmpty() || sampleRate <= 0 || outputChannels <= 0) return null
+            if (samples.size % outputChannels != 0) return null
             return DecodedClip(
                 samples = samples,
-                frames = samples.size / channels,
-                channels = channels,
+                frames = samples.size / outputChannels,
+                channels = outputChannels,
                 sampleRate = sampleRate
             )
         } catch (_: Exception) {
