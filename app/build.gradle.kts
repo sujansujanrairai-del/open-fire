@@ -92,6 +92,22 @@ android {
 
     multiDexEnabled = true
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // The audio engine is written in C++ around Google Oboe. It is built for
+    // every ABI the app ships, so a 64-bit-only device and a 32-bit one both
+    // get the low-latency engine.
+    ndk {
+      abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64"))
+    }
+    externalNativeBuild {
+      cmake {
+        arguments += listOf(
+          "-DANDROID_STL=c++_shared",
+          "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+        )
+        cppFlags += listOf("-std=c++17")
+      }
+    }
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -162,6 +178,22 @@ android {
     compose = true
     buildConfig = true
   }
+  /**
+   * The native audio engine (Google Oboe, C++17) is built by CMake from
+   * app/src/main/cpp. Oboe is vendored there, so the build is hermetic: no
+   * network access and no Prefab dependency.
+   */
+  externalNativeBuild {
+    cmake {
+      path = file("src/main/cpp/CMakeLists.txt")
+      version = "3.22.1"
+    }
+  }
+  /**
+   * NDK r28 builds 16 KB page aligned native libraries by default, which is
+   * what Android 15+ devices with 16 KB pages require.
+   */
+  ndkVersion = "28.2.13676358"
   testOptions { unitTests { isIncludeAndroidResources = true } }
   dependenciesInfo {
     includeInApk = false
@@ -169,6 +201,8 @@ android {
   }
   packaging {
     jniLibs {
+      // Uncompressed, 16 KB aligned native libraries: required for the
+      // Android 15+ 16 KB page size devices and for a small install size.
       useLegacyPackaging = false
     }
     dex {

@@ -48,6 +48,37 @@ object SoundDurations {
 
     /** walk.ogg */
     const val WALK_MS = 9_800L
+
+    /**
+     * The measured length of a sound by its key.
+     *
+     * The audio layer asks this before it chains one sound after another, so
+     * a sequence (the engine start into the moving loop, a blast into a crash)
+     * stays sample-accurate without the audio engine having to decode the
+     * clip first. A key without a measured timer length answers 0, and the
+     * chain then starts both sounds together.
+     */
+    fun forKey(key: String): Long = when (key) {
+        "missile" -> MISSILE_MS
+        "explosion", "timerBomb" -> EXPLOSION_MS
+        "atomBomb" -> ATOM_BOMB_MS
+        "grenade" -> GRENADE_MS
+        "timerLoop" -> TIMER_LOOP_MS
+        "submachineGun", "submachineGunShot" -> SUBMACHINE_GUN_MS
+        "ak47", "ak47Shot" -> AK47_MS
+        "machineGun", "machineGunShot" -> MACHINE_GUN_MS
+        "awm" -> AWM_MS
+        "levelComplete" -> LEVEL_COMPLETE_MS
+        "roundComplete" -> ROUND_COMPLETE_MS
+        "wall" -> WALL_MS
+        "walk", "playerWalk", "enemyWalk" -> WALK_MS
+        "carStart" -> 3_410L
+        "carBrake" -> 2_630L
+        "carDoorOpen" -> 2_440L
+        "carDoorClose" -> 1_320L
+        "carCrash" -> 6_210L
+        else -> 0L
+    }
 }
 
 /** The three bombs of round three and later. */

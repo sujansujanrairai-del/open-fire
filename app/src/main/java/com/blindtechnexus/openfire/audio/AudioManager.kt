@@ -7,40 +7,47 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import com.blindtechnexus.openfire.audio.native.OpenFireAudioEngine
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.FireCadence
 import com.blindtechnexus.openfire.model.RunPressure
 import com.blindtechnexus.openfire.model.SoundDurations
 import com.blindtechnexus.openfire.model.SoundTheme
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
- * The game's sound system, built on one software mixer ([MixEngine]).
+ * The game's sound system, built on the native Oboe engine ([NativeMixer]).
  *
- * - Every sound effect is a voice in the mixer. Any number of voices play at
- *   the same time and are summed, so a sound never stops another sound to
- *   make room for itself, and there is no platform stream budget to run out.
- * - Sounds are decoded from their OGG assets once, on a background thread,
- *   and kept in memory as mono samples. A request never waits for a decoder:
- *   a cached clip starts on the very next 10 ms mixing block, and a cold clip
- *   decodes on its own priority lane instead of queuing behind anything else.
- * - Every sound plays at its natural pitch. Only the walking footsteps change
- *   their rate, and only to follow the real movement speed.
- * - A held weapon, a footstep or a charging device is a *loop voice* owned by
- *   the fighter that started it. Loops are keyed by owner, so the player's
- *   channel and Robert's channel can never start, stop or mask each other.
- * - Positional sounds follow one distance curve: low from far away, swelling
- *   as the source closes in and fading again as it recedes.
- * - Background music is the only stream left: one [MediaPlayer] that loops.
- * - Stops are immediate: a stopped voice fades out inside one 10 ms block.
+ * Design
+ * ------
+ *  - **Mixing is C++.** Every effect is a voice inside `libopenfire_audio.so`.
+ *    One Oboe callback renders all of them on the low-latency, exclusive
+ *    float stream, so a sound starts on the very next callback (a few
+ *    milliseconds) instead of on the next platform-player state change.
+ *  - **Placement belongs to the engine.** A voice carries a pan, a distance
+ *    and a front/rear sign; the engine applies the distance curve, the
+ *    constant-power pan, a fractional interaural delay and a head shadow. A
+ *    source therefore really travels from far away to nearby and back out.
+ *  - **Two fighters, one recording.** Robert walks on the same `walk.ogg` as
+ *    the player. They stay distinguishable through headphones because they
+ *    differ in placement, in arrival time, in pitch (the enemy is always a
+ *    little lower) and in loop phase (each start offset is different). No
+ *    mono sum of the two ever cancels them into one source.
+ *  - **Pacing is a rate.** Footsteps follow the three running levels with
+ *    three clearly different rates - slow, natural, fast - and a projectile
+ *    rises in pitch as it closes in.
+ *  - **This class keeps the game's vocabulary** so no call site of the battle
+ *    engine had to change: sound keys, loop ownership, bounded automatic
+ *    bursts, wall and car sequences, speech/effects balance and haptics.
+ *  - **Music is the one platform track.** The long background tune loops on a
+ *    [MediaPlayer]; it is the only streamed sound and it keeps its own volume
+ *    setting, separate from the effects bus.
+ *
+ * A device whose ABI is absent, or whose stream cannot open, ends up with
+ * [nativeAvailable] false: the game runs silently instead of crashing, and
+ * the music still plays.
  */
 class AudioManager(private val context: Context) {
 
@@ -48,135 +55,45 @@ class AudioManager(private val context: Context) {
         const val LOOP_OWNER_PLAYER = "player"
         const val LOOP_OWNER_ENEMY = "enemy"
 
-        /** Both owners, in the order every bulk clean-up walks them in. */
+        /** Both owners, in the order every bulk clean-up walks them. */
         val LOOP_OWNERS: List<String> = listOf(LOOP_OWNER_PLAYER, LOOP_OWNER_ENEMY)
 
-        /**
-         * Every sound key and the asset it plays, in `assets/sounds`.
-         *
-         * Each file of the directory is used by at least one key, and every key
-         * is used by the game code. Keys that share a file (the one-shot copies of
-         * the automatic weapons, the two footstep tracks, the land and the jump)
-         * are listed explicitly so the mapping stays readable.
-         */
-        val SOUND_FILES: Map<String, String> = mapOf(
-            "click" to "click.ogg",
-            "gunReload" to "gun-reload.ogg",
-            "assault" to "assault-gun.ogg",
-            "pistol" to "pistol-gun.ogg",
-            "shortGun" to "shotgun.ogg",
-            "sniperRifle" to "sniper-rifle.ogg",
-            "glueWallBreaker" to "glue-wall-breaker.ogg",
-            "m10" to "m10-gun.ogg",
-            "ar15" to "ar-15.ogg",
-            "awm" to "awm-rifle.ogg",
-            // Automatic weapons: the loop channel and its single-shot copy use the same recording.
-            "submachineGun" to "submachine-gun.ogg",
-            "ak47" to "ak-47-gun.ogg",
-            "machineGun" to "machine-gun.ogg",
-            "submachineGunShot" to "submachine-gun.ogg",
-            "ak47Shot" to "ak-47-gun.ogg",
-            "machineGunShot" to "machine-gun.ogg",
-            "knifeHit" to "knife-hit.ogg",
-            "knifeMiss" to "knife-miss.ogg",
-            "knifeSwitch" to "knife-switch.ogg",
-            "knifeSwish" to "knife-switch.ogg",
-            "swordHit" to "sword-hit.ogg",
-            "swordMiss" to "sword-miss.ogg",
-            "swordSwitch" to "sword-switch.ogg",
-            "swordGlide" to "sword-switch.ogg",
-            "glueSound" to "glue-sound.ogg",
-            "glueHit" to "glue-hit.ogg",
-            "glueWallCrack" to "glue-wall-crack.ogg",
-            "wall" to "wall-hit.ogg",
-            "cover" to "cover.ogg",
-            "coverHit" to "cover-hit.ogg",
-            "coverCrack" to "cover-crack.ogg",
-            "medkit" to "medkit.ogg",
-            "gunHit" to "gun-hit.ogg",
-            "enemyHit" to "enemy-hit.ogg",
-            "playerHit" to "player-hit.ogg",
-            "ammo" to "ammo.ogg",
-            "spend" to "spend.ogg",
-            "jump" to "jump.ogg",
-            "land" to "jump.ogg",
-            "airplane" to "airplane.ogg",
-            "airplaneEngine" to "airplane-engine.ogg",
-            "parachute" to "parachute.ogg",
-            "win" to "win.ogg",
-            "lose" to "lose.ogg",
-            "music" to "music.ogg",
-            "walk" to "walk.ogg",
-            "playerWalk" to "walk.ogg",
-            "enemyWalk" to "walk.ogg",
-            "missile" to "missile.ogg",
-            "explosion" to "explosion.ogg",
-            "atomBomb" to "atom-bomb.ogg",
-            "grenade" to "grenade.ogg",
-            "timerLoop" to "timer-countdown.ogg",
-            "timerBomb" to "explosion.ogg",
-            "levelComplete" to "level-complete.ogg",
-            "roundComplete" to "round-complete.ogg",
-            "carBrake" to "car-brake.ogg",
-            "carStart" to "car-start.ogg",
-            "carEngine" to "car-engine.ogg",
-            "carMoving" to "car-moving.ogg",
-            "carDoorOpen" to "car-door-open.ogg",
-            "carDoorClose" to "car-door-close.ogg",
-            "carCrash" to "car-crash.ogg",
-            "electricShock" to "electric-shock.ogg",
-            "magicalSound" to "magical-sound.ogg"
-        )
+        /** Every sound key and the asset it plays, in `assets/sounds`. */
+        val SOUND_FILES: Map<String, String> = SoundLibrary.SOUND_FILES
 
         /** The one-shot copy of each automatic weapon, mapped to its loop key. */
-        val AUTO_LOOP_OF: Map<String, String> = mapOf(
-            "submachineGunShot" to "submachineGun",
-            "ak47Shot" to "ak47",
-            "machineGunShot" to "machineGun"
-        )
+        val AUTO_LOOP_OF: Map<String, String> = SoundLibrary.AUTO_LOOP_OF
 
         /** The three continuous-fire weapons. Each one fires on a held loop. */
-        val AUTO_LOOP_KEYS: Set<String> = setOf("submachineGun", "ak47", "machineGun")
+        val AUTO_LOOP_KEYS: Set<String> = SoundLibrary.AUTO_LOOP_KEYS
 
         /** The single-shot copies of the automatic weapons. */
-        val AUTO_SHOT_KEYS: Set<String> = AUTO_LOOP_OF.keys
+        val AUTO_SHOT_KEYS: Set<String> = SoundLibrary.AUTO_SHOT_KEYS
 
         /** Every key an automatic weapon can be heard with. */
-        val AUTO_WEAPON_KEYS: Set<String> = AUTO_LOOP_KEYS + AUTO_SHOT_KEYS
+        val AUTO_WEAPON_KEYS: Set<String> = SoundLibrary.AUTO_WEAPON_KEYS
 
-        /**
-         * Held loops: the automatic weapons plus the electric shock, whose
-         * charging sound runs for as long as the trigger is held.
-         */
-        val HOLD_LOOP_KEYS: Set<String> = AUTO_LOOP_KEYS + setOf("magicalSound", "carMoving")
+        /** Held loops: the automatic weapons, the shock hum and the car. */
+        val HOLD_LOOP_KEYS: Set<String> = SoundLibrary.HOLD_LOOP_KEYS
 
-        /** Footstep tracks: each fighter walks on its own loop of the same recording. */
-        val WALK_KEYS: Set<String> = setOf("walk", "playerWalk", "enemyWalk")
+        /** Footstep tracks: each fighter walks on his own loop of the same recording. */
+        val WALK_KEYS: Set<String> = SoundLibrary.WALK_KEYS
 
         /**
          * Start offsets of the footstep loops. Both fighters use the same walk
-         * recording, so starting both at zero would phase-lock them into one source.
+         * recording, so starting both at zero would phase-lock them into one
+         * source.
          */
-        val WALK_START_OFFSET_MS: Map<String, Long> = mapOf(
-            "playerWalk" to 0L,
-            "enemyWalk" to 3_600L,
-            "walk" to 7_200L
-        )
+        val WALK_START_OFFSET_MS: Map<String, Long> = SoundLibrary.WALK_START_OFFSET_MS
 
         /** Every key that belongs to a weapon. Screen changes stop all of them. */
-        val WEAPON_SOUND_KEYS: Set<String> = setOf(
-            "assault", "pistol", "shortGun", "sniperRifle", "glueWallBreaker", "awm",
-            "m10", "ar15", "submachineGun", "ak47", "machineGun",
-            "submachineGunShot", "ak47Shot", "machineGunShot",
-            "knifeSwish", "knifeMiss", "swordGlide", "swordMiss",
-            "magicalSound", "electricShock"
-        )
+        val WEAPON_SOUND_KEYS: Set<String> = SoundLibrary.WEAPON_SOUND_KEYS
 
         /** Keys of the car sounds. They stop together when the battle ends. */
-        val CAR_KEYS: Set<String> = setOf(
-            "carBrake", "carStart", "carEngine", "carMoving",
-            "carDoorOpen", "carDoorClose", "carCrash"
-        )
+        val CAR_KEYS: Set<String> = SoundLibrary.CAR_KEYS
+
+        /** The car loops that are not firing loops: the idle engine note. */
+        val CAR_IDLE_LOOP_KEYS: Set<String> = SoundLibrary.CAR_IDLE_LOOP_KEYS
 
         /** Measured length of the sounds that drive a game timer. */
         val SOUND_DURATIONS_MS: Map<String, Long> = mapOf(
@@ -208,14 +125,29 @@ class AudioManager(private val context: Context) {
         /** The burst length of an automatic shot when the caller does not know the rhythm. */
         val DEFAULT_TAP_BURST_MS: Long = FireCadence.AUTO_FAST_MS
 
+        /**
+         * Pitch separation of the enemy's footsteps: he uses the same walk
+         * recording as the player, so a small, deliberate rate difference is
+         * what keeps the two loops from ever fusing into one source. Six
+         * percent is clearly audible and still natural.
+         */
+        const val ENEMY_WALK_RATE_FACTOR = 0.94f
+
         private const val MUSIC_KEY = "music"
     }
 
-    /** A held loop: its owner, its sound and the gains it currently plays at. */
+    /**
+     * A held loop: its owner, its sound, the two channel gains it is heard
+     * with, its playback rate and where it sits in the head model.
+     *
+     * The channel gains and the binaural position are what the game reads back
+     * (a walk that comes closer is louder, a source behind the listener has a
+     * positive [spatialPosition].rear). The native engine is the owner of the
+     * voice itself; this slot is the game-level record of one loop.
+     */
     private class LoopSlot(
         val key: String,
         val owner: String,
-        val id: Int,
         @Volatile var left: Float,
         @Volatile var right: Float,
         @Volatile var rate: Float,
@@ -223,57 +155,23 @@ class AudioManager(private val context: Context) {
         val startMs: Long
     )
 
-    /**
-     * Three dedicated lanes, so no audio work can ever queue behind another:
-     *
-     *  - the warm-up lane quietly decodes the whole library at the lowest
-     *    thread priority and is the only place that may take its time;
-     *  - the decode lane immediately decodes the clip of a sound that was
-     *    requested before its warm-up finished, at high priority;
-     *  - the chain lane schedules back-to-back sounds (the car door, the
-     *    engine start) and the trailing stop of [stopSound].
-     */
-    private val warmExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "OpenFireWarmup").apply {
-            priority = Thread.MIN_PRIORITY
-            isDaemon = true
-        }
-    }
+    /** The native mix bus. Every effect goes through it. */
+    internal val mixer = NativeMixer(context)
 
-    private val warmDispatcher = warmExecutor.asCoroutineDispatcher()
-
-    private val decodeExecutor = Executors.newFixedThreadPool(2) { runnable ->
-        Thread(runnable, "OpenFireDecode").apply {
-            priority = Thread.NORM_PRIORITY + 1
-            isDaemon = true
-        }
-    }
-
-    private val decodeDispatcher = decodeExecutor.asCoroutineDispatcher()
-
-    private val chainExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "OpenFireChain").apply {
-            priority = Thread.MAX_PRIORITY - 1
-            isDaemon = true
-        }
-    }
-
-    private val chainDispatcher = chainExecutor.asCoroutineDispatcher()
-
-    private val audioScope = CoroutineScope(SupervisorJob() + decodeDispatcher)
-
-    /** Decoded clips by asset file. Each file is decoded once, lanes never block each other. */
-    private val clips = ConcurrentHashMap<String, PcmClip>()
+    /** True when the native engine is open: effects are audible. */
+    val nativeAvailable: Boolean get() = mixer.available
 
     /**
-     * The mixer every effect is rendered by. Exposed read-only so the tests
-     * (and the settings screen) can assert the live effects bus without
-     * reaching into private state.
+     * The mix bus, under the name the audio tests and the settings screen use.
+     * [NativeMixer] is the engine of this build: it owns the Oboe stream, the
+     * clip cache and the SFX bus gain.
      */
-    internal val engine = MixEngine()
+    internal val engine: NativeMixer get() = mixer
 
-    /** Held loops by `owner|key`. */
+    /** Held loops by `owner|key`, in the order they were opened. */
     private val loops = ConcurrentHashMap<String, LoopSlot>()
+
+    /** Guards the create-or-move of a loop, so two callers cannot open two. */
     private val loopLock = Any()
 
     @Volatile
@@ -284,25 +182,23 @@ class AudioManager(private val context: Context) {
     @Volatile
     private var musicWanted = false
 
+    /** The handle of the projectile voice that carries the approach cue. */
+    @Volatile
+    private var projectileHandle: Int = 0
+
+    @Volatile
+    private var projectileLaunchM: Float = 0f
+
     /**
      * The user's effects setting. It is the single source of truth and it is
-     * applied LIVE, exactly once:
-     *
-     *  - the base and distance gain of a sound is baked into its voice when it
-     *    is created ([calculateSourceGains] deliberately does NOT apply the
-     *    slider);
-     *  - the slider itself is applied by the mixer on every block it renders,
-     *    so a change is heard on the very next block - including for a gunshot
-     *    or a walking loop that started before the slider moved.
-     *
-     * Applying it in the mixer and not in the voice is what keeps the level
-     * exact: moving the slider can never multiply a level twice, and no sound
-     * is ever stuck at the volume it was created with.
+     * applied LIVE: the engine applies the SFX bus gain on every block, so a
+     * change is heard on the sounds that are already playing and no voice is
+     * ever stuck at the level it was created with.
      */
     var sfxVolume: Float = 1.0f
         set(value) {
             field = VolumeMixer.clamp(value)
-            engine.sfxGain = field
+            mixer.sfxVolume = field
         }
 
     var musicVolume: Float = 1.0f
@@ -318,7 +214,7 @@ class AudioManager(private val context: Context) {
 
     /**
      * The sound theme names the flavour of the battlefield. It never changes
-     * the pitch of anything: every sound always plays at its natural pitch.
+     * the pitch of anything: every recording plays at its natural pitch.
      */
     var soundTheme: SoundTheme = SoundTheme.TACTICAL
 
@@ -338,51 +234,19 @@ class AudioManager(private val context: Context) {
     }
 
     init {
-        // Spin the mixer up before anything is requested: the AudioTrack is
-        // already running when the first click happens, so it is heard on the
-        // next 10 ms block instead of after the track starts up.
-        engine.start()
-        // Decode every sound on the quiet warm-up lane, so the first shot is
-        // never late and no decode can ever block an interaction.
-        audioScope.launch(warmDispatcher) {
-            for (file in SOUND_FILES.values.distinct()) {
-                if (released) break
-                if (file != "music.ogg") clipFor(file)
-            }
-        }
-    }
-
-    // ------------------------------------------------------------ decoding
-
-    /**
-     * Returns the decoded clip of [file], decoding it on first use. Null if it
-     * cannot be decoded. Each file is decoded exactly once; different files
-     * decode in parallel and a request for a warm clip never waits at all.
-     */
-    private fun clipFor(file: String): PcmClip? {
-        clips[file]?.let { return it }
-        return try {
-            clips.computeIfAbsent(file) { name ->
-                val decoded = context.assets.openFd("sounds/$name").use { PcmDecoder.decode(it) }
-                    ?: error("undecodable sound: $name")
-                PcmClip(decoded)
-            }
-        } catch (_: Exception) {
-            null
-        }
+        // The engine is already streaming, so the first click is heard on the
+        // very next Oboe callback. The library warms up in the background.
+        mixer.sfxVolume = sfxVolume
     }
 
     // ------------------------------------------------------------- spatial
 
     /**
-     * 3D spatial panning and distance attenuation.
+     * 3D panning and distance attenuation of one source.
      *
      * [x] is the sideways offset, [z] the distance along the line of sight. A
-     * sound with no real sideways offset is centred exactly, so running straight
-     * at the enemy never smears the image between the channels. The distance
-     * gain follows the one distance curve of the game: quiet from far away and
-     * swelling continuously as the source approaches, so an enemy heard from
-     * afar grows louder as he closes in and fades again as he moves away.
+     * sound with no real sideways offset is centred exactly, so running
+     * straight at the enemy never smears the image between the channels.
      */
     fun calculate3dVolume(
         x: Float = 0f,
@@ -390,51 +254,62 @@ class AudioManager(private val context: Context) {
         z: Float = 0f,
         baseVol: Float = 1.0f,
         key: String = ""
-    ): Pair<Float, Float> {
-        // The master effects setting is applied by the mixer, once, on every
-        // block; a voice only ever carries its base and distance gain.
-        return calculateSourceGains(x, y, z, baseVol, key)
-    }
+    ): Pair<Float, Float> = calculateSourceGains(x, y, z, baseVol, key)
 
-    // Source and distance gains are independent of the live master SFX bus.
-    private fun calculateSourceGains(x: Float, y: Float, z: Float, baseVol: Float, key: String): Pair<Float, Float> {
+    private fun calculateSourceGains(
+        x: Float,
+        y: Float,
+        z: Float,
+        baseVol: Float,
+        key: String
+    ): Pair<Float, Float> {
         val dist = sqrt(x * x + y * y + z * z)
         val distanceGain = VolumeMixer.distanceGain(dist, Combat.MAX_RANGE)
         val (left, right) = VolumeMixer.panGains(VolumeMixer.panFor(x, dist))
-        // A loud weapon ignores a cautious base volume: it is never mixed
-        // below the speech level of the game.
         val total = VolumeMixer.mix(key, 1f, effectiveBaseVolume(key, baseVol), distanceGain)
         return Pair(total * left, total * right)
     }
 
     /**
-     * The playback rate of a sound. Every sound plays at its natural pitch:
-     * [rate] is clamped into the natural window of [VolumeMixer.naturalRate]
-     * and the sound theme never shifts the pitch. Only the walking loops leave
-     * the exact natural rate, and only inside that same narrow window, so no
-     * recording can ever be heard chipped or squeaky.
-     */
-    private fun pitchFor(rate: Float): Float = VolumeMixer.naturalRate(rate)
-
-    /**
-     * The base level one requested sound is played with.
-     *
-     * The loud weapons - the machine gun, the submachine gun, the AK-47, the
-     * grenade, the atom bomb and the missile - are ALWAYS played at full
-     * scale, whatever base volume the caller passed, so they can never end up
-     * quieter than the speech that announces the battle. The SFX slider still
-     * scales the whole bus exactly once in the mixer, and the distance gain of
-     * a positional sound still applies.
+     * The level one requested sound is played with. The loud weapons are
+     * always played at full scale, so they can never be quieter than the
+     * speech that announces the battle; the SFX slider still scales the whole
+     * bus exactly once, inside the engine.
      */
     private fun effectiveBaseVolume(key: String, requested: Float): Float =
         if (VolumeMixer.isLoudSfx(key)) 1.0f else requested
+
+    /** Distance gain of a placed source, on the arena's own scale. */
+    private fun distanceGainOf(place: SpatialPlace): Float =
+        VolumeMixer.distanceGain(place.distance, Combat.MAX_RANGE)
+
+    /**
+     * Where a positional call site's raw coordinates sit: [x] is the sideways
+     * offset and [z] follows the game's own convention, a negative z being in
+     * front of the listener (`posZ = -distance`).
+     */
+    private fun placeOf(x: Float, z: Float): SpatialPlace = SpatialPlace.fromZ(x, z)
+
+    /** Where a source sits from its sideways offset and its forward distance. */
+    private fun placeAhead(lateral: Float, forward: Float): SpatialPlace =
+        SpatialPlace.fromOffset(lateral, forward)
+
+    /** The owner id the engine uses for a loop owner string. */
+    private fun ownerIdOf(owner: String): Int = when (owner) {
+        LOOP_OWNER_PLAYER -> OpenFireAudioEngine.OWNER_PLAYER
+        LOOP_OWNER_ENEMY -> OpenFireAudioEngine.OWNER_ENEMY
+        else -> OpenFireAudioEngine.OWNER_NONE
+    }
 
     // ------------------------------------------------------- one-shot sounds
 
     /**
      * Plays a sound effect as a new voice. Any number of the same sound may
-     * overlap. Returns a voice id, or -1 when the sound is unknown or the
-     * engine is released.
+     * overlap. Returns a voice handle, or -1 when the sound is unknown.
+     *
+     * The position is (sideways, forward) relative to the listener, so a
+     * source on the right is heard on the right and a source in front of the
+     * listener is heard in front of him.
      */
     fun playSound(
         key: String,
@@ -445,100 +320,77 @@ class AudioManager(private val context: Context) {
         posZ: Float = 0f
     ): Int {
         if (released || !SOUND_FILES.containsKey(key)) return -1
-        // An automatic weapon is never a whole multi-second recording here.
         if (key in AUTO_WEAPON_KEYS) {
-            return playAutomaticBurst(
-                key,
-                MAX_STRAY_AUTOMATIC_SHOT_MS,
-                volume = volume,
-                posX = posX,
-                posY = posY,
-                posZ = posZ
-            ).let { if (it) 1 else -1 }
+            return if (playAutomaticBurst(
+                    key,
+                    MAX_STRAY_AUTOMATIC_SHOT_MS,
+                    volume = volume,
+                    posX = posX,
+                    posY = posY,
+                    posZ = posZ
+                )
+            ) 1 else -1
         }
-        return oneShot(key, owner = "", volume = volume, rate = rate, posX = posX, posY = posY, posZ = posZ, deadlineMs = 0L)
+        val place = if (posX == 0f && posZ == 0f) null else placeOf(posX, posZ)
+        val approach = if (SoundLibrary.isProjectile(key)) 0f else -1f
+        val handle = mixer.playOneShot(
+            key = key,
+            volume = effectiveBaseVolume(key, volume),
+            rate = VolumeMixer.naturalRate(rate),
+            place = place,
+            deadlineMs = 0,
+            approachProximity = approach
+        )
+        if (SoundLibrary.isProjectile(key)) {
+            projectileHandle = handle
+            projectileLaunchM = sqrt(posX * posX + posY * posY + posZ * posZ)
+        }
+        triggerHapticForSound(key)
+        return handle
     }
 
     /**
-     * Plays [keys] one after another with no gap: each sound starts on the
-     * very frame the previous one ends. When [loopKey] is given, that loop
-     * starts on the frame the last sound ends and keeps going (the car start
-     * followed by the engine, or the brake followed by the engine).
-     *
-     * The whole chain is scheduled in one pass, so no sample of the chain can
-     * drift behind another, and the chain lane runs at top priority so a door
-     * or an engine sequence is never queued behind anything.
+     * Plays [keys] one after another with no gap and, when [loopKey] is
+     * given, starts that loop on the frame the last sound ends: the engine
+     * start followed by the moving loop, a blast followed by the crash.
      */
     fun playSequence(keys: List<String>, loopKey: String? = null, volume: Float = 1.0f) {
         if (released || keys.isEmpty()) return
         if (keys.any { !SOUND_FILES.containsKey(it) }) return
         if (loopKey != null && !SOUND_FILES.containsKey(loopKey)) return
-        audioScope.launch(chainDispatcher) {
-            if (released) return@launch
-            var offsetFrames = 0L
-            for (key in keys) {
-                val file = SOUND_FILES[key] ?: break
-                val clip = clips[file] ?: clipFor(file) ?: break
-                addChainVoice(key, clip, loop = false, offsetFrames = offsetFrames, volume = volume)
-                offsetFrames += clip.frames.toLong()
-            }
-            if (loopKey != null) {
-                val file = SOUND_FILES[loopKey] ?: return@launch
-                val clip = clips[file] ?: clipFor(file) ?: return@launch
-                addChainVoice(loopKey, clip, loop = true, offsetFrames = offsetFrames, volume = volume)
-            }
-        }
-    }
-
-    private fun addChainVoice(
-        key: String,
-        clip: PcmClip,
-        loop: Boolean,
-        offsetFrames: Long,
-        volume: Float
-    ) {
-        val gains = calculateSourceGains(0f, 0f, 0f, volume, key)
-        val voice = Voice(
-            id = engine.newId(),
-            key = key,
-            owner = "",
-            clip = clip,
-            loop = loop,
-            startFrame = -offsetFrames.toDouble(),
-            deadlineFrames = Long.MAX_VALUE,
-            enqueuedAtMs = System.currentTimeMillis()
-        )
-        voice.targetLeft = gains.first
-        voice.targetRight = gains.second
-        voice.currentLeft = gains.first
-        voice.currentRight = gains.second
-        engine.start()
-        engine.add(voice)
+        mixer.playSequence(keys, loopKey, volume)
     }
 
     /**
-     * Plays one sound exactly once, and never twice on top of itself.
-     *
-     * A sound that is already live under the same key is left alone instead of
-     * being restarted, so a repeated request - an automatic brake that fires
-     * on every movement tick, a wall that is touched again and again - plays
-     * the recording once, from beginning to end, with no stutter and no
-     * doubled copy.
+     * Plays one sound exactly once, never twice on top of itself. A repeated
+     * request - a brake that fires on every movement tick, a wall that is
+     * touched again and again - plays the recording once.
      */
-    fun playOnce(key: String, volume: Float = 1.0f, posX: Float = 0f, posY: Float = 0f, posZ: Float = 0f) {
+    fun playOnce(
+        key: String,
+        volume: Float = 1.0f,
+        posX: Float = 0f,
+        posY: Float = 0f,
+        posZ: Float = 0f
+    ) {
         if (released) return
-        if (engine.live.values.any { it.key == key }) return
-        oneShot(key, "", volume, 1f, posX, posY, posZ, deadlineMs = 0L)
+        val place = if (posX == 0f && posZ == 0f) null else placeOf(posX, posZ)
+        mixer.playOnce(key, volume = effectiveBaseVolume(key, volume), place = place)
     }
 
     /** Plays several sounds at once, as one mix. */
-    fun playMixed(keys: List<String>, volume: Float = 1.0f, posX: Float = 0f, posY: Float = 0f, posZ: Float = 0f) {
-        for (key in keys) {
-            playSound(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
-        }
+    fun playMixed(
+        keys: List<String>,
+        volume: Float = 1.0f,
+        posX: Float = 0f,
+        posY: Float = 0f,
+        posZ: Float = 0f
+    ) {
+        val place = if (posX == 0f && posZ == 0f) null else placeOf(posX, posZ)
+        mixer.playMixed(keys, volume = volume, place = place)
     }
 
-    /** Plays a weapon sound at a real position in the arena, relative to the listener. */
+    /** Plays a weapon sound at a real position, relative to the listener. */
     fun playPositionalWeaponSound(
         key: String,
         lateralOffset: Float,
@@ -555,12 +407,11 @@ class AudioManager(private val context: Context) {
                 owner = LOOP_OWNER_ENEMY,
                 volume = volume,
                 posX = lateralOffset,
-                posY = 0f,
                 posZ = -depthOffset
             )
             return
         }
-        playSound(key, volume = volume, rate = rate, posX = lateralOffset, posY = 0f, posZ = -depthOffset)
+        playSound(key, volume = volume, rate = rate, posX = lateralOffset, posZ = -depthOffset)
     }
 
     /** Plays a weapon sound. Automatic weapons play as a bounded single shot. */
@@ -571,14 +422,12 @@ class AudioManager(private val context: Context) {
         posX: Float = 0f,
         posY: Float = 0f,
         posZ: Float = 0f
-    ) {
-        playSound(key, volume = volume, rate = rate, posX = posX, posY = posY, posZ = posZ)
-    }
+    ) = playSound(key, volume = volume, rate = rate, posX = posX, posY = posY, posZ = posZ)
 
     /**
-     * One bounded shot of an automatic weapon, owned by [owner]. It fades out
-     * after [holdMs] (at least [MIN_BURST_MS]) so one shot never rings for the
-     * whole recording, and [stopWeaponSound] can cut it.
+     * One bounded shot of an automatic weapon. It fades out after [holdMs]
+     * (at least [MIN_BURST_MS]) so one shot never rings for a whole
+     * multi-second recording, and [stopWeaponSound] can cut it.
      */
     fun playAutomaticBurst(
         key: String,
@@ -590,69 +439,72 @@ class AudioManager(private val context: Context) {
         posZ: Float = 0f
     ): Boolean {
         if (released || !SOUND_FILES.containsKey(key)) return false
-        // The shot starts on the next mixing block and is faded out after the
-        // requested beat - never before, never as a whole recording. Nothing
-        // here waits, queues or prepares: an interaction is heard immediately.
-        val burstMs = max(holdMs, MIN_BURST_MS)
-        return oneShot(key, owner, volume, 1f, posX, posY, posZ, deadlineMs = burstMs) >= 0
-    }
-
-    private fun oneShot(
-        key: String,
-        owner: String,
-        volume: Float,
-        rate: Float,
-        posX: Float,
-        posY: Float,
-        posZ: Float,
-        deadlineMs: Long
-    ): Int {
-        val file = SOUND_FILES[key] ?: return -1
-        val id = engine.newId()
-        val gains = calculateSourceGains(posX, posY, posZ, volume, key)
-        val pitch = pitchFor(rate)
-        withClip(file) { clip ->
-            if (released) return@withClip
-            val voice = Voice(
-                id = id,
-                key = key,
-                owner = owner,
-                clip = clip,
-                loop = false,
-                startFrame = 0.0,
-                deadlineFrames = if (deadlineMs > 0L) deadlineMs * MixEngine.SAMPLE_RATE / 1000L else Long.MAX_VALUE,
-                enqueuedAtMs = System.currentTimeMillis()
-            )
-            voice.targetLeft = gains.first
-            voice.targetRight = gains.second
-            voice.currentLeft = gains.first
-            voice.currentRight = gains.second
-            voice.rate = pitch
-            voice.spatialPosition = BinauralPosition.fromCoordinates(posX, posZ)
-            engine.start()
-            engine.add(voice)
-        }
-        triggerHapticForSound(key)
-        return id
+        val burstMs = max(holdMs, MIN_BURST_MS).toInt()
+        val place = if (posX == 0f && posZ == 0f) null else placeOf(posX, posZ)
+        val handle = mixer.playOneShot(
+            key = key,
+            volume = effectiveBaseVolume(key, volume),
+            rate = 1f,
+            place = place,
+            owner = ownerIdOf(owner),
+            deadlineMs = burstMs
+        )
+        return handle >= 0
     }
 
     /**
-     * Runs [then] with the clip of [file]: at once when cached, otherwise on
-     * the high-priority decode lane. A warm clip is therefore heard within one
-     * mixing block of the request, and even a cold clip never waits behind the
-     * library warm-up or any other audio work.
+     * Starts the flight sound of a projectile - the missile, a thrown bomb.
+     * The distance is where it was launched from, which is what makes it
+     * "come from far away" and swell as it closes in.
      */
-    private fun withClip(file: String, then: (PcmClip) -> Unit) {
-        val cached = clips[file]
-        if (cached != null) {
-            then(cached)
+    fun startProjectileFlight(key: String, launchDistance: Float, loop: Boolean = true) {
+        if (released || !SOUND_FILES.containsKey(key)) return
+        val distance = launchDistance.coerceIn(0f, Combat.MAX_RANGE)
+        projectileLaunchM = distance
+        val place = SpatialPlace.projectile(distance)
+        if (loop) {
+            // The flight sound is a loop: it ends when the projectile does, and
+            // it is retuned on every approach step.
+            startHeldLoop(key = key, volume = 1f, rate = 1f, place = place, owner = "")
+            projectileHandle = 0
+        } else {
+            projectileHandle = mixer.playOneShot(
+                key = key,
+                volume = 1f,
+                rate = 1f,
+                place = place,
+                approachProximity = 0f
+            )
+        }
+    }
+
+    /**
+     * Moves the projectile's approach cue: [remainingM] metres away, closing
+     * to zero at impact. The engine raises the pitch and the level as it comes.
+     */
+    fun updateProjectileApproach(remainingM: Float, launchM: Float = projectileLaunchM) {
+        if (released) return
+        val proximity = SpatialPlace.approachProximity(remainingM, launchM)
+        val place = SpatialPlace.projectile(remainingM)
+        val rate = VolumeMixer.naturalRate(VolumeMixer.approachRate(proximity))
+        val loopSlot = loops.entries.firstOrNull { it.value.key in SoundLibrary.PROJECTILE_KEYS }
+        if (loopSlot != null) {
+            val slot = loopSlot.value
+            slot.rate = rate
+            val gain = distanceGainOf(place)
+            slot.left = gain
+            slot.right = gain
+            slot.spatialPosition = BinauralPosition.fromCoordinates(0f, -place.distance)
+            mixer.updateLoop(
+                key = slot.key,
+                volume = 1f,
+                rate = rate,
+                place = place,
+                owner = ownerIdOf(slot.owner)
+            )
             return
         }
-        audioScope.launch(decodeDispatcher) {
-            if (released) return@launch
-            val clip = clipFor(file) ?: return@launch
-            then(clip)
-        }
+        mixer.updateHandle(projectileHandle, rate = rate, place = place, approachProximity = proximity)
     }
 
     // --------------------------------------------------------- held loops
@@ -667,14 +519,20 @@ class AudioManager(private val context: Context) {
         posZ: Float = 0f
     ) {
         if (released || !SOUND_FILES.containsKey(key)) return
-        val gains = calculateSourceGains(posX, posY, posZ, volume, key)
-        loopSlot(key, owner = "", left = gains.first, right = gains.second, rate = pitchFor(rate), startMs = 0L, spatialPosition = BinauralPosition.fromCoordinates(posX, posZ))
+        val place = if (posX == 0f && posZ == 0f) null else placeOf(posX, posZ)
+        startHeldLoop(
+            key = key,
+            volume = effectiveBaseVolume(key, volume),
+            rate = VolumeMixer.naturalRate(rate),
+            place = place,
+            owner = ""
+        )
     }
 
     /**
      * Starts, or keeps, the held firing loop of an automatic weapon for one
-     * fighter. Calling it again for every bullet is safe: the same loop is
-     * reused, and only its position and volume are refreshed.
+     * fighter. Calling it again for every bullet is safe: the same native
+     * voice is reused and only its position and level are refreshed.
      */
     fun startWeaponLoop(
         key: String,
@@ -687,8 +545,15 @@ class AudioManager(private val context: Context) {
     ) {
         if (released) return
         val loopKey = holdKeyOf(key) ?: return
-        val gains = calculateSourceGains(posX, posY, posZ, volume, loopKey)
-        loopSlot(loopKey, owner, gains.first, gains.second, 1f, startOffsetMs, BinauralPosition.fromCoordinates(posX, posZ))
+        val place = if (posX == 0f && posZ == 0f) null else placeOf(posX, posZ)
+        startHeldLoop(
+            key = loopKey,
+            volume = effectiveBaseVolume(loopKey, volume),
+            rate = 1f,
+            place = place,
+            owner = owner,
+            startOffsetMs = startOffsetMs
+        )
     }
 
     /** Robert's held firing loop, placed by his real offset from the player. */
@@ -726,80 +591,113 @@ class AudioManager(private val context: Context) {
         startEnemyWeaponLoop(key, volume, lateralOffset, depthOffset)
     }
 
-    /** The held-loop key of [key] (a loop key or a single-shot copy), or null. */
+    /**
+     * The held-loop key of [key] (a loop key or a single-shot copy), or null
+     * when the key is not a loop at all. The car's idle note and the shock hum
+     * are held loops too, so any catalogue key may be started as a loop.
+     */
     private fun holdKeyOf(key: String): String? {
         val loopKey = AUTO_LOOP_OF[key] ?: key
-        return if (loopKey in HOLD_LOOP_KEYS) loopKey else null
+        if (loopKey in HOLD_LOOP_KEYS || loopKey in CAR_IDLE_LOOP_KEYS) return loopKey
+        return if (SoundLibrary.isLoopKey(loopKey)) loopKey else null
     }
 
+    /** The key of a loop slot, `owner|key`. */
+    private fun loopSlotKey(owner: String, key: String): String = "$owner|$key"
+
     /**
-     * Creates the loop of `owner|key` or updates its gains and rate. A loop is
-     * created at most once per owner and key, and the decoder never blocks it.
+     * Opens the loop of `owner|key`, or moves the one that is already open.
+     *
+     * The channel gains and the position the game sees are always recomputed
+     * from [volume] and [place] here, so a loop that comes closer is louder and
+     * a loop that crosses the listener changes ear - the same behaviour the
+     * software mixer had, now rendered by the native engine.
+     *
+     * @param volume the level of the loop before its distance gain
+     * @param place where the loop is, or null when it is not positional
+     * @param rate the playback rate, already inside the natural window
+     * @return the native voice id, or 0 while the clip is still decoding
      */
-    private fun loopSlot(
+    private fun startHeldLoop(
         key: String,
-        owner: String,
-        left: Float,
-        right: Float,
+        volume: Float,
         rate: Float,
-        startMs: Long,
-        spatialPosition: BinauralPosition? = null
-    ) {
-        val file = SOUND_FILES[key] ?: return
+        place: SpatialPlace?,
+        owner: String,
+        startOffsetMs: Long = 0L,
+        startDelayMs: Long = 0L,
+        critical: Boolean = false
+    ): Int {
+        if (released || !SOUND_FILES.containsKey(key)) return 0
+        val slotKey = loopSlotKey(owner, key)
+        val engineOwner = ownerIdOf(owner)
+        // A loop is heard exactly like a one-shot at the same place: the same
+        // distance curve, the same centre dead zone, the same once-only slider.
+        val gains = if (place != null) {
+            val lateral = place.pan * place.distance
+            val depth = -place.rear * place.distance
+            calculateSourceGains(lateral, 0f, depth, volume, key)
+        } else {
+            val level = effectiveBaseVolume(key, volume)
+            Pair(level, level)
+        }
+        val left = gains.first
+        val right = gains.second
+        // The game's own z convention: a negative z is in front of the
+        // listener, and [SpatialPlace.rear] already carries that sign.
+        val position = if (place != null) {
+            BinauralPosition.fromCoordinates(
+                place.pan * place.distance,
+                place.rear * place.distance
+            )
+        } else {
+            null
+        }
+
         synchronized(loopLock) {
-            val slotKey = "$owner|$key"
             val existing = loops[slotKey]
             if (existing != null) {
                 existing.left = left
                 existing.right = right
                 existing.rate = rate
-                existing.spatialPosition = spatialPosition
-                engine.live[existing.id]?.let { voice ->
-                    voice.targetLeft = left
-                    voice.targetRight = right
-                    voice.rate = rate
-                    voice.spatialPosition = spatialPosition
-                }
-                return
-            }
-            val slot = LoopSlot(key, owner, engine.newId(), left, right, rate, spatialPosition, startMs)
-            loops[slotKey] = slot
-            withClip(file) { clip ->
-                // The slot may have been stopped while the clip was decoding.
-                if (released || loops[slotKey] !== slot) return@withClip
-                val offsetFrames = if (clip.frames > 0) {
-                    (slot.startMs * MixEngine.SAMPLE_RATE / 1000L) % clip.frames
-                } else {
-                    0L
-                }
-                val voice = Voice(
-                    id = slot.id,
+                existing.spatialPosition = position
+                mixer.startLoop(
                     key = key,
-                    owner = owner,
-                    clip = clip,
-                    loop = true,
-                    startFrame = offsetFrames.toDouble(),
-                    deadlineFrames = Long.MAX_VALUE,
-                    enqueuedAtMs = System.currentTimeMillis()
+                    volume = volume,
+                    rate = rate,
+                    place = place,
+                    owner = engineOwner,
+                    startOffsetMs = startOffsetMs.toInt(),
+                    critical = critical || key in HOLD_LOOP_KEYS
                 )
-                voice.targetLeft = slot.left
-                voice.targetRight = slot.right
-                voice.currentLeft = slot.left
-                voice.currentRight = slot.right
-                voice.rate = slot.rate
-                voice.spatialPosition = slot.spatialPosition
-                engine.start()
-                engine.add(voice)
+                return mixer.nativeLoopId(key, engineOwner)
             }
+            val slot = LoopSlot(key, owner, left, right, rate, position, startOffsetMs)
+            loops[slotKey] = slot
+            // The slot exists before the voice does: a loop requested on a cold
+            // cache is started by the mixer as soon as its clip is decoded, and
+            // a stop in the meantime simply removes the slot.
+            // The mixer starts the voice now, or queues it for the moment its
+            // clip is decoded (a cold cache never loses a loop).
+            return mixer.startLoop(
+                key = key,
+                volume = volume,
+                rate = rate,
+                place = place,
+                owner = engineOwner,
+                startOffsetMs = startOffsetMs.toInt(),
+                startDelayMs = startDelayMs.toInt(),
+                critical = critical || key in HOLD_LOOP_KEYS
+            )
         }
     }
 
     private fun stopLoopsWhere(predicate: (LoopSlot) -> Boolean) {
         synchronized(loopLock) {
-            val doomed = loops.values.filter(predicate)
-            for (slot in doomed) {
-                loops.remove("${slot.owner}|${slot.key}", slot)
-                engine.stop(slot.id)
+            val doomed = loops.entries.filter { predicate(it.value) }
+            for (entry in doomed) {
+                loops.remove(entry.key, entry.value)
+                mixer.stopLoop(entry.value.key, ownerIdOf(entry.value.owner))
             }
         }
     }
@@ -807,7 +705,7 @@ class AudioManager(private val context: Context) {
     /** True while [owner] (player or enemy) still holds the loop of [key]. */
     fun isWeaponLoopActive(key: String, owner: String = LOOP_OWNER_PLAYER): Boolean {
         val loopKey = holdKeyOf(key) ?: return false
-        return loops.containsKey("$owner|$loopKey")
+        return loops.containsKey(loopSlotKey(owner, loopKey))
     }
 
     /** True while any fighter holds a firing loop. */
@@ -834,7 +732,6 @@ class AudioManager(private val context: Context) {
     /** Stops every held firing loop of both fighters. */
     fun stopWeaponLoops() {
         stopLoopsWhere { it.key in HOLD_LOOP_KEYS }
-        engine.stopWhere { it.loop && it.key in HOLD_LOOP_KEYS }
     }
 
     /**
@@ -844,22 +741,24 @@ class AudioManager(private val context: Context) {
     fun stopWeaponSound(key: String, owner: String) {
         val canonical = AUTO_LOOP_OF[key] ?: key
         stopLoopsWhere { it.owner == owner && it.key == canonical }
-        engine.stopWhere { it.owner == owner && (AUTO_LOOP_OF[it.key] ?: it.key) == canonical }
+        mixer.stopOwnerKey(ownerIdOf(owner), canonical)
+        mixer.stopOwnerKey(ownerIdOf(owner), key)
     }
 
     /** Stops every weapon sound, both fighters and all held loops. */
     fun stopWeaponSounds() {
         stopWeaponLoops()
-        engine.stopWhere { it.key in WEAPON_SOUND_KEYS }
+        for (key in WEAPON_SOUND_KEYS) mixer.stopKey(key)
     }
 
     // ------------------------------------------------------------ footsteps
 
     /**
      * Updates Robert's footsteps: louder as he approaches, quieter as he
-     * retreats, panned by a genuine sideways offset, and the rate follows his
-     * speed in metres per second. The rate changes ONLY with the speed, so the
-     * recording is never shifted off its natural pitch while he walks.
+     * retreats, on the correct ear, and paced by his real speed. He is always
+     * slightly lower in pitch than the player ([ENEMY_WALK_RATE_FACTOR]) and
+     * always starts on a different offset of the same recording, so the two
+     * walkers never fuse into one source.
      */
     fun updateEnemyWalk3dAudio(
         distance: Float,
@@ -868,68 +767,79 @@ class AudioManager(private val context: Context) {
         fleeing: Boolean = false,
         depthOffset: Float = distance
     ) {
-        val safeDistance = distance.coerceIn(0f, Combat.MAX_RANGE)
         val effectiveSpeed = when {
             speedMps > 0f -> speedMps
-            fleeing -> 12f
-            else -> 5f
+            fleeing -> RunPressure.BASE_SPEED_MPS * 3f
+            else -> RunPressure.BASE_SPEED_MPS
         }
-        val base = VolumeMixer.walkDistanceGain(safeDistance, Combat.MAX_RANGE)
-        val (panLeft, panRight) = VolumeMixer.panGains(VolumeMixer.panFor(lateralOffset, safeDistance))
         updateWalkingTrack(
             key = "enemyWalk",
-            left = (base * panLeft).coerceIn(0f, 1f),
-            right = (base * panRight).coerceIn(0f, 1f),
+            volume = 1f,
             speedMps = effectiveSpeed,
-            spatialPosition = BinauralPosition.fromCoordinates(lateralOffset, -depthOffset)
+            place = placeAhead(lateralOffset, depthOffset),
+            rateScale = ENEMY_WALK_RATE_FACTOR
         )
     }
 
-    /** Refresh an already moving enemy when the listener moves, without starting a new loop. */
-    fun refreshEnemyWalkPosition(distance: Float, lateralOffset: Float, depthOffset: Float = distance) {
-        val slot = loops["|enemyWalk"] ?: return
+    /**
+     * Refreshes a moving enemy when the listener moves, without ever
+     * restarting his loop: only his gains and his position change.
+     */
+    fun refreshEnemyWalkPosition(
+        distance: Float,
+        lateralOffset: Float,
+        depthOffset: Float = distance
+    ) {
+        val slot = loops[loopSlotKey("", "enemyWalk")] ?: return
         val safeDistance = distance.coerceIn(0f, Combat.MAX_RANGE)
+        val place = placeAhead(lateralOffset, depthOffset)
         val base = VolumeMixer.walkDistanceGain(safeDistance, Combat.MAX_RANGE)
-        val (left, right) = VolumeMixer.panGains(VolumeMixer.panFor(lateralOffset, safeDistance))
-        loopSlot("enemyWalk", "", base * left, base * right, slot.rate, slot.startMs, BinauralPosition.fromCoordinates(lateralOffset, -depthOffset))
+        val pan = VolumeMixer.panGains(VolumeMixer.panFor(lateralOffset, safeDistance))
+        slot.left = (base * pan.first).coerceIn(0f, 1f)
+        slot.right = (base * pan.second).coerceIn(0f, 1f)
+        slot.spatialPosition = BinauralPosition.fromCoordinates(lateralOffset, -depthOffset)
+        mixer.updateLoop(key = "enemyWalk", volume = base, rate = slot.rate, place = place)
     }
 
     /**
-     * The local player's footsteps stay centred at the speech level. The rate
-     * follows the running speed and [volumeGain] is the running-level gain.
+     * The local player's footsteps: centred, like a sound from the listener's
+     * own body. The rate follows the running level, which is what makes a
+     * slow, a normal and a fast run sound different.
      */
     fun updatePlayerWalkAudio(
         speedMps: Float = RunPressure.BASE_SPEED_MPS,
         volumeGain: Float = 1.0f
     ) {
         val base = VolumeMixer.walkLevel(1f, distanceGain = 1f, speedGain = volumeGain)
-        updateWalkingTrack(key = "playerWalk", left = base, right = base, speedMps = speedMps)
+        updateWalkingTrack(key = "playerWalk", volume = base, speedMps = speedMps, place = null)
     }
 
     private fun updateWalkingTrack(
         key: String,
-        left: Float,
-        right: Float,
+        volume: Float,
         speedMps: Float,
-        rateScale: Float = 1f,
-        spatialPosition: BinauralPosition? = null
+        place: SpatialPlace?,
+        rateScale: Float = 1f
     ) {
         if (released) return
-        loopSlot(
+        // The steps follow the real speed smoothly, inside the natural window.
+        // The three-level ladder of footstepRate() stays available for a caller
+        // that wants a hard step between two paces.
+        val rate = VolumeMixer.walkRate(speedMps) * rateScale
+        startHeldLoop(
             key = key,
+            volume = volume.coerceIn(0f, 1f),
+            rate = VolumeMixer.naturalRate(rate),
+            place = place,
             owner = "",
-            left = left.coerceIn(0f, 1f),
-            right = right.coerceIn(0f, 1f),
-            rate = VolumeMixer.walkRate(speedMps) * rateScale,
-            startMs = WALK_START_OFFSET_MS[key] ?: 0L,
-            spatialPosition = spatialPosition
+            startOffsetMs = WALK_START_OFFSET_MS[key] ?: 0L
         )
     }
 
     /** Stops both footstep tracks. */
     fun stopFootsteps() {
         stopLoopsWhere { it.key in WALK_KEYS }
-        engine.stopWhere { it.key in WALK_KEYS }
+        for (key in WALK_KEYS) mixer.stopKey(key)
     }
 
     // ------------------------------------------------------- stop and pause
@@ -937,12 +847,8 @@ class AudioManager(private val context: Context) {
     /** Stops one sound key: every voice and loop of it. */
     fun stopSound(key: String) {
         stopLoopsWhere { it.key == key }
-        engine.stopWhere { it.key == key }
-        // A chain requested just before this stop may not be in the mixer yet;
-        // the chain queue runs this second stop after it, at top priority.
-        audioScope.launch(chainDispatcher) {
-            engine.stopWhere { it.key == key }
-        }
+        mixer.stopKey(key)
+        if (key in SoundLibrary.PROJECTILE_KEYS) projectileHandle = 0
     }
 
     /** Stops a held loop of [key] (both owners' loops of that key are stopped). */
@@ -968,6 +874,7 @@ class AudioManager(private val context: Context) {
         )) {
             stopSound(key)
         }
+        projectileHandle = 0
     }
 
     /** Stops the bulletproof car: its engine, movement, doors and any crash. */
@@ -977,9 +884,8 @@ class AudioManager(private val context: Context) {
 
     /** Stops every loop and battle sound, leaving the background music running. */
     fun stopAllLoops() {
-        stopScreenAudio()
-        stopLoopsWhere { true }
-        engine.stopWhere { true }
+        loops.clear()
+        mixer.stopAll()
     }
 
     /** Stops every sound, including the background music. */
@@ -988,12 +894,9 @@ class AudioManager(private val context: Context) {
         stopMusic()
     }
 
-    /**
-     * Freezes the battle: every voice stops advancing and new requests wait
-     * in the queue until [resumeAllSounds]. The music pauses too.
-     */
+    /** Freezes the battle: the engine stops advancing every voice, and so does the music. */
     fun pauseAllSounds() {
-        engine.paused = true
+        mixer.pause()
         val player = music ?: return
         try {
             if (player.isPlaying) player.pause()
@@ -1003,7 +906,7 @@ class AudioManager(private val context: Context) {
 
     /** Continues a frozen battle exactly where it stopped. */
     fun resumeAllSounds() {
-        engine.paused = false
+        mixer.resume()
         if (!musicWanted) return
         val player = music ?: return
         try {
@@ -1015,15 +918,14 @@ class AudioManager(private val context: Context) {
     /** True while a sound or loop of [key] is playing. */
     fun isTrackActive(key: String): Boolean {
         if (key == MUSIC_KEY) return musicWanted
-        return engine.live.values.any { it.key == key } || loops.values.any { it.key == key }
+        return loops.values.any { it.key == key } || mixer.isKeyActive(key)
     }
 
     /** Measured length of a sound in milliseconds, or 0 when it is unknown. */
     fun soundDurationMs(key: String): Long {
         val known = SOUND_DURATIONS_MS[key]
         if (known != null && known > 0L) return known
-        val file = SOUND_FILES[key] ?: return 0L
-        return clips[file]?.durationMs ?: 0L
+        return SoundDurations.forKey(key)
     }
 
     // ------------------------------------------------------------ music
@@ -1035,7 +937,7 @@ class AudioManager(private val context: Context) {
         val existing = music
         if (existing != null) {
             applyMusicVolume()
-            if (!engine.paused) {
+            if (!mixer.paused) {
                 try {
                     if (!existing.isPlaying) existing.start()
                 } catch (_: Exception) {
@@ -1057,18 +959,23 @@ class AudioManager(private val context: Context) {
             player.isLooping = true
             val level = VolumeMixer.music(musicVolume)
             player.setVolume(level, level)
-            player.setOnPreparedListener { prepared ->
-                if (musicWanted && !engine.paused) {
-                    try {
-                        prepared.start()
-                    } catch (_: Exception) {
+            player.setOnPreparedListener(object : MediaPlayer.OnPreparedListener {
+                override fun onPrepared(prepared: MediaPlayer) {
+                    if (musicWanted && !mixer.paused) {
+                        try {
+                            prepared.start()
+                        } catch (_: Exception) {
+                        }
                     }
                 }
-            }
+            })
             player.prepareAsync()
             music = player
-        } catch (_: Exception) {
-            player.release()
+        } catch (_: Throwable) {
+            try {
+                player.release()
+            } catch (_: Throwable) {
+            }
         }
     }
 
@@ -1098,6 +1005,9 @@ class AudioManager(private val context: Context) {
         soundTheme = theme
     }
 
+    /** Live diagnostics of the native stream, for the guide. */
+    fun audioDiagnostics(): String = mixer.diagnostics()
+
     // ------------------------------------------------------------ haptics
 
     private fun triggerHapticForSound(key: String) {
@@ -1109,7 +1019,9 @@ class AudioManager(private val context: Context) {
             else -> return
         }
         try {
-            target.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+            target.vibrate(
+                VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE)
+            )
         } catch (_: Exception) {
         }
     }
@@ -1121,12 +1033,7 @@ class AudioManager(private val context: Context) {
         if (released) return
         released = true
         stopMusic()
-        stopLoopsWhere { true }
-        engine.shutdown()
-        audioScope.cancel()
-        warmExecutor.shutdownNow()
-        decodeExecutor.shutdownNow()
-        chainExecutor.shutdownNow()
-        clips.clear()
+        loops.clear()
+        mixer.release()
     }
 }

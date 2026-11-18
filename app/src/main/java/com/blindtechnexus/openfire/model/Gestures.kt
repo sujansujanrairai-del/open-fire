@@ -142,6 +142,48 @@ object SwipeClassifier {
         else -> ONE_FINGER_THRESHOLD
     }
 
+    /**
+     * How far a three-finger swipe must travel before it is dispatched at all.
+     *
+     * The three-finger threshold alone ([THREE_FINGER_THRESHOLD], 28 px) is so
+     * close to the tap slop that a firm three-finger tap could drift into a
+     * shortcut the user never meant - and the shortcuts of this game are exit
+     * and pause, so an accidental one is expensive. The activation distance is
+     * raised a little: still cheap to perform, unmistakably deliberate.
+     */
+    const val THREE_FINGER_ACTIVATION = 30f
+
+    /**
+     * How much the leading axis must beat the other one before a three-finger
+     * swipe is recognised.
+     *
+     * A hand performing a vertical swipe always drifts sideways by a few
+     * pixels, and near the activation distance a sloppy diagonal can leave the
+     * two axes almost equal: the direction then flips from event to event and a
+     * pause becomes an exit. Requiring a clear winner makes the shortcut
+     * predictable, and a diagonal hand simply waits for one more sample.
+     */
+    const val THREE_FINGER_DOMINANCE = 1.2f
+
+    /**
+     * True when a three-finger swipe is both long enough and clearly pointing
+     * one way, which is the condition for dispatching it.
+     */
+    fun reached(dx: Float, dy: Float): Boolean =
+        distance(dx, dy) >= maxOf(THREE_FINGER_ACTIVATION, threshold(3)) &&
+            dominant(dx, dy, THREE_FINGER_DOMINANCE)
+
+    /**
+     * True when one axis carries [ratio] times the movement of the other, so
+     * the direction of the swipe is never a coin toss.
+     */
+    fun dominant(dx: Float, dy: Float, ratio: Float = THREE_FINGER_DOMINANCE): Boolean {
+        val x = if (dx.isNaN()) 0f else kotlin.math.abs(dx)
+        val y = if (dy.isNaN()) 0f else kotlin.math.abs(dy)
+        if (x == 0f && y == 0f) return false
+        return if (x > y) x >= y * ratio else y >= x * ratio
+    }
+
     /** Euclidean length of a movement. */
     fun distance(dx: Float, dy: Float): Float {
         val x = if (dx.isNaN()) 0f else dx

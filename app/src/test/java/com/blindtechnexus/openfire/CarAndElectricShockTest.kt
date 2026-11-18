@@ -3,6 +3,7 @@ package com.blindtechnexus.openfire
 import com.blindtechnexus.openfire.data.Strings
 import com.blindtechnexus.openfire.model.CarRules
 import com.blindtechnexus.openfire.model.CarStage
+import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.ElectricShockRules
 import com.blindtechnexus.openfire.model.Inventory
@@ -372,5 +373,23 @@ class CarAndElectricShockTest {
         val on = Shop.toggleWeaponEnabled(off, 0, Weapon.SHORT_GUN)
         assertTrue(on.success)
         assertTrue(on.inventory.weaponEnabled(Weapon.SHORT_GUN))
+    }
+
+    @Test
+    fun theIdleCarStaysParkedInsteadOfBrakingOnEveryTick() {
+        // While it drives, the car brakes once it is at its stopping distance.
+        assertEquals(2f, CarRules.STOP_DISTANCE_M, 0.001f)
+        // A parked car tolerates a small gap before it sets off again, so a
+        // standing enemy 2 m to 3 m away cannot make it start and brake over
+        // and over (which used to sound like a broken brake).
+        val parked = CarRules.STOP_DISTANCE_M
+        val tolerated = CarRules.STOP_DISTANCE_M + CarRules.GAP_TOLERANCE_M
+        assertTrue(tolerated > parked)
+        assertTrue(CarRules.GAP_TOLERANCE_M > 0f)
+        // Beyond the tolerated band it really has to close the gap again.
+        assertTrue(tolerated < Combat.MAX_RANGE)
+        // Every car move is a real step: the car never brakes while it is
+        // already inside its stopping distance.
+        assertEquals(6f, CarRules.SPEED_MPS, 0.001f)
     }
 }

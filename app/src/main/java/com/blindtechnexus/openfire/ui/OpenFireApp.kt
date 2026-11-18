@@ -213,13 +213,20 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                     averageDy = avgDy
                                     val averageDistance = SwipeClassifier.distance(avgDx, avgDy)
                                     if (averageDistance > maxAverageDelta) maxAverageDelta = averageDistance
-
-                                    // Three-finger swipes fire immediately, in
-                                    // every direction: up (exit), down (pause),
-                                    // right and left (running speed).
+                                    // A three-finger swipe is committed the first
+                                    // time the hand comes to rest after crossing
+                                    // the activation distance. One deliberate
+                                    // swipe therefore gives exactly one action,
+                                    // and a finger left resting in the air can
+                                    // never repeat it.
                                     if (maxFingers >= 3 && !multiFingerDispatched &&
-                                        SwipeClassifier.isSwipe(avgDx, avgDy, maxFingers)
+                                        SwipeClassifier.reached(avgDx, avgDy)
                                     ) {
+                                        // Up exits, down pauses, right and left
+                                        // change the running speed. The swipe is
+                                        // dispatched the moment it clearly is a
+                                        // swipe, and never twice for one touch:
+                                        // one gesture, one action.
                                         multiFingerDispatched = true
                                         longPressCancelled = true
                                         longPressJob?.cancel()

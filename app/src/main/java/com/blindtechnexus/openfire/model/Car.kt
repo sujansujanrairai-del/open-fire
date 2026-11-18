@@ -99,6 +99,14 @@ object CarRules {
     /** Ticks without any enemy movement before the car brakes itself. */
     const val STATIONARY_TICKS = 10
 
+    /**
+     * The extra distance, in metres, an idle car tolerates before it starts
+     * again on its own. Inside the braking distance plus this band a standing
+     * enemy leaves the car parked, so the brake is heard once instead of
+     * starting and braking again on every tick.
+     */
+    const val GAP_TOLERANCE_M = 1f
+
     /** True while the user is inside the car with the door closed. */
     fun isInside(stage: CarStage): Boolean =
         stage == CarStage.INSIDE_ENGINE_OFF ||

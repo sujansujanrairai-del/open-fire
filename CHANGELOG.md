@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Replace the sound player with a native low-latency engine: a C++17 mixer on top of Oboe 1.11.0 with a 128-voice pool, per-voice gain ramps, a fractional interaural time delay, a head shadow and pitch-preserving rate changes. A voice now carries a position (left/right, distance, front/back), so a projectile really travels in from far away to nearby and back, and every interaction is heard on the next mixing block. If the library or the stream cannot start, the game stays playable in silence instead of crashing.
+- Greet the player on launch, once per process: the title, who made it, and what to do next, in the chosen language.
+- Stop the car from braking in a loop: a parked car tolerates a one-metre gap, so a standing enemy cannot make it start and brake over and over, and the brake is heard once.
+- Make the electric shock dependable: one authority decides whether it is burning, so a hold that is refused because a projectile is in the air is silent and harmless, and the hum, the damage and the barrier break can no longer disagree. A refused swipe says why.
+- Stop Robert from firing from bands where nothing can land: he closes the distance first, his shots use the weapon he is really holding (so a magazine is never spent on another gun), and a miss is audible - the miss sound, or the shot itself at the edge of the range. The AWM keeps its long-range precision band.
+- Make the three-finger shortcuts land the first time: the swipe needs a deliberate travel above the tap slop and a clearly dominant axis, so a sloppy diagonal can no longer turn a pause into an exit.
+
 ## 1.2 Beta
 
 - Award coins by the capability and power of the whole battle instead of the number of plays: every landed weapon pays its own power points (missile 600, atom bomb 500, grenade and timer bomb 350, guns scaled from their heavy-zone damage), one real electric shock pays 700 to 1000 coins on its own, and surviving health plus true accuracy add their share. A win pays up to 2500 coins and the result still names the shock share separately.

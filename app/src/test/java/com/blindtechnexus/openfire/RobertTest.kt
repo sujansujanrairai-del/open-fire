@@ -892,6 +892,29 @@ class RobertTest {
     }
 
     @Test
+    fun heNeverFiresFromABandWhereNothingCanLand() {
+        // The far half of the square is walking ground: no shot could connect
+        // there, so Robert closes the distance instead of emptying a magazine.
+        assertFalse(RobertRules.canLandShotAt(Combat.MAX_RANGE))
+        assertFalse(RobertRules.canLandShotAt(Combat.distanceFor(Combat.MISS_ZONE_MAX - 1f)))
+        assertTrue(RobertRules.canLandShotAt(0f))
+        assertTrue(RobertRules.canLandShotAt(FireRange.MID.targetDistance))
+        assertTrue(RobertRules.canLandShotAt(FireRange.CLOSE.targetDistance))
+        // The gate sits just inside the miss zone, so a shot at the zone edge
+        // is still fired (and is heard as a miss).
+        val gate = Combat.proximityOf(RobertRules.MISS_IS_AUDIBLE_DISTANCE_M)
+        assertTrue(gate > Combat.MISS_ZONE_MAX)
+        assertTrue(gate < Combat.MISS_ZONE_MAX + 5f)
+        assertTrue(RobertRules.MISS_IS_AUDIBLE_DISTANCE_M < Combat.MAX_RANGE * 0.65f)
+        // The AWM is the one long-range exception: inside its precision band
+        // he may fire from beyond the ordinary miss gate.
+        val awmBand = Combat.distanceFor(Combat.MISS_ZONE_MAX - 5f)
+        assertFalse(RobertRules.canLandShotAt(awmBand))
+        assertTrue(RobertRules.canLandShotAt(awmBand, Weapon.AWM))
+        assertFalse(RobertRules.canLandShotAt(Combat.MAX_RANGE, Weapon.AWM))
+    }
+
+    @Test
     fun heRandomlyPrefersTheMidOrTheCloseBand() {
         val random = Random(20261022)
         val picked = mutableSetOf<FireRange>()
