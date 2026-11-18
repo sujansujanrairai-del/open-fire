@@ -25,11 +25,10 @@
 #define OPENFIRE_VOICE_H
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <memory>
-
 #include "AudioMath.h"
 #include "Clip.h"
 
@@ -50,9 +49,13 @@ public:
     int32_t keyId = 0;
     int32_t owner = 0;
     int32_t flags = 0;
-    std::shared_ptr<const Clip> clip;
+    const Clip* clip = nullptr;
 
-    /* Written by the game thread, read by the mixer thread. */
+    /* Lock-free query mirror; only the mixer writes, API callers read. */
+    std::atomic<int32_t> publishedKeyId{0};
+    std::atomic<bool> publishedActive{false};
+
+    /* Callback-owned targets, populated from commands drained by the mixer. */
     float targetVolume = 1.0f;   /* the voice's own level */
     float targetPan = 0.0f;      /* -1 left .. +1 right */
     float targetDistance = 0.0f; /* metres from the listener */

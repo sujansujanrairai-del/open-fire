@@ -74,7 +74,7 @@ jobs:
             if [[ -f ".github/scripts/summarize_test_failures.py" ]]; then
               test_failures="$(python3 .github/scripts/summarize_test_failures.py || true)"
             fi
-            diagnostics="$(grep -E '^(e: |w: |> Task .* FAILED)' "$log_file" | tail -n 25 || true)"
+            diagnostics="$(grep -E '^(e: |> Task .* FAILED)' "$log_file" | tail -n 25 || true)"
             if [[ -n "$test_failures" ]]; then
               details="$test_failures"
               if [[ -n "$diagnostics" ]]; then

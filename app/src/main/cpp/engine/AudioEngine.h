@@ -4,8 +4,8 @@
  * Layout
  * ------
  *  - `Command` is a POD record of one request from the game thread. Commands
- *    travel through a lock-free single-producer/single-consumer ring, so the
- *    audio callback never takes a lock and never allocates.
+ *    travel through a bounded lock-free multi-producer/single-consumer ring,
+ *    so the audio callback never takes a lock and never allocates.
  *  - The Oboe stream is opened on demand (`start`) and re-opened by the error
  *    callback when the device changes (a headset is plugged in, the route
  *    switches to Bluetooth), which is the one case where a stream really dies.
@@ -59,7 +59,7 @@ struct Command {
 constexpr int32_t kPreferredSampleRate = 48000;
 
 /** Command ring capacity: comfortably more than one callback can consume. */
-constexpr size_t kCommandCapacity = 1024;
+constexpr size_t kCommandCapacity = 4096;
 
 class AudioEngine : public oboe::AudioStreamDataCallback,
                     public oboe::AudioStreamErrorCallback,
@@ -124,13 +124,14 @@ private:
     std::shared_ptr<oboe::AudioStream> stream_;
     std::mutex streamMutex_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> desiredRunning_{false};
     std::atomic<bool> paused_{false};
     std::atomic<int32_t> xruns_{0};
     std::atomic<int32_t> voiceCounter_{1};
 
-    int32_t sampleRate_ = kPreferredSampleRate;
-    int32_t framesPerBurst_ = 0;
-    bool lowLatency_ = false;
+    std::atomic<int32_t> sampleRate_{kPreferredSampleRate};
+    std::atomic<int32_t> framesPerBurst_{0};
+    std::atomic<bool> lowLatency_{false};
 
     /* Scratch buffers, sized when the stream opens; only the mixer touches them. */
     std::vector<float> mixBuffer_;

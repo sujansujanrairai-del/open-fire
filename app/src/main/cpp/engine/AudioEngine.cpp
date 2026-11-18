@@ -40,8 +40,10 @@ void applyParams(Voice* voice, const of_voice_params& params, int32_t sampleRate
 
 AudioEngine::AudioEngine() {
     mixer_.setClipStore(&clips_);
-    mixBuffer_.resize(static_cast<size_t>(kPreferredSampleRate / 10) * 2);
-    mixCapacityFrames_ = kPreferredSampleRate / 10;
+    // Preallocate for the largest callback this engine accepts. No resize or
+    // allocation is permitted on Oboe's real-time callback thread.
+    mixBuffer_.resize(static_cast<size_t>(8192) * 2);
+    mixCapacityFrames_ = 8192;
 }
 
 AudioEngine::~AudioEngine() {
@@ -55,60 +57,79 @@ AudioEngine::~AudioEngine() {
 int32_t AudioEngine::start() {
     std::lock_guard<std::mutex> lock(streamMutex_);
     if (running_.load(std::memory_order_acquire)) return 0;
+    desiredRunning_.store(true, std::memory_order_release);
     openStreamLocked();
-    return running_.load(std::memory_order_acquire) ? 0 : -1;
+    const bool started = running_.load(std::memory_order_acquire);
+    if (!started) desiredRunning_.store(false, std::memory_order_release);
+    return started ? 0 : -1;
 }
 
 void AudioEngine::openStreamLocked() {
-    oboe::AudioStreamBuilder builder;
-    builder.setDirection(oboe::Direction::Output)
-        ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-        ->setSharingMode(oboe::SharingMode::Exclusive)
-        ->setFormat(oboe::AudioFormat::Float)
-        ->setChannelCount(oboe::ChannelCount::Stereo)
-        ->setSampleRate(kPreferredSampleRate)
-        ->setUsage(oboe::Usage::Game)
-        ->setContentType(oboe::ContentType::Sonification)
-        ->setDataCallback(this)
-        ->setErrorCallback(this)
-        /* Conversion is allowed so a device that refuses 48 kHz floats still
-         * plays: Oboe converts on its own conversion node, off our callback. */
-        ->setFormatConversionAllowed(true)
-        ->setChannelConversionAllowed(true)
-        ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
+    // Exclusive mode and a pinned 48 kHz rate are desirable, not prerequisites.
+    // A number of devices (notably Bluetooth routes and vendor AAudio stacks)
+    // reject that combination. Retry with shared mode and the device-native
+    // rate before declaring audio unavailable; keep a fresh builder per attempt
+    // because openStream may mutate its negotiated configuration.
+    struct Attempt {
+        oboe::SharingMode sharing;
+        int32_t sampleRate;
+    };
+    constexpr Attempt attempts[] = {
+        {oboe::SharingMode::Exclusive, kPreferredSampleRate},
+        {oboe::SharingMode::Shared, kPreferredSampleRate},
+        {oboe::SharingMode::Shared, oboe::kUnspecified}
+    };
 
     std::shared_ptr<oboe::AudioStream> stream;
-    oboe::Result result = builder.openStream(stream);
-    if (result != oboe::Result::OK || stream == nullptr) {
-        /* Second attempt: request the device's own sample rate explicitly,
-         * which some fast paths require before they will open at all. */
-        builder.setSampleRate(oboe::kUnspecified);
+    oboe::Result result = oboe::Result::ErrorBase;
+    for (const auto& attempt : attempts) {
+        oboe::AudioStreamBuilder builder;
+        builder.setDirection(oboe::Direction::Output)
+            ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+            ->setSharingMode(attempt.sharing)
+            ->setFormat(oboe::AudioFormat::Float)
+            ->setChannelCount(oboe::ChannelCount::Stereo)
+            ->setSampleRate(attempt.sampleRate)
+            ->setUsage(oboe::Usage::Game)
+            ->setContentType(oboe::ContentType::Sonification)
+            ->setDataCallback(this)
+            ->setErrorCallback(this)
+            ->setFormatConversionAllowed(true)
+            ->setChannelConversionAllowed(true)
+            ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
         result = builder.openStream(stream);
+        if (result == oboe::Result::OK && stream != nullptr) break;
+        if (stream != nullptr) {
+            stream->close();
+            stream.reset();
+        }
     }
     if (result != oboe::Result::OK || stream == nullptr) {
         running_.store(false, std::memory_order_release);
         return;
     }
 
-    sampleRate_ = stream->getSampleRate();
-    framesPerBurst_ = stream->getFramesPerBurst();
-    lowLatency_ = stream->getPerformanceMode() == oboe::PerformanceMode::LowLatency;
+    sampleRate_.store(stream->getSampleRate(), std::memory_order_release);
+    const int32_t framesPerBurst = stream->getFramesPerBurst();
+    framesPerBurst_.store(framesPerBurst, std::memory_order_release);
+    lowLatency_.store(stream->getPerformanceMode() == oboe::PerformanceMode::LowLatency,
+                      std::memory_order_release);
 
-    /* Two bursts of buffer: enough to survive a scheduler hiccup, short enough
-     * that a stop is heard within a few milliseconds. */
     const int32_t bufferSize = stream->getBufferSizeInFrames();
-    if (framesPerBurst_ > 0 && bufferSize >= framesPerBurst_ && bufferSize < framesPerBurst_ * 2) {
-        stream->setBufferSizeInFrames(framesPerBurst_ * 2);
-    }
-
-    if (mixCapacityFrames_ < 8192) {
-        mixBuffer_.assign(8192 * 2, 0.0f);
-        mixCapacityFrames_ = 8192;
+    if (framesPerBurst > 0 && bufferSize >= framesPerBurst && bufferSize < framesPerBurst * 2) {
+        stream->setBufferSizeInFrames(framesPerBurst * 2);
     }
 
     stream_ = stream;
     result = stream_->requestStart();
-    running_.store(result == oboe::Result::OK, std::memory_order_release);
+    if (result != oboe::Result::OK) {
+        auto failed = stream_;
+        stream_.reset();
+        failed->close();
+        running_.store(false, std::memory_order_release);
+        return;
+    }
+    running_.store(true, std::memory_order_release);
 }
 
 void AudioEngine::closeStreamLocked() {
@@ -123,6 +144,7 @@ void AudioEngine::closeStreamLocked() {
 
 void AudioEngine::stopStream() {
     std::lock_guard<std::mutex> lock(streamMutex_);
+    desiredRunning_.store(false, std::memory_order_release);
     closeStreamLocked();
     mixer_.clear();
 }
@@ -138,7 +160,8 @@ int32_t AudioEngine::loadClip(const int16_t* samples, int32_t frames, int32_t ch
     std::memcpy(copy.data(), samples, expected * sizeof(int16_t));
 
     /* Resample to the output rate once, here, so the mixer never resamples. */
-    const int32_t target = sampleRate_ > 0 ? sampleRate_ : kPreferredSampleRate;
+    const int32_t outputRate = sampleRate_.load(std::memory_order_acquire);
+    const int32_t target = outputRate > 0 ? outputRate : kPreferredSampleRate;
     int32_t outFrames = frames;
     if (sampleRate > 0 && sampleRate != target) {
         outFrames = static_cast<int32_t>(
@@ -232,14 +255,11 @@ void AudioEngine::setPaused(bool paused) {
 /* --------------------------------------------------------------- commands */
 
 void AudioEngine::post(const Command& command) {
-    if (ring_.try_push(command)) return;
-    /*
-     * The ring is full: the game thread has posted more than a thousand
-     * requests inside one callback period. Apply the command directly instead
-     * of dropping it. The audio thread may run a block concurrently, which is
-     * harmless: a voice is only ever added, updated or flagged for a fade.
-     */
-    apply(command);
+    // Producers may be the UI, gameplay, and more than one coroutine thread.
+    // Never mutate Mixer directly here: it is single-owned by the Oboe callback.
+    // The large bounded MPMC queue drains every callback; a pathological full
+    // queue drops this one control request rather than racing audio state.
+    ring_.try_push(command);
 }
 
 void AudioEngine::drainCommands() {
@@ -250,9 +270,10 @@ void AudioEngine::drainCommands() {
 }
 
 void AudioEngine::apply(const Command& command) {
+    const int32_t sampleRate = sampleRate_.load(std::memory_order_acquire);
     switch (command.type) {
         case CMD_PLAY: {
-            auto clip = clips_.get(command.params.clip_id);
+            const Clip* clip = clips_.get(command.params.clip_id);
             if (clip == nullptr) return;
             Voice* voice = mixer_.allocate(command.voiceId, command.params.key_id,
                                            command.params.owner, command.params.flags, clip);
@@ -266,12 +287,12 @@ void AudioEngine::apply(const Command& command) {
             const int32_t offsetFrames = command.params.start_offset_ms > 0
                 ? static_cast<int32_t>(
                       static_cast<int64_t>(command.params.start_offset_ms) *
-                      sampleRate_ / 1000) % std::max(1, clip->frames())
+                      sampleRate / 1000) % std::max(1, clip->frames())
                 : 0;
             const int32_t delayFrames = command.params.start_delay_ms > 0
                 ? static_cast<int32_t>(
                       static_cast<int64_t>(command.params.start_delay_ms) *
-                      sampleRate_ / 1000)
+                      sampleRate / 1000)
                 : 0;
             voice->position = static_cast<double>(offsetFrames) - delayFrames;
             voice->currentVolume = 0.0f;
@@ -283,12 +304,12 @@ void AudioEngine::apply(const Command& command) {
             voice->maxDistance = command.params.max_distance_m > 0
                 ? command.params.max_distance_m : 25;
             voice->flags = command.params.flags;
-            applyParams(voice, command.params, sampleRate_);
+            applyParams(voice, command.params, sampleRate);
             return;
         }
         case CMD_UPDATE: {
             Voice* voice = mixer_.find(command.voiceId);
-            applyParams(voice, command.params, sampleRate_);
+            applyParams(voice, command.params, sampleRate);
             return;
         }
         case CMD_STOP:
@@ -335,7 +356,10 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream* stream,
 
     float* output = static_cast<float*>(audioData);
     std::memset(output, 0, sizeof(float) * static_cast<size_t>(frames) * 2);
-    mixer_.render(output, frames, stream != nullptr ? stream->getSampleRate() : sampleRate_);
+    const int32_t outputRate = stream != nullptr
+        ? stream->getSampleRate()
+        : sampleRate_.load(std::memory_order_acquire);
+    mixer_.render(output, frames, outputRate);
     if (frames < numFrames) {
         std::memset(output + frames * 2, 0,
                     sizeof(float) * static_cast<size_t>(numFrames - frames) * 2);
@@ -352,29 +376,28 @@ bool AudioEngine::onError(oboe::AudioStream* /*stream*/, oboe::Result error) {
     return false;
 }
 
-void AudioEngine::onErrorAfterClose(oboe::AudioStream* /*stream*/, oboe::Result /*error*/) {
-    /*
-     * The device changed under us (a headset was plugged in, the route moved
-     * to Bluetooth, the stream was reclaimed). Re-open on this management
-     * thread - never on the audio thread - so the game keeps sounding.
-     */
+void AudioEngine::onErrorAfterClose(oboe::AudioStream* failedStream, oboe::Result error) {
+    // This runs on Oboe's management thread after the failed stream is closed.
+    // Serialize against explicit stop/start, and ignore stale callbacks from a
+    // stream that has already been replaced. A user-requested shutdown must not
+    // be undone by an asynchronous disconnect callback.
     std::lock_guard<std::mutex> lock(streamMutex_);
-    if (stream_ != nullptr) {
-        auto dead = stream_;
-        stream_.reset();
-        dead->close();
-    }
+    if (stream_ == nullptr || stream_.get() != failedStream) return;
+    stream_.reset();
     running_.store(false, std::memory_order_release);
-    openStreamLocked();
+    if (error == oboe::Result::ErrorDisconnected &&
+        desiredRunning_.load(std::memory_order_acquire)) {
+        openStreamLocked();
+    }
 }
 
 of_stream_info AudioEngine::info() const {
     of_stream_info result{};
-    result.sample_rate = sampleRate_;
-    result.frames_per_burst = framesPerBurst_;
+    result.sample_rate = sampleRate_.load(std::memory_order_acquire);
+    result.frames_per_burst = framesPerBurst_.load(std::memory_order_acquire);
     result.channels = 2;
     result.is_float = 1;
-    result.is_low_latency = lowLatency_ ? 1 : 0;
+    result.is_low_latency = lowLatency_.load(std::memory_order_acquire) ? 1 : 0;
     result.active_voices = mixer_.activeVoices();
     result.peak_voices = mixer_.peakVoices();
     result.xrun_count = xruns_.load(std::memory_order_relaxed);

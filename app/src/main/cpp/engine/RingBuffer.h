@@ -1,62 +1,98 @@
 /*
- * Lock-free single-producer/single-consumer command ring.
+ * Bounded lock-free MPMC command queue for game/control threads -> Oboe.
  *
- * The game thread pushes commands, the Oboe callback drains them. Nothing is
- * ever locked and nothing allocates: a command is a POD union large enough for
- * the biggest request (a full of_voice_params), and the ring is a fixed array
- * allocated when the engine is created.
- *
- * A full ring never blocks the caller and never drops silently: `try_push`
- * returns false, and the caller falls back to applying the command directly
- * with the engine's mutex (which can only happen under a pathological burst of
- * thousands of requests inside one callback period).
+ * Android gameplay commands can originate on the UI thread and several
+ * coroutine/decoder threads, so an SPSC queue silently corrupted concurrent
+ * play/stop requests. Per-cell sequence numbers give every producer its own
+ * reservation while keeping the audio callback lock-free and allocation-free.
  */
 #ifndef OPENFIRE_RING_BUFFER_H
 #define OPENFIRE_RING_BUFFER_H
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
-#include <cstring>
+#include <type_traits>
 
 namespace openfire {
 
 template <typename T, size_t Capacity>
 class CommandRing {
+    static_assert(Capacity >= 2, "Queue capacity must be at least two");
+    static_assert((Capacity & (Capacity - 1)) == 0, "Queue capacity must be a power of two");
+    static_assert(std::is_trivially_copyable<T>::value, "Audio commands must be POD-like");
+
+    struct Cell {
+        std::atomic<size_t> sequence;
+        T item{};
+    };
+
 public:
-    CommandRing() : writeIndex_(0), readIndex_(0) {}
+    CommandRing() : enqueuePosition_(0), dequeuePosition_(0) {
+        for (size_t i = 0; i < Capacity; ++i) {
+            cells_[i].sequence.store(i, std::memory_order_relaxed);
+        }
+    }
 
     bool try_push(const T& item) {
-        const size_t write = writeIndex_.load(std::memory_order_relaxed);
-        const size_t next = (write + 1) % Capacity;
-        if (next == readIndex_.load(std::memory_order_acquire)) {
-            return false;  // full
+        size_t position = enqueuePosition_.load(std::memory_order_relaxed);
+        Cell* cell = nullptr;
+        for (;;) {
+            cell = &cells_[position & kMask];
+            const size_t sequence = cell->sequence.load(std::memory_order_acquire);
+            const intptr_t difference = static_cast<intptr_t>(sequence) -
+                                        static_cast<intptr_t>(position);
+            if (difference == 0) {
+                if (enqueuePosition_.compare_exchange_weak(
+                        position, position + 1, std::memory_order_relaxed)) break;
+            } else if (difference < 0) {
+                return false; // full
+            } else {
+                position = enqueuePosition_.load(std::memory_order_relaxed);
+            }
         }
-        slots_[write] = item;
-        writeIndex_.store(next, std::memory_order_release);
+        cell->item = item;
+        cell->sequence.store(position + 1, std::memory_order_release);
         return true;
     }
 
     bool try_pop(T* out) {
-        const size_t read = readIndex_.load(std::memory_order_relaxed);
-        if (read == writeIndex_.load(std::memory_order_acquire)) {
-            return false;  // empty
+        if (out == nullptr) return false;
+        size_t position = dequeuePosition_.load(std::memory_order_relaxed);
+        Cell* cell = nullptr;
+        for (;;) {
+            cell = &cells_[position & kMask];
+            const size_t sequence = cell->sequence.load(std::memory_order_acquire);
+            const intptr_t difference = static_cast<intptr_t>(sequence) -
+                                        static_cast<intptr_t>(position + 1);
+            if (difference == 0) {
+                if (dequeuePosition_.compare_exchange_weak(
+                        position, position + 1, std::memory_order_relaxed)) break;
+            } else if (difference < 0) {
+                return false; // empty
+            } else {
+                position = dequeuePosition_.load(std::memory_order_relaxed);
+            }
         }
-        *out = slots_[read];
-        readIndex_.store((read + 1) % Capacity, std::memory_order_release);
+        *out = cell->item;
+        cell->sequence.store(position + Capacity, std::memory_order_release);
         return true;
     }
 
     bool empty() const {
-        return readIndex_.load(std::memory_order_acquire) ==
-               writeIndex_.load(std::memory_order_acquire);
+        const size_t position = dequeuePosition_.load(std::memory_order_relaxed);
+        const Cell& cell = cells_[position & kMask];
+        return static_cast<intptr_t>(cell.sequence.load(std::memory_order_acquire)) -
+                   static_cast<intptr_t>(position + 1) < 0;
     }
 
     static constexpr size_t capacity() { return Capacity; }
 
 private:
-    T slots_[Capacity];
-    std::atomic<size_t> writeIndex_;
-    std::atomic<size_t> readIndex_;
+    static constexpr size_t kMask = Capacity - 1;
+    Cell cells_[Capacity];
+    std::atomic<size_t> enqueuePosition_;
+    std::atomic<size_t> dequeuePosition_;
 };
 
 }  // namespace openfire

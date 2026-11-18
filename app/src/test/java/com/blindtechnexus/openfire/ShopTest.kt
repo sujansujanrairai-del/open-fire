@@ -132,7 +132,7 @@ class ShopTest {
 
     @Test
     fun antiMissileDefenceUnlocksAfterRoundThree() {
-        assertEquals(1800, DefenceItem.ANTI_MISSILE.price)
+        assertEquals(1500, DefenceItem.ANTI_MISSILE.price)
         assertEquals(3, DefenceItem.ANTI_MISSILE.requiredCompletedRounds)
 
         val locked = Shop.buyDefence(
@@ -161,7 +161,7 @@ class ShopTest {
             completedRounds = 3
         )
         assertTrue(unlocked.success)
-        assertEquals(3200, unlocked.coins)
+        assertEquals(3500, unlocked.coins)
         assertEquals(1, unlocked.inventory.antiMissiles)
 
         val consumed = Shop.consume(unlocked.inventory, DefenceItem.ANTI_MISSILE)
