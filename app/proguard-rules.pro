@@ -19,7 +19,7 @@
 # removed, even though nothing in Kotlin calls them directly.
 -keep class com.blindtechnexus.openfire.audio.native.OpenFireAudioEngine { *; }
 -keep class com.blindtechnexus.openfire.audio.native.NativeStreamInfo { *; }
--keepclasseswithmembers class com.blindtechnexus.openfire.audio.native.NativeStreamInfo {
-    <init>(IIIIZIII)V;
-}
+# The constructor is covered by the `{ *; }` above: a member specification is
+# written in Java syntax, not in JVM descriptors, so spelling it out here with
+# `(IIIIZIII)V` made R8 reject the whole rules file.
 -dontwarn com.blindtechnexus.openfire.audio.native.**
