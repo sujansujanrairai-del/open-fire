@@ -105,7 +105,7 @@ class StringsAndGunRulesTest {
         )
         for ((weapon, price) in prices) assertEquals(price, weapon.price)
         assertEquals(
-            listOf(250, 400, 550, 1000, 1500, 1700, 1800),
+            listOf(250, 400, 550, 1500, 1500, 1500, 1700),
             DefenceItem.entries.map { it.price }.sorted()
         )
         // Max Speed (250) is gone: the four remaining extensions.
@@ -113,7 +113,7 @@ class StringsAndGunRulesTest {
         assertEquals(1000, MissileRules.MISSILE_POWER_PRICE)
         assertEquals(Weapon.forSale().map { it.price }.sorted(), Weapon.forSale().map { it.price })
         assertTrue(Weapon.forSale().all { it.price <= 2200 })
-        assertTrue(DefenceItem.entries.all { it.price <= 1800 })
+        assertTrue(DefenceItem.entries.all { it.price <= 1700 })
     }
 
     @Test
@@ -165,7 +165,7 @@ class StringsAndGunRulesTest {
                 assertFalse("Guide entry $index was not translated into $lang", guide[index] == en[index])
             }
             val text = guide.joinToString(" ")
-            for (number in listOf("25", "16", "26", "40", "64", "80", "200", "2600", "1500", "1100", "400", "2200", "1800")) {
+            for (number in listOf("25", "16", "26", "40", "64", "80", "200", "2600", "1500", "1100", "400", "2200", "1700")) {
                 assertTrue("$lang must document $number", text.contains(digitsOf(lang, number)))
             }
         }

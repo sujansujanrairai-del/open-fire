@@ -161,7 +161,7 @@ class ShopTest {
             completedRounds = 3
         )
         assertTrue(unlocked.success)
-        assertEquals(3200, unlocked.coins)
+        assertEquals(3500, unlocked.coins)
         assertEquals(1, unlocked.inventory.antiMissiles)
 
         val consumed = Shop.consume(unlocked.inventory, DefenceItem.ANTI_MISSILE)
