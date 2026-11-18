@@ -244,4 +244,35 @@ class GestureRouterTest {
         assertEquals(0f, SwipeClassifier.distance(Float.NaN, 0f), 0.0001f)
         assertEquals("down", SwipeClassifier.direction(Float.NaN, 12f))
     }
+
+    @Test
+    fun aThreeFingerSwipeMustBeLongAndClearlyPointed() {
+        // The activation distance is deliberate: above the tap slop, below the
+        // one-finger threshold, so the shortcut stays cheap but never fires on
+        // a firm tap.
+        assertTrue(SwipeClassifier.THREE_FINGER_ACTIVATION > SwipeClassifier.TAP_SLOP)
+        assertTrue(
+            SwipeClassifier.THREE_FINGER_ACTIVATION < SwipeClassifier.ONE_FINGER_THRESHOLD
+        )
+        assertFalse(SwipeClassifier.reached(0f, -12f))
+        assertTrue(SwipeClassifier.reached(0f, -40f))
+        assertTrue(SwipeClassifier.reached(0f, 40f))
+        assertTrue(SwipeClassifier.reached(35f, 0f))
+        // The activation distance is never below the three-finger threshold, so
+        // the two constants can never drift apart in the wrong direction.
+        assertTrue(
+            SwipeClassifier.THREE_FINGER_ACTIVATION >= SwipeClassifier.THREE_FINGER_THRESHOLD
+        )
+
+        // A diagonal hand is not a shortcut yet: the pause and the exit sit on
+        // opposite sides of one sloppy swipe, so the direction must be clear.
+        assertTrue(SwipeClassifier.dominant(0f, -60f))
+        assertTrue(SwipeClassifier.dominant(-62f, 4f))
+        assertFalse(SwipeClassifier.dominant(40f, 38f))
+        assertFalse(SwipeClassifier.reached(40f, 38f))
+        assertTrue(SwipeClassifier.reached(60f, 20f))
+        // Degenerate input is never a shortcut.
+        assertFalse(SwipeClassifier.dominant(0f, 0f))
+        assertFalse(SwipeClassifier.reached(Float.NaN, 0f))
+    }
 }
