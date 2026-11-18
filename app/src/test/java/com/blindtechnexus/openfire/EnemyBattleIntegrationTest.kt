@@ -370,6 +370,14 @@ class EnemyBattleIntegrationTest {
                 "a hold that burns again must hum again",
                 vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
             )
+            // Robert may answer with a duel, whose first pulse lands after two
+            // seconds; either way the renewed hold has to bite quickly.
+            repeat(3) {
+                if (state.value.robertHp >= 200) {
+                    lastTick.setLong(vm, android.os.SystemClock.elapsedRealtime() - 1_000L)
+                    invoke(vm, "shockTick")
+                }
+            }
             assertTrue("a hold that burns again must hurt again", state.value.robertHp < 200)
 
             // The timer picker owns the swipe while it is open.
