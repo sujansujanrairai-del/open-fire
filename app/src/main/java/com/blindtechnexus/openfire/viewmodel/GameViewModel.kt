@@ -126,6 +126,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      */
     private var robertSprintTicks = 0
 
+    /** When Robert last announced that he is closing the distance, in battle ms. */
+    private var lastEnemyRangeNoticeAtMs = 0L
+
     /** Monotonic deadline shared by all enemy gun and breaker shots. */
     private var robertNextShotAtMs = 0L
 
@@ -2381,7 +2384,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             state.robertWeapons.indexOf(chosen.id).coerceAtLeast(0)
         }
-        val firingWeapon = state.robertWeapons.getOrNull(chosenIndex) ?: chosen
+        // `robertWeapons` holds weapon ids; the trigger pull fires the gun he is
+        // really holding, which is the one the index points at.
+        val firingWeapon: Weapon = Weapon.fromId(state.robertWeapons.getOrNull(chosenIndex)) ?: chosen
 
         if (chosenIndex != state.robertWeaponIndex) {
             // Changing weapon is silent for Robert: a stray gun sound on the
