@@ -9,8 +9,27 @@
  * C structures of `of_audio.h`, calls the engine, and converts the status
  * structure back into a Kotlin object. Every function is null-safe and never
  * lets an exception escape into the audio or Kotlin thread.
+ *
+ * Load-time contract
+ * ------------------
+ * `System.loadLibrary` fails - and the whole game loses every effect - when
+ * `JNI_OnLoad` returns anything but `JNI_VERSION_1_6`. The two things that can
+ * make it fail are a wrong method descriptor and a class that cannot be found,
+ * so this file:
+ *
+ *  - spells every descriptor out as one named constant, next to the Kotlin
+ *    declaration it mirrors (a Kotlin `Boolean` is `Z`, not `I`; a Kotlin
+ *    `Int` is `I`),
+ *  - binds the natives to the class that actually declares them (the engine
+ *    class, or its companion object when the compiler places them there),
+ *  - treats the *diagnostics* value class as optional: a missing
+ *    `NativeStreamInfo` disables the diagnostics line, never the audio, and
+ *  - logs every failure with `__android_log_print`, so a silent device shows
+ *    the reason in logcat instead of playing nothing.
  */
 #include <jni.h>
+
+#include <android/log.h>
 
 #include <cstdint>
 #include <cstring>
@@ -18,14 +37,48 @@
 
 #include "openfire/of_audio.h"
 
+#define OF_LOG_TAG "OpenFireJni"
+#define OF_LOGI(...) __android_log_print(ANDROID_LOG_INFO, OF_LOG_TAG, __VA_ARGS__)
+#define OF_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, OF_LOG_TAG, __VA_ARGS__)
+
 namespace {
 
-constexpr const char* kEngineClass = "com/blindtechnexus/openfire/audio/native/OpenFireAudioEngine";
-constexpr const char* kInfoClass = "com/blindtechnexus/openfire/audio/native/NativeStreamInfo";
+/** `com.blindtechnexus.openfire.audio.native.OpenFireAudioEngine`. */
+constexpr const char* kEngineClass =
+    "com/blindtechnexus/openfire/audio/native/OpenFireAudioEngine";
+
+/**
+ * The companion object of the engine. Kotlin may declare an `external fun`
+ * of a companion either as a static method of the class or as a method of
+ * `OpenFireAudioEngine$Companion`; the bridge binds whichever one exists.
+ */
+constexpr const char* kCompanionClass =
+    "com/blindtechnexus/openfire/audio/native/OpenFireAudioEngine$Companion";
+
+/** `com.blindtechnexus.openfire.audio.native.NativeStreamInfo`. */
+constexpr const char* kInfoClass =
+    "com/blindtechnexus/openfire/audio/native/NativeStreamInfo";
+
+/**
+ * Constructor descriptor of `NativeStreamInfo`:
+ *
+ *   NativeStreamInfo(
+ *       sampleRate: Int, framesPerBurst: Int, channels: Int,
+ *       isFloat: Boolean, isLowLatency: Boolean,
+ *       activeVoices: Int, peakVoices: Int, xrunCount: Int
+ *   )
+ *
+ * `Int` is `I` and Kotlin's `Boolean` is `Z`, so the two flags in the middle
+ * are `ZZ` - not `IZ`, and not `II`. This constant must stay in lockstep with
+ * the Kotlin declaration: when it drifts, `GetMethodID` returns null, the
+ * library fails to load, and the game plays no sound at all.
+ */
+constexpr const char* kInfoConstructorSignature = "(IIIZZIII)V";
 
 /** Cached ids of the two Kotlin classes the bridge touches. */
 struct JniCache {
-    jclass engineClass = nullptr;
+    jclass engineClass = nullptr;   /* the class Kotlin loads the library from */
+    jclass engineTarget = nullptr;  /* the class the natives are bound to */
     jclass infoClass = nullptr;
     jmethodID infoConstructor = nullptr;
 };
@@ -38,6 +91,26 @@ of_engine* fromHandle(jlong handle) {
 
 jlong toHandle(of_engine* engine) {
     return static_cast<jlong>(reinterpret_cast<intptr_t>(engine));
+}
+
+/**
+ * Finds a class and keeps a global reference to it, or null.
+ *
+ * `FindClass` leaves a pending `ClassNotFoundException` behind when it fails.
+ * The exception is cleared here on purpose: a pending exception would travel
+ * out of `JNI_OnLoad` and surface from `System.loadLibrary` as an unrelated
+ * error, hiding the real reason.
+ */
+jclass toGlobalClass(JNIEnv* env, const char* name) {
+    jclass local = env->FindClass(name);
+    if (local == nullptr) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        return nullptr;
+    }
+    auto global = static_cast<jclass>(env->NewGlobalRef(local));
+    env->DeleteLocalRef(local);
+    if (global == nullptr && env->ExceptionCheck()) env->ExceptionClear();
+    return global;
 }
 
 /** Reads a Kotlin `IntArray` of size 15 into the C voice structure. */
@@ -87,9 +160,17 @@ jboolean nativeIsRunning(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
 
 jint nativeLoadClip(JNIEnv* env, jclass /*clazz*/, jlong handle,
                     jshortArray samples, jint frames, jint channels, jint sampleRate) {
-    if (samples == nullptr) return 0;
+    if (samples == nullptr || frames <= 0 || channels <= 0 || channels > 8) return 0;
     const jsize length = env->GetArrayLength(samples);
     if (length <= 0) return 0;
+    /* The engine copies `frames * channels` samples: never read past the
+     * array, whatever the caller says the geometry is. */
+    const jlong expected = static_cast<jlong>(frames) * static_cast<jlong>(channels);
+    if (expected > static_cast<jlong>(length)) {
+        OF_LOGE("loadClip: %lld samples requested but the array holds %d",
+                static_cast<long long>(expected), static_cast<int>(length));
+        return 0;
+    }
     jshort* buffer = env->GetShortArrayElements(samples, nullptr);
     if (buffer == nullptr) return 0;
     const jint clip = of_engine_load_clip(fromHandle(handle), buffer, frames, channels, sampleRate);
@@ -168,6 +249,11 @@ jboolean nativeIsKeySounding(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle, ji
     return of_engine_is_key_sounding(fromHandle(handle), keyId) != 0 ? JNI_TRUE : JNI_FALSE;
 }
 
+/** True while this exact voice id is still in the pool. */
+jboolean nativeIsVoiceSounding(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle, jint voiceId) {
+    return of_engine_is_voice_sounding(fromHandle(handle), voiceId) != 0 ? JNI_TRUE : JNI_FALSE;
+}
+
 JNINativeMethod gMethods[] = {
     /* name, signature, function pointer (JNI mutates neither string). */
     {const_cast<char*>("create"), const_cast<char*>("()J"),
@@ -210,36 +296,71 @@ JNINativeMethod gMethods[] = {
      reinterpret_cast<void*>(nativeActiveVoices)},
     {const_cast<char*>("isKeySounding"), const_cast<char*>("(JI)Z"),
      reinterpret_cast<void*>(nativeIsKeySounding)},
+    {const_cast<char*>("isVoiceSounding"), const_cast<char*>("(JI)Z"),
+     reinterpret_cast<void*>(nativeIsVoiceSounding)},
 };
+
+constexpr jint kMethodCount = static_cast<jint>(sizeof(gMethods) / sizeof(gMethods[0]));
+
+/** Binds every method of `clazz`. Leaves no pending exception behind. */
+bool bindNatives(JNIEnv* env, jclass clazz) {
+    if (env->RegisterNatives(clazz, gMethods, kMethodCount) == JNI_OK) return true;
+    /* RegisterNatives throws NoSuchMethodError for the first method it cannot
+     * find; clear it before trying the other class so the fallback can run. */
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    return false;
+}
 
 }  // namespace
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
     JNIEnv* env = nullptr;
     if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        OF_LOGE("JNI_OnLoad: this VM does not speak JNI 1.6");
         return JNI_ERR;
     }
 
-    jclass engineClass = env->FindClass(kEngineClass);
-    if (engineClass == nullptr) return JNI_ERR;
-    gCache.engineClass = static_cast<jclass>(env->NewGlobalRef(engineClass));
-    env->DeleteLocalRef(engineClass);
-    if (gCache.engineClass == nullptr) return JNI_ERR;
-
-    if (env->RegisterNatives(gCache.engineClass, gMethods,
-                             static_cast<jint>(sizeof(gMethods) / sizeof(gMethods[0]))) != JNI_OK) {
+    gCache.engineClass = toGlobalClass(env, kEngineClass);
+    if (gCache.engineClass == nullptr) {
+        OF_LOGE("JNI_OnLoad: class %s was not found", kEngineClass);
         return JNI_ERR;
     }
 
-    jclass infoClass = env->FindClass(kInfoClass);
-    if (infoClass == nullptr) return JNI_ERR;
-    gCache.infoClass = static_cast<jclass>(env->NewGlobalRef(infoClass));
-    env->DeleteLocalRef(infoClass);
-    if (gCache.infoClass == nullptr) return JNI_ERR;
+    if (bindNatives(env, gCache.engineClass)) {
+        gCache.engineTarget = gCache.engineClass;
+    } else {
+        /* The Kotlin compiler of this build keeps the `external` methods of a
+         * companion object on the companion class instead of on the engine
+         * class. Bind them where they really are. */
+        jclass companion = toGlobalClass(env, kCompanionClass);
+        if (companion == nullptr || !bindNatives(env, companion)) {
+            if (companion != nullptr) env->DeleteGlobalRef(companion);
+            OF_LOGE("JNI_OnLoad: RegisterNatives failed for %s and %s; "
+                    "the game will run without sound",
+                    kEngineClass, kCompanionClass);
+            return JNI_ERR;
+        }
+        gCache.engineTarget = companion;
+        OF_LOGI("JNI_OnLoad: native methods bound to %s", kCompanionClass);
+    }
 
-    const jmethodID constructor = env->GetMethodID(gCache.infoClass, "<init>", "(IIIIZIII)V");
-    if (constructor == nullptr) return JNI_ERR;
-    gCache.infoConstructor = constructor;
+    /* Diagnostics are optional. A device that cannot build the value object
+     * still gets every sound; only the diagnostics line is missing. */
+    gCache.infoClass = toGlobalClass(env, kInfoClass);
+    if (gCache.infoClass != nullptr) {
+        gCache.infoConstructor = env->GetMethodID(gCache.infoClass, "<init>",
+                                                  kInfoConstructorSignature);
+        if (gCache.infoConstructor == nullptr) {
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            OF_LOGE("JNI_OnLoad: %s has no constructor %s; diagnostics are off",
+                    kInfoClass, kInfoConstructorSignature);
+            env->DeleteGlobalRef(gCache.infoClass);
+            gCache.infoClass = nullptr;
+        }
+    } else {
+        OF_LOGE("JNI_OnLoad: class %s was not found; diagnostics are off", kInfoClass);
+    }
 
+    OF_LOGI("JNI_OnLoad: the native audio engine is ready");
     return JNI_VERSION_1_6;
 }

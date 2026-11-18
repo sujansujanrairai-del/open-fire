@@ -116,6 +116,11 @@ int32_t of_engine_is_key_sounding(of_engine* engine, int32_t key_id) {
     return engine->engine->isKeySounding(key_id) ? 1 : 0;
 }
 
+int32_t of_engine_is_voice_sounding(of_engine* engine, int32_t voice_id) {
+    if (engine == nullptr || voice_id <= 0) return 0;
+    return engine->engine->isVoiceSounding(voice_id) ? 1 : 0;
+}
+
 of_stream_info of_engine_info(of_engine* engine) {
     if (engine == nullptr) {
         of_stream_info empty{};

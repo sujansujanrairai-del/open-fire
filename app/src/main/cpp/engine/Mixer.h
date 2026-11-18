@@ -51,6 +51,23 @@ public:
         return false;
     }
 
+    /**
+     * True while this exact voice id is still in the pool. Lock-free, like
+     * [isKeySounding]: a caller that remembers an id (a held loop) can tell a
+     * live voice from one that already ended, without touching callback state.
+     */
+    bool isVoiceSounding(int32_t voiceId) const {
+        if (voiceId <= 0) return false;
+        for (int32_t i = 0; i < kMaxVoices; ++i) {
+            const Voice& candidate = voices_[static_cast<size_t>(i)];
+            if (candidate.publishedActive.load(std::memory_order_acquire) &&
+                candidate.publishedId.load(std::memory_order_relaxed) == voiceId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Number of voices currently sounding. */
     int32_t activeVoices() const { return active_.load(std::memory_order_relaxed); }
 
@@ -152,11 +169,13 @@ public:
             Voice& candidate = voices_[static_cast<size_t>(i)];
             candidate.publishedActive.store(false, std::memory_order_release);
             candidate.publishedKeyId.store(0, std::memory_order_relaxed);
+            candidate.publishedId.store(0, std::memory_order_relaxed);
             candidate.clip = nullptr;
             candidate.state = VOICE_PENDING;
             candidate.stopping = false;
         }
-        active_ = 0;
+        active_.store(0, std::memory_order_relaxed);
+        peak_.store(0, std::memory_order_relaxed);
     }
 
     /**
@@ -164,6 +183,7 @@ public:
      * zeroed by the caller) and applies the bus and master gains.
      */
     void render(float* output, int32_t frames, int32_t sampleRate) {
+        if (output == nullptr || frames <= 0) return;
         const float rampStep = 1.0f -
             std::exp(-1.0f / (openfire::kGainRampMs * 0.001f * static_cast<float>(sampleRate)));
         const float stopFadeStep = 1.0f /
@@ -196,9 +216,12 @@ public:
 
         const float master = master_.load(std::memory_order_relaxed);
         const float sfx = busGain_[0].load(std::memory_order_relaxed) * master;
+        // The bus gain is applied once, here, and the same pass bends peaks
+        // above the knee smoothly towards full scale. The device clips a float
+        // stream hard, so without this a crowd of loud voices would crackle.
         for (int32_t frame = 0; frame < frames; ++frame) {
-            output[frame * 2] *= sfx;
-            output[frame * 2 + 1] *= sfx;
+            output[frame * 2] = openfire::softLimit(output[frame * 2] * sfx);
+            output[frame * 2 + 1] = openfire::softLimit(output[frame * 2 + 1] * sfx);
         }
     }
 
@@ -247,6 +270,7 @@ private:
         voice.currentDelay = 0.0f;
         voice.delayCursor = 0;
         voice.stopping = false;
+        voice.publishedId.store(id, std::memory_order_relaxed);
         voice.publishedKeyId.store(keyId, std::memory_order_relaxed);
         voice.publishedActive.store(true, std::memory_order_release);
     }

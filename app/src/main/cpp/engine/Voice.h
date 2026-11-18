@@ -52,6 +52,7 @@ public:
     const Clip* clip = nullptr;
 
     /* Lock-free query mirror; only the mixer writes, API callers read. */
+    std::atomic<int32_t> publishedId{0};
     std::atomic<int32_t> publishedKeyId{0};
     std::atomic<bool> publishedActive{false};
 
@@ -214,12 +215,20 @@ inline bool renderVoice(Voice* voice,
             outLeft = source * level * panLeft;
             outRight = source * level * panRight;
 
+            /*
+             * The delay line advances for every point source, even while it
+             * is centred: a source that moves from the middle to one side
+             * then reads recent audio instead of a buffer that was frozen the
+             * last time it was off-centre. A centred source never *reads* it,
+             * so the head-on image stays perfectly symmetric.
+             */
+            voice->delayLine[voice->delayCursor] = source;
+
             if (sideways) {
                 /*
                  * The ear away from the source hears the sound through the
                  * head: later (fractional delay) and duller (shadow filter).
                  */
-                voice->delayLine[voice->delayCursor] = source;
                 const int32_t whole = static_cast<int32_t>(voice->currentDelay);
                 const float frac = voice->currentDelay - static_cast<float>(whole);
                 int32_t readA = (voice->delayCursor - whole) % kDelayLineFrames;
@@ -228,7 +237,6 @@ inline bool renderVoice(Voice* voice,
                 if (readB < 0) readB += kDelayLineFrames;
                 const float delayed =
                     voice->delayLine[readA] * (1.0f - frac) + voice->delayLine[readB] * frac;
-                voice->delayCursor = (voice->delayCursor + 1) % kDelayLineFrames;
 
                 voice->farEarState += shadowCoefficient * (delayed - voice->farEarState);
                 float nearGain = 1.0f;
@@ -247,6 +255,7 @@ inline bool renderVoice(Voice* voice,
                 outLeft = centre;
                 outRight = centre;
             }
+            voice->delayCursor = (voice->delayCursor + 1) % kDelayLineFrames;
         }
 
         output[frame * 2] += outLeft;
