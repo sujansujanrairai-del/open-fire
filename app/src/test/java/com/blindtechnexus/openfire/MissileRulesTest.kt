@@ -20,7 +20,7 @@ class MissileRulesTest {
         // Prices respect the new cap.
         assertEquals(2200, MissileRules.MISSILE_PRICE)
         assertEquals(1000, MissileRules.MISSILE_POWER_PRICE)
-        assertEquals(1800, MissileRules.ANTI_MISSILE_PRICE)
+        assertEquals(1500, MissileRules.ANTI_MISSILE_PRICE)
         assertEquals(2, Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS)
         assertEquals(2200, Weapon.MISSILE.price)
         // The flight sound is about fourteen seconds long.
@@ -102,6 +102,15 @@ class MissileRulesTest {
     }
 
     @Test
+    fun shockCanDeflectOnlyBeforeTheFinalThreePercentOfFlight() {
+        assertTrue(MissileRules.canShockDeflect(31L, 1000L)) // 96.9% through flight
+        assertFalse(MissileRules.canShockDeflect(30L, 1000L)) // exactly 97%
+        assertFalse(MissileRules.canShockDeflect(0L, 1000L))
+        assertEquals(0f, MissileRules.flightProgress(1000L, 1000L), 0.0001f)
+        assertEquals(1f, MissileRules.flightProgress(0L, 1000L), 0.0001f)
+    }
+
+    @Test
     fun aLaunchNeedsTheMissileAPowerAndClearAir() {
         assertTrue(MissileRules.canLaunch(ownsMissile = true, missilePowers = 2, missileInFlight = false))
         assertFalse(MissileRules.canLaunch(ownsMissile = false, missilePowers = 2, missileInFlight = false))
@@ -114,10 +123,15 @@ class MissileRulesTest {
         assertEquals(0, MissileRules.antiMissilesForRound(1))
         assertEquals(0, MissileRules.antiMissilesForRound(3))
         assertEquals(2, MissileRules.antiMissilesForRound(4))
-        assertEquals(4, MissileRules.antiMissilesForRound(5))
+        assertEquals(1, MissileRules.antiMissilesForRound(5, 1))
+        assertEquals(0, MissileRules.antiMissilesForRound(5, 2))
+        assertEquals(1, MissileRules.antiMissilesForRound(5, 3))
+        assertEquals(2, MissileRules.antiMissilesForRound(5, 5))
         assertEquals(0, MissileRules.enemyMissilePowersForRound(3))
         assertEquals(1, MissileRules.enemyMissilePowersForRound(4))
-        assertEquals(2, MissileRules.enemyMissilePowersForRound(5))
+        assertEquals(1, MissileRules.enemyMissilePowersForRound(5, 1))
+        assertEquals(1, MissileRules.enemyMissilePowersForRound(5, 2))
+        assertEquals(2, MissileRules.enemyMissilePowersForRound(5, 3))
     }
 
     @Test
@@ -134,10 +148,10 @@ class MissileRulesTest {
     }
 
     @Test
-    fun oneSystemCoversThreeMissilesAndOneEnemyBatteryCoversOne() {
-        assertEquals(3, MissileRules.PLAYER_INTERCEPTS_PER_SYSTEM)
+    fun oneSystemCoversTwoMissilesAndOneEnemyBatteryCoversOne() {
+        assertEquals(2, MissileRules.PLAYER_INTERCEPTS_PER_SYSTEM)
         assertEquals(1, MissileRules.ENEMY_INTERCEPTS_PER_SYSTEM)
-        assertEquals(3, MissileRules.interceptsPerSystem(firedByPlayer = true))
+        assertEquals(2, MissileRules.interceptsPerSystem(firedByPlayer = true))
         assertEquals(1, MissileRules.interceptsPerSystem(firedByPlayer = false))
         // Robert still answers a real missile whenever a battery is left.
         assertTrue(MissileRules.enemyIntercepts(4, 2, missileInFlight = true, robertHp = 1500))

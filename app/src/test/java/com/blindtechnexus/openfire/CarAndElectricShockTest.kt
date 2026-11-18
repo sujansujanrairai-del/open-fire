@@ -24,9 +24,9 @@ class CarAndElectricShockTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun theCarCostsOneThousandAndRefuelsForFiveHundred() {
-        assertEquals(1000, CarRules.PRICE)
-        assertEquals(1000, DefenceItem.CAR.price)
+    fun theCarCostsFifteenHundredAndRefuelsForFiveHundred() {
+        assertEquals(1500, CarRules.PRICE)
+        assertEquals(1500, DefenceItem.CAR.price)
         assertEquals(500, CarRules.REFUEL_PRICE)
         assertEquals(5, CarRules.GAMES_PER_FUEL)
         assertEquals(1, DefenceItem.CAR.requiredCompletedRounds)
@@ -104,7 +104,7 @@ class CarAndElectricShockTest {
 
     @Test
     fun buyingTheCarGivesOneCarWithFiveGames() {
-        val bought = Shop.buyDefence(Inventory(), 1000, DefenceItem.CAR, completedRounds = 1)
+        val bought = Shop.buyDefence(Inventory(), 1500, DefenceItem.CAR, completedRounds = 1)
         assertTrue(bought.success)
         assertEquals(0, bought.coins)
         assertEquals(1, bought.inventory.cars)
@@ -152,7 +152,7 @@ class CarAndElectricShockTest {
 
     @Test
     fun aCarIsUsableInFiveGamesThenNeedsFuel() {
-        var inventory = Shop.buyDefence(Inventory(), 1000, DefenceItem.CAR, completedRounds = 1).inventory
+        var inventory = Shop.buyDefence(Inventory(), 1500, DefenceItem.CAR, completedRounds = 1).inventory
         repeat(5) {
             inventory = Shop.useCarGame(inventory)
         }
@@ -272,9 +272,16 @@ class CarAndElectricShockTest {
         assertTrue(ElectricShockRules.inCloseBand(100f))
         assertFalse(ElectricShockRules.inCloseBand(39.99f))
         assertFalse(ElectricShockRules.inCloseBand(0f))
-        // The barrier-breaking band is the top ten percent only.
+        // The barrier-breaking band is the top ten percent only, with
+        // distinct continuous-shock durations for each barrier type.
         assertTrue(ElectricShockRules.inBreakBand(90f))
         assertFalse(ElectricShockRules.inBreakBand(89f))
+        assertEquals(15_000L, ElectricShockRules.barrierBreakDurationMs(isGlueWall = true))
+        assertEquals(7_000L, ElectricShockRules.barrierBreakDurationMs(isGlueWall = false))
+        assertFalse(ElectricShockRules.barrierBreakReady(14_999L, isGlueWall = true))
+        assertTrue(ElectricShockRules.barrierBreakReady(15_000L, isGlueWall = true))
+        assertFalse(ElectricShockRules.barrierBreakReady(6_999L, isGlueWall = false))
+        assertTrue(ElectricShockRules.barrierBreakReady(7_000L, isGlueWall = false))
     }
 
     @Test

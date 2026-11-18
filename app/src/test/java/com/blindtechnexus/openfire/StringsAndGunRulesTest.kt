@@ -120,7 +120,7 @@ class StringsAndGunRulesTest {
     fun guidesExistForEveryLanguageAndAreDetailed() {
         for (lang in listOf("en", "hi", "ne")) {
             val guide = Strings.getGuide(lang)
-            assertEquals(29, guide.size)
+            assertEquals(30, guide.size)
             assertTrue("Guide must be detailed", guide.joinToString(" ").length > 4000)
             for (entry in guide) {
                 assertTrue(entry.isNotBlank())
@@ -143,9 +143,12 @@ class StringsAndGunRulesTest {
             "three quick shots", "unlock and can be bought from round 1",
             "heavy hit or repeated", "500, 1000 or 1500", "fewer than 500",
             "1500-coin loan and 1100", "400 owed", "remaining debt", "no interest",
-            "missile 2200", "anti-missile 1800", "interceptor", "timer bomb",
+            "missile 2200", "anti-missile 1500", "interceptor", "timer bomb",
             "lock the opponent", "2500 coins", "1000", "700 to 1000",
-            "gloo wall", "second chance", "quick menu", "Settings"
+            "gloo wall", "second chance", "quick menu", "Settings",
+            "level-specific", "L1 has 1 missile power", "L2 has 1 missile power, no interceptor",
+            "L3 has 2 missile powers", "L4 has 2 missile powers", "L5 has 2 missile powers",
+            "5 anti-bombs"
         )) assertTrue("Missing guide rule: $required", en.contains(required, ignoreCase = true))
         assertFalse(en.contains("exclusive channel", ignoreCase = true))
         assertFalse(en.contains("guarantee a kill", ignoreCase = false) && !en.contains("no longer guarantee a kill"))

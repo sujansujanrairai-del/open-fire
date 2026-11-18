@@ -2,14 +2,17 @@
  * An immutable, decoded sound: interleaved 16-bit samples.
  *
  * Clips are owned by the ClipStore and never touched by the audio thread for
- * anything but reads. Every clip is normalised to the engine's output sample
- * rate when it is loaded, so the mixer never resamples on the fly and the
- * playback rate of a voice is purely a pitch/pace control.
+ * anything but reads. They remain alive until the stream stops and the engine
+ * clears the store, so voices and queued commands can use raw immutable
+ * pointers without refcounting or locks on the callback. Every clip is
+ * normalised to the engine's output sample rate when loaded, so the mixer
+ * never resamples on the fly and playback rate is purely a pitch/pace control.
  */
 #ifndef OPENFIRE_CLIP_H
 #define OPENFIRE_CLIP_H
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace openfire {

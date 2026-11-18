@@ -212,16 +212,41 @@ class RobertTest {
         assertEquals(7, roundFive.covers)
         assertEquals(RobertRules.ENEMY_WEAPONS.toSet(), roundFive.weapons.toSet())
         assertFalse(roundFive.weapons.contains(Weapon.MISSILE))
-        // Round five holds two missiles, four anti-missiles and five anti-bombs.
-        assertEquals(2, roundFive.missilePowers)
-        assertEquals(4, roundFive.antiMissiles)
+        // Round five level one has its explicitly requested finite inventory.
+        assertEquals(1, roundFive.missilePowers)
+        assertEquals(1, roundFive.antiMissiles)
         assertEquals(5, roundFive.fleeAfterHits)
-        assertEquals(5, roundFive.antiBombs)
-        // Unlimited bombs in round five (represented as 99) — strategy over stats.
-        assertEquals(99, roundFive.bombs)
-        assertEquals(99, roundFive.grenades)
-        assertEquals(99, roundFive.atomBombs)
-        assertEquals(99, roundFive.timerBombs)
+        assertEquals(2, roundFive.antiBombs)
+        // Level one follows its finite two-item bomb stock exactly.
+        assertEquals(2, roundFive.bombs)
+        assertEquals(2, roundFive.grenades)
+        assertEquals(0, roundFive.atomBombs)
+        assertEquals(0, roundFive.timerBombs)
+
+        val roundFiveLevelTwo = RobertRules.profile(5, 2)
+        assertEquals(1, roundFiveLevelTwo.missilePowers)
+        assertEquals(0, roundFiveLevelTwo.antiMissiles)
+        assertEquals(4, roundFiveLevelTwo.bombs)
+        assertEquals(2, roundFiveLevelTwo.grenades)
+        assertEquals(1, roundFiveLevelTwo.atomBombs)
+        assertEquals(1, roundFiveLevelTwo.timerBombs)
+        assertEquals(2, roundFiveLevelTwo.antiBombs)
+        val roundFiveLevelThree = RobertRules.profile(5, 3)
+        assertEquals(2, roundFiveLevelThree.missilePowers)
+        assertEquals(1, roundFiveLevelThree.antiMissiles)
+        assertEquals(5, roundFiveLevelThree.bombs)
+        assertEquals(2, roundFiveLevelThree.grenades)
+        assertEquals(2, roundFiveLevelThree.atomBombs)
+        assertEquals(1, roundFiveLevelThree.timerBombs)
+        assertEquals(1, roundFiveLevelThree.antiBombs)
+        val roundFiveLevelFive = RobertRules.profile(5, 5)
+        assertEquals(2, roundFiveLevelFive.missilePowers)
+        assertEquals(2, roundFiveLevelFive.antiMissiles)
+        assertEquals(6, roundFiveLevelFive.bombs)
+        assertEquals(2, roundFiveLevelFive.grenades)
+        assertEquals(2, roundFiveLevelFive.atomBombs)
+        assertEquals(2, roundFiveLevelFive.timerBombs)
+        assertEquals(5, roundFiveLevelFive.antiBombs)
         assertFalse(roundFive.weapons.contains(Weapon.MACHINE_GUN))
         assertTrue(roundFive.weapons.none { it.autoFire })
     }
@@ -699,10 +724,10 @@ class RobertTest {
     }
 
     @Test
-    fun heDeploysHisSingleAntiBombExplosivePerGame() {
+    fun heSpendsAntiBombExplosivesOnlyOnAnIncomingBomb() {
         assertTrue(BombRules.willIntercept(3, antiBombsLeft = 1, bombInFlight = true))
         assertTrue(BombRules.willIntercept(5, antiBombsLeft = 1, bombInFlight = true))
-        // Once used, never again in the same game (except unlimited in round five represented as 99).
+        // Once the finite stock is spent, no later bomb can be intercepted.
         assertFalse(BombRules.willIntercept(4, antiBombsLeft = 0, bombInFlight = true))
         // No bomb in the air, no explosive spent.
         assertFalse(BombRules.willIntercept(4, antiBombsLeft = 1, bombInFlight = false))
@@ -712,7 +737,8 @@ class RobertTest {
         assertTrue(BombRules.bombsUnlocked(3))
         assertEquals(3, BombRules.FIRST_BOMB_ROUND)
         assertEquals(0, BombRules.antiBombsForRound(2))
-        assertEquals(5, BombRules.antiBombsForRound(5))
+        assertEquals(2, BombRules.antiBombsForRound(5, 1))
+        assertEquals(5, BombRules.antiBombsForRound(5, 5))
         assertEquals(3, BombRules.antiBombsForRound(4))
         assertEquals(2, BombRules.antiBombsForRound(3))
         // The player's own anti-bomb explosive is free from round three.

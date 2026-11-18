@@ -19,8 +19,8 @@ import kotlin.random.Random
  *  - Round 4 (all levels): 5 medkits, 3 glue walls and 5 covers. Every remaining
  *    standard weapon, plus his missile powers, anti-missiles, bombs (3) and
  *    anti-bombs (3).
- *  - Round 5 (all levels): 5 medkits, 4 glue walls and 7 covers. Strategic round:
- *    equal power, bombs and anti-bombs unlimited — relies on strategy, not raw stats.
+ *  - Round 5 (all levels): 5 medkits, 4 glue walls and 7 covers. Missile,
+ *    anti-missile, bomb and anti-bomb stocks vary by level and are finite.
  *
  * Two hard rules hold in every round from one to five:
  *
@@ -56,9 +56,9 @@ data class RobertProfile(
     val antiBombs: Int = 0,
     /** Grenades he may throw this game (twice in round three). */
     val grenades: Int = 0,
-    /** Atom bombs he may throw this game (three times per game from round four). */
+    /** Atom bombs he may throw this game (finite round-specific stock). */
     val atomBombs: Int = 0,
-    /** Timer bombs he may throw this game (three times per game from round four). */
+    /** Timer bombs he may throw this game (finite round-specific stock). */
     val timerBombs: Int = 0
 )
 
@@ -489,8 +489,8 @@ object RobertRules {
             )
             4 -> RobertProfile(
                 4, maxHp, 5, 3, 5, weapons, false, fleeAfterHits(4),
-                missilePowers = MissileRules.enemyMissilePowersForRound(4),
-                antiMissiles = MissileRules.antiMissilesForRound(4),
+                missilePowers = MissileRules.enemyMissilePowersForRound(4, safeLevel),
+                antiMissiles = MissileRules.antiMissilesForRound(4, safeLevel),
                 bombs = BombRules.enemyBombsForRound(4),
                 antiBombs = BombRules.antiBombsForRound(4),
                 grenades = BombRules.enemyBombUsesForRound(4, BombKind.GRENADE),
@@ -499,13 +499,13 @@ object RobertRules {
             )
             else -> RobertProfile(
                 5, maxHp, 5, 4, 7, weapons, false, fleeAfterHits(5),
-                missilePowers = MissileRules.enemyMissilePowersForRound(5),
-                antiMissiles = MissileRules.antiMissilesForRound(5),
-                bombs = BombRules.enemyBombsForRound(5),
-                antiBombs = BombRules.antiBombsForRound(5),
-                grenades = BombRules.enemyBombUsesForRound(5, BombKind.GRENADE),
-                atomBombs = BombRules.enemyBombUsesForRound(5, BombKind.ATOM),
-                timerBombs = BombRules.enemyBombUsesForRound(5, BombKind.TIMER)
+                missilePowers = MissileRules.enemyMissilePowersForRound(5, safeLevel),
+                antiMissiles = MissileRules.antiMissilesForRound(5, safeLevel),
+                bombs = BombRules.enemyBombsForRound(5, safeLevel),
+                antiBombs = BombRules.antiBombsForRound(5, safeLevel),
+                grenades = BombRules.enemyBombUsesForRound(5, BombKind.GRENADE, safeLevel),
+                atomBombs = BombRules.enemyBombUsesForRound(5, BombKind.ATOM, safeLevel),
+                timerBombs = BombRules.enemyBombUsesForRound(5, BombKind.TIMER, safeLevel)
             )
         }
     }
@@ -999,9 +999,9 @@ object RobertRules {
     fun infiniteAmmo(round: Int): Boolean =
         round.coerceIn(1, Progression.ROUNDS_PER_MATCH) >= 5
 
-    /** True from round five: bombs are unlimited as well. */
-    fun infiniteBombs(round: Int): Boolean =
-        round.coerceIn(1, Progression.ROUNDS_PER_MATCH) >= 5
+    /** Bomb counts remain finite in every level, including round five. */
+    @Suppress("UNUSED_PARAMETER")
+    fun infiniteBombs(round: Int): Boolean = false
 
     /**
      * True once Robert may end the game with his missile in this round.

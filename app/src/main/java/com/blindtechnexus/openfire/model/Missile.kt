@@ -38,8 +38,7 @@ package com.blindtechnexus.openfire.model
  *
  *  - one anti-missile system bought by the player covers
  *    [PLAYER_INTERCEPTS_PER_SYSTEM] missiles ([INTERCEPTIONS_PER_SYSTEM]), so a
- *    single purchase can knock three missiles out of the air before it is
- *    spent;
+ *    single purchase can knock two missiles out of the air before it is spent;
  *  - one enemy anti-missile system covers exactly
  *    [ENEMY_INTERCEPTS_PER_SYSTEM] missile, so Robert's batteries are one-shot
  *    devices;
@@ -55,8 +54,8 @@ object MissileRules {
     /** Shop price of one consumable missile power (rebalanced). */
     const val MISSILE_POWER_PRICE = 1000
 
-    /** Shop price of one anti-missile defence system (rebalanced). */
-    const val ANTI_MISSILE_PRICE = 1800
+    /** Shop price of one anti-missile defence system. */
+    const val ANTI_MISSILE_PRICE = 1_500
 
     /**
      * Length of `missile.ogg` (about 14 seconds). A direct hit lands
@@ -86,8 +85,25 @@ object MissileRules {
     /** Hard cap so a fleeing chase can never drag on forever. */
     const val MAX_FLIGHT_MS = 22_000L
 
+    /** Shock can deflect an incoming missile before its final three percent. */
+    const val SHOCK_DEFLECTION_CUTOFF = 0.97f
+
+    /** One electric-shock deflection delays an incoming missile by five seconds. */
+    const val SHOCK_DEFLECTION_DELAY_MS = 5_000L
+
     /** Robert may fire an interceptor only while below this much health. */
     const val ANTI_MISSILE_MAX_HP = 100
+
+    /** Progress through a missile's current flight, in the inclusive 0..1 range. */
+    fun flightProgress(remainingMs: Long, durationMs: Long): Float {
+        if (durationMs <= 0L) return 1f
+        return (1f - remainingMs.coerceAtLeast(0L).toFloat() / durationMs.toFloat())
+            .coerceIn(0f, 1f)
+    }
+
+    /** The electric shock is too late once the missile reaches 97% proximity. */
+    fun canShockDeflect(remainingMs: Long, durationMs: Long): Boolean =
+        flightProgress(remainingMs, durationMs) < SHOCK_DEFLECTION_CUTOFF
 
     /** First round that carries missile and anti-missile equipment. */
     const val FIRST_MISSILE_ROUND = 4
@@ -98,11 +114,8 @@ object MissileRules {
     /** Shots Robert must have fired before he considers his missile. */
     const val ENEMY_LAUNCH_MIN_SHOTS = 3
 
-    /**
-     * Missiles one player anti-missile system destroys before it is spent.
-     * A single purchase therefore covers three incoming missiles.
-     */
-    const val PLAYER_INTERCEPTS_PER_SYSTEM = 3
+    /** One purchased anti-missile system can intercept two incoming missiles. */
+    const val PLAYER_INTERCEPTS_PER_SYSTEM = 2
 
     /**
      * Missiles one enemy anti-missile system destroys before it is spent.
@@ -167,21 +180,28 @@ object MissileRules {
     fun canLaunch(ownsMissile: Boolean, missilePowers: Int, missileInFlight: Boolean): Boolean =
         ownsMissile && missilePowers > 0 && !missileInFlight
 
-    /** Interceptors Robert carries in a round: 0, then 2 in round 4, 4 in round 5. */
-    fun antiMissilesForRound(round: Int): Int = when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
-        4 -> 2
-        5 -> 4
-        else -> 0
-    }
+    /** Enemy anti-missile systems by round and final-round level. */
+    fun antiMissilesForRound(round: Int, level: Int = 1): Int =
+        when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
+            4 -> 2
+            5 -> when (level.coerceIn(1, Progression.LEVELS_PER_ROUND)) {
+                1 -> 1
+                2 -> 0
+                3 -> 1
+                4 -> 1
+                else -> 2
+            }
+            else -> 0
+        }
 
-    /**
-     * Missile powers Robert carries in a round: one per game in round four
-     * and two per game in round five.
-     */
-    fun enemyMissilePowersForRound(round: Int): Int =
+    /** Enemy missile stock, balanced explicitly for each level of round five. */
+    fun enemyMissilePowersForRound(round: Int, level: Int = 1): Int =
         when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
             4 -> 1
-            5 -> 2
+            5 -> when (level.coerceIn(1, Progression.LEVELS_PER_ROUND)) {
+                1, 2 -> 1
+                else -> 2
+            }
             else -> 0
         }
 
@@ -222,7 +242,7 @@ object MissileRules {
 
     /**
      * Interceptors one anti-missile system of [firedByPlayer] covers. The
-     * player's bought system covers three missiles, the enemy's one.
+     * player's bought system covers two missiles, the enemy's one.
      */
     fun interceptsPerSystem(firedByPlayer: Boolean): Int =
         if (firedByPlayer) PLAYER_INTERCEPTS_PER_SYSTEM else ENEMY_INTERCEPTS_PER_SYSTEM

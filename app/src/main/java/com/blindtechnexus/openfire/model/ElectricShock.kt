@@ -63,13 +63,19 @@ object ElectricShockRules {
     const val CLOSE_BAND_MAX_PROXIMITY = 100f
 
     /**
-     * Only a shock held inside the 90%-100% band can break a glue wall or a
-     * cover, and only after ten seconds of continuous use.
+     * Only continuous shock inside the 90%-100% band breaks a barrier. The
+     * required duration depends on whether the target has a gloo wall or cover.
      */
     const val BREAK_BAND_MIN_PROXIMITY = 90f
 
-    /** Continuous seconds of close-band shock needed to break a barrier. */
-    const val BREAK_SUSTAINED_MS = 10_000L
+    /** Continuous shock needed to destroy a gloo wall. */
+    const val GLUE_WALL_BREAK_MS = 15_000L
+
+    /** Continuous shock needed to destroy a cover. */
+    const val COVER_BREAK_MS = 7_000L
+
+    /** Backwards-compatible name for the longer gloo-wall timer. */
+    const val BREAK_SUSTAINED_MS = GLUE_WALL_BREAK_MS
 
     /**
      * The share of the opponent's health one shock use must drain before the
@@ -115,11 +121,13 @@ object ElectricShockRules {
     /** True once the use has lasted long enough to stop by itself. */
     fun timeUp(heldMs: Long): Boolean = heldMs >= MAX_USE_MS
 
-    /**
-     * True once a continuous shock of [heldMs] inside the 90%-100% band has
-     * lasted long enough to break a glue wall or a cover.
-     */
-    fun barrierBreakReady(heldMs: Long): Boolean = heldMs >= BREAK_SUSTAINED_MS
+    /** Required continuous shock duration for the selected barrier. */
+    fun barrierBreakDurationMs(isGlueWall: Boolean): Long =
+        if (isGlueWall) GLUE_WALL_BREAK_MS else COVER_BREAK_MS
+
+    /** True once a continuous close-band shock can destroy this barrier. */
+    fun barrierBreakReady(heldMs: Long, isGlueWall: Boolean = true): Boolean =
+        heldMs >= barrierBreakDurationMs(isGlueWall)
 
     /** Health removed in [dtMs] milliseconds by a drain of [percentPerSecond]. */
     fun damageFor(maxHp: Int, percentPerSecond: Float, dtMs: Long): Float =

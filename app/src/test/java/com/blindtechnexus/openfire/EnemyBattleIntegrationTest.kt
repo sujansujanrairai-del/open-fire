@@ -323,12 +323,18 @@ class EnemyBattleIntegrationTest {
     }
 
     @Test
-    fun aProjectileInTheAirPutsTheHoldToSleepAndTheSkyClearingWakesIt() {
+    fun shockWorksDuringProjectileFlightButStopsAtTheMissileDeflectionCutoff() {
         val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
         try {
             val state = flow<GameState>(vm, "_gameState")
             flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
             val lastTick = GameViewModel::class.java.getDeclaredField("shockLastTickMs").apply {
+                isAccessible = true
+            }
+            val missileImpactAt = GameViewModel::class.java.getDeclaredField("missileImpactAtMs").apply {
+                isAccessible = true
+            }
+            val missileFlightDuration = GameViewModel::class.java.getDeclaredField("missileFlightDurationMs").apply {
                 isAccessible = true
             }
             val armed = GameViewModel::class.java.declaredMethods.single {
@@ -349,36 +355,44 @@ class EnemyBattleIntegrationTest {
             assertTrue(state.value.shockHolding)
             assertTrue(armed.invoke(vm, state.value) as Boolean)
 
-            // A missile in the air blocks the hold completely: no hum and no
-            // damage, and the state is honest about it.
+            // An incoming missile in its final three percent blocks shock:
+            // no hum and no damage, even though the missile is still flying.
             state.value = state.value.copy(missileInFlight = true)
+            missileFlightDuration.setLong(vm, 1_000L)
+            missileImpactAt.setLong(vm, android.os.SystemClock.elapsedRealtime() + 30L)
             assertFalse(armed.invoke(vm, state.value) as Boolean)
             lastTick.setLong(vm, android.os.SystemClock.elapsedRealtime() - 1_000L)
             val before = state.value
             invoke(vm, "shockTick")
-            assertEquals("a blocked hold must not hurt", before.robertHp, state.value.robertHp)
+            assertEquals("a cutoff-blocked hold must not hurt", before.robertHp, state.value.robertHp)
             assertFalse(
                 vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
             )
 
-            // The moment the sky clears the very same hold burns again, hum included.
-            state.value = state.value.copy(missileInFlight = false)
+            // Earlier in the same missile flight, the hold burns and damages.
+            missileFlightDuration.setLong(vm, 100_000L)
+            missileImpactAt.setLong(vm, android.os.SystemClock.elapsedRealtime() + 50_000L)
             assertTrue(armed.invoke(vm, state.value) as Boolean)
             lastTick.setLong(vm, android.os.SystemClock.elapsedRealtime() - 1_000L)
             invoke(vm, "shockTick")
             assertTrue(
-                "a hold that burns again must hum again",
+                "a hold during missile flight must hum",
                 vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
             )
-            // Robert may answer with a duel, whose first pulse lands after two
-            // seconds; either way the renewed hold has to bite quickly.
             repeat(3) {
-                if (state.value.robertHp >= 200) {
+                if (state.value.robertHp >= 200 && state.value.playerHp >= 200) {
                     lastTick.setLong(vm, android.os.SystemClock.elapsedRealtime() - 1_000L)
                     invoke(vm, "shockTick")
                 }
             }
-            assertTrue("a hold that burns again must hurt again", state.value.robertHp < 200)
+            assertTrue(
+                "a hold during missile flight must damage a fighter",
+                state.value.robertHp < 200 || state.value.playerHp < 200
+            )
+
+            // Clearing the projectile does not interrupt the same held shock.
+            state.value = state.value.copy(missileInFlight = false)
+            assertTrue(armed.invoke(vm, state.value) as Boolean)
 
             // The timer picker owns the swipe while it is open.
             state.value = state.value.copy(timerSelectActive = true)

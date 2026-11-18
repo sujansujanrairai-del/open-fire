@@ -209,10 +209,15 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                         }
                                     }
                                     val (avgDx, avgDy) = SwipeClassifier.average(displacements)
-                                    averageDx = avgDx
-                                    averageDy = avgDy
                                     val averageDistance = SwipeClassifier.distance(avgDx, avgDy)
-                                    if (averageDistance > maxAverageDelta) maxAverageDelta = averageDistance
+                                    // Preserve the gesture's strongest collective
+                                    // movement. A finger lifting early must not
+                                    // shrink the average and erase a valid swipe.
+                                    if (averageDistance > maxAverageDelta) {
+                                        maxAverageDelta = averageDistance
+                                        averageDx = avgDx
+                                        averageDy = avgDy
+                                    }
                                     // A three-finger swipe is committed the first
                                     // time the hand comes to rest after crossing
                                     // the activation distance. One deliberate
@@ -220,7 +225,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                     // and a finger left resting in the air can
                                     // never repeat it.
                                     if (maxFingers >= 3 && !multiFingerDispatched &&
-                                        SwipeClassifier.reached(avgDx, avgDy)
+                                        SwipeClassifier.reached(averageDx, averageDy)
                                     ) {
                                         // Up exits, down pauses, right and left
                                         // change the running speed. The swipe is
@@ -239,7 +244,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                             holdFireStarted = false
                                         }
                                         viewModel.handleGesture(
-                                            SwipeClassifier.direction(avgDx, avgDy),
+                                            SwipeClassifier.direction(averageDx, averageDy),
                                             maxFingers
                                         )
                                         // Consume the movement so the battle

@@ -131,8 +131,8 @@ class OpenFireAudioEngine(context: Context) {
     private val clipIds = HashMap<String, Int>()
     private val clipLock = Any()
 
-    /** Reused parameter buffer: the JNI call reads it synchronously. */
-    private val scratch = IntArray(PARAM_COUNT)
+    /** Per-thread parameter buffers: public calls may arrive concurrently. */
+    private val scratch = ThreadLocal.withInitial { IntArray(PARAM_COUNT) }
 
     init {
         if (ensureLoaded()) {
@@ -243,7 +243,7 @@ class OpenFireAudioEngine(context: Context) {
         pack(clipId, key, owner, flags, volume, rate, pan, distance, rear, approach,
             deadlineMs, startOffsetMs, maxDistanceM, delayMs)
         return try {
-            play(handle, scratch)
+            play(handle, scratch.get())
         } catch (_: Throwable) {
             0
         }
@@ -271,7 +271,7 @@ class OpenFireAudioEngine(context: Context) {
         pack(0, key, owner, flags, volume, rate, pan, distance, rear, approach, 0, 0,
             maxDistanceM, 0)
         try {
-            update(handle, voiceId, scratch)
+            update(handle, voiceId, scratch.get())
         } catch (_: Throwable) {
         }
     }
@@ -405,20 +405,21 @@ class OpenFireAudioEngine(context: Context) {
         maxDistanceM: Int,
         delayMs: Int
     ) {
-        scratch[0] = clipId
-        scratch[1] = keyIdOf(key)
-        scratch[2] = owner
-        scratch[3] = flags
-        scratch[4] = (volume.coerceIn(0f, 8f) * 10_000f).toInt()
-        scratch[5] = (rate.coerceIn(0.1f, 8f) * 10_000f).toInt()
-        scratch[6] = (pan.coerceIn(-1f, 1f) * 10_000f).toInt()
-        scratch[7] = (distance.coerceAtLeast(0f) * 100f).toInt()
-        scratch[8] = (rear.coerceIn(-1f, 1f) * 10_000f).toInt()
-        scratch[9] = (approach.coerceIn(0f, 1f) * 10_000f).toInt()
-        scratch[10] = deadlineMs
-        scratch[11] = startOffsetMs
-        scratch[12] = if (maxDistanceM > 0) maxDistanceM else 25
-        scratch[13] = delayMs.coerceAtLeast(0)
-        scratch[14] = 0
+        val params = scratch.get()
+        params[0] = clipId
+        params[1] = keyIdOf(key)
+        params[2] = owner
+        params[3] = flags
+        params[4] = (volume.coerceIn(0f, 8f) * 10_000f).toInt()
+        params[5] = (rate.coerceIn(0.1f, 8f) * 10_000f).toInt()
+        params[6] = (pan.coerceIn(-1f, 1f) * 10_000f).toInt()
+        params[7] = (distance.coerceAtLeast(0f) * 100f).toInt()
+        params[8] = (rear.coerceIn(-1f, 1f) * 10_000f).toInt()
+        params[9] = (approach.coerceIn(0f, 1f) * 10_000f).toInt()
+        params[10] = deadlineMs
+        params[11] = startOffsetMs
+        params[12] = if (maxDistanceM > 0) maxDistanceM else 25
+        params[13] = delayMs.coerceAtLeast(0)
+        params[14] = 0
     }
 }

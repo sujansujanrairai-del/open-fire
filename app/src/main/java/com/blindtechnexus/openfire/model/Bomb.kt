@@ -212,15 +212,17 @@ object BombRules {
     /** How often a tracking bomb updates its destination (ms). */
     const val TRACKING_UPDATE_MS = 80L
 
-    /**
-     * Anti-bomb explosives Robert carries per round: twice per game in round
-     * three, three in round four and five in round five.
-     */
-    fun antiBombsForRound(round: Int): Int =
+    /** Anti-bomb explosives by round and final-round level. */
+    fun antiBombsForRound(round: Int, level: Int = 1): Int =
         when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
             3 -> 2
             4 -> 3
-            5 -> 5
+            5 -> when (level.coerceIn(1, Progression.LEVELS_PER_ROUND)) {
+                1, 2 -> 2
+                3 -> 1
+                4 -> 3
+                else -> 5
+            }
             else -> 0
         }
 
@@ -229,27 +231,49 @@ object BombRules {
      *
      *  - round three: the grenade, twice per game (his only bomb);
      *  - round four: all three bombs arrive, each usable three times;
-     *  - round five: bombs are unlimited, so he throws them as he likes.
+     *  - round five: Robert has a finite level-specific stock; all kinds are
+     *    currently accounted for in the total bomb inventory.
      *
      * Before round three he has no bombs at all.
      */
-    fun enemyBombUsesForRound(round: Int, kind: BombKind): Int =
+    fun enemyBombUsesForRound(round: Int, kind: BombKind, level: Int = 1): Int =
         when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
             3 -> if (kind == BombKind.GRENADE) 2 else 0
             4 -> 3
-            5 -> 99 // unlimited — strategic use, not stat-based
+            // Round five keeps separate finite stocks. Lower levels start
+            // with grenades, then add atom and timer bombs as their total grows.
+            5 -> {
+                val safeLevel = level.coerceIn(1, Progression.LEVELS_PER_ROUND)
+                when (safeLevel) {
+                    1 -> if (kind == BombKind.GRENADE) 2 else 0
+                    2 -> when (kind) {
+                        BombKind.GRENADE -> 2
+                        BombKind.ATOM, BombKind.TIMER -> 1
+                    }
+                    3, 4 -> when (kind) {
+                        BombKind.GRENADE, BombKind.ATOM -> 2
+                        BombKind.TIMER -> 1
+                    }
+                    else -> 2
+                }
+            }
             else -> 0
         }
 
-    /**
-     * Total bombs Robert may throw in a round: twice in round three, nine in
-     * round four (three of each bomb) and unlimited in round five.
-     */
-    fun enemyBombsForRound(round: Int): Int {
-        val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
-        if (safeRound >= 5) return 99
-        return BombKind.entries.sumOf { enemyBombUsesForRound(safeRound, it) }
-    }
+    /** Total bombs Robert may throw; round five stocks vary by level. */
+    fun enemyBombsForRound(round: Int, level: Int = 1): Int =
+        when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
+            3 -> 2
+            4 -> 9
+            5 -> when (level.coerceIn(1, Progression.LEVELS_PER_ROUND)) {
+                1 -> 2
+                2 -> 4
+                3 -> 5
+                4 -> 5
+                else -> 6
+            }
+            else -> 0
+        }
 
     /** True when bombs are part of this round at all. */
     fun bombsUnlocked(round: Int): Boolean =

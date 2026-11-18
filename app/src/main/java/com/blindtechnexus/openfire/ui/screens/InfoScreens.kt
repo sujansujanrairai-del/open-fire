@@ -91,6 +91,7 @@ fun GuideScreen(viewModel: GameViewModel) {
 
 @Composable
 fun ProfileScreen(viewModel: GameViewModel) {
+    val context = LocalContext.current
     val settings by viewModel.settings.collectAsState()
     val stats by viewModel.stats.collectAsState()
     val inventory by viewModel.inventory.collectAsState()
@@ -236,6 +237,26 @@ fun ProfileScreen(viewModel: GameViewModel) {
         }
 
         Spacer(modifier = Modifier.height(14.dp))
+
+        GameButton(
+            text = viewModel.t("shareMyStats"),
+            onClick = {
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_SUBJECT, viewModel.t("shareStatsSubject"))
+                    putExtra(Intent.EXTRA_TEXT, viewModel.formattedStatsForSharing())
+                }
+                try {
+                    context.startActivity(Intent.createChooser(send, viewModel.t("shareMyStats")))
+                } catch (_: Exception) {
+                    viewModel.speak(viewModel.t("shareFailed"))
+                }
+            },
+            type = ButtonType.WARN,
+            testTag = "share_my_stats_button"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
 
         GameButton(
             text = viewModel.t("clearStats"),
@@ -547,7 +568,7 @@ fun ChangelogScreen(viewModel: GameViewModel) {
                 "Every defence Robert carries is really deployed when his health falls, and his weapon is chosen for the situation. Stray reload, jump and unused gunshot samples no longer play on the enemy side, and a tap in the center of the battle screen never fires a gun.",
                 "Weapon sounds own one exclusive channel: a new shot stops every other weapon sound and every queued gunshot, and ducks the footsteps, so two guns or a gun and a footstep never mix or leak.",
                 "The battle, flight and result screens never vibrate - they are speech and sound only. The shop now shows a separate, dynamic unlock line under every round-gated weapon, defence and power; it disappears once the item is unlocked.",
-                "Completing round three unlocks the anti-missile system and pays one free interceptor. In round four Robert has one missile power and two interceptors; in round five he has two missile powers, four interceptors, five anti-bomb explosives and unlimited bombs and gun ammunition.",
+                viewModel.t("round5EnemyStocks"),
                 "The final round keeps its seven minute limit: if Robert survives that long you lose the game. A defeat still costs 20 coins unless you have none, and the timer bomb picker still freezes all enemy fire until you confirm or cancel it.",
                 "Wall sound fixed: the dedicated wall-hit.mp3 is the one and only boundary impact, it belongs to the player alone and it plays once when a run is first stopped, so holding a finger against a wall can no longer smear it into a continuous, stretched noise.",
                 "Robert never touches a wall again. Every one of his steps is simulated against the four boundaries before he takes it: the moment a heading would bring him near a boundary he cuts sideways, turns back or runs at the open middle of the zone, silently. The repeated and stretched wall sound on the enemy side is gone for good.",
@@ -585,7 +606,7 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             val v23Notes = listOf(
                 "Bomb Power: new stackable consumable for 1500 coins - 1 Bomb Power allows 1 use of any bomb type (1 Atom Bomb + 1 Timer Bomb + 1 Grenade use), exactly like Missile Powers. Buy and stack in the shop, one is consumed per throw. Bombs now track the enemy like missiles and guarantee destruction at any cost unless intercepted by an anti-bomb explosive.",
                 "Tracking bombs: grenade, atom bomb and timer bomb all follow the target continuously until detonation. The old 12 metre escape race is gone - without an anti-bomb you cannot outrun a tracking bomb. The timer bomb still counts 15 to 60 seconds with its looping timer sound, but now also tracks.",
-                "Enemy bomb and anti-bomb limits aligned per round: round 3 = two grenades and two anti-bombs per game, round 4 = three uses of each bomb and three anti-bombs, round 5 = five anti-bombs and unlimited bombs. Grenades unlock together with atom and timer bombs in round 3.",
+                "Enemy bomb and anti-bomb limits are finite: round 3 has two grenades and two anti-bombs; round 4 has three uses of each bomb and three anti-bombs; round 5 bomb totals vary by level from two to six, and anti-bomb stocks vary by level. Grenades unlock together with atom and timer bombs in round 3.",
                 "Enemy firing rebuilt: Robert fires continuously only when you are vulnerable (damaged, trapped or locked); otherwise he fires at random intervals of 2, 2.5 or 3 seconds (now 1.5 to 2 seconds in the latest update). When you fire back while he is firing he immediately retreats.",
                 "Panic and defence deployment: below 150 percent health difference Robert panics and instantly deploys a defence; below 200 percent even a 1 percent dip triggers panic. Strategic weapon picking: 40-70 percent health prefers mid-range, 90-100 percent prefers close heavy weapons, 20-40 percent prefers AWM long range, about 75 percent of the time.",
                 "Retreat logic: Robert retreats when he took significant damage, when the position is unsafe, or when you have a Gloo Wall up and he has no Gloo Wall Breaker charge left - then he avoids you until the wall drops.",
@@ -813,6 +834,8 @@ fun ResultScreen(viewModel: GameViewModel) {
     val result by viewModel.resultData.collectAsState()
     val ready by viewModel.resultReady.collectAsState()
     val scrollState = rememberScrollState()
+    var showRoundPicker by remember { mutableStateOf(false) }
+    var showClearStatsConfirm by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -956,9 +979,84 @@ fun ResultScreen(viewModel: GameViewModel) {
         } else {
             HintBox(text = "${viewModel.t("readerUp")}: ${viewModel.t("playAgain")}\n" +
                 "${viewModel.t("readerDown")}: ${viewModel.t("mainMenu")}")
+            Spacer(modifier = Modifier.height(12.dp))
+            GameButton(
+                text = viewModel.t("playAgain"),
+                onClick = { viewModel.playAgain() },
+                type = ButtonType.PRIMARY,
+                testTag = "result_play_again_button"
+            )
+            if (result.matchWon) {
+                Spacer(modifier = Modifier.height(8.dp))
+                GameButton(
+                    text = viewModel.t("chooseRoundReplay"),
+                    onClick = { showRoundPicker = true },
+                    type = ButtonType.WARN,
+                    testTag = "result_choose_round_button"
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                GameButton(
+                    text = viewModel.t("clearStats"),
+                    onClick = { showClearStatsConfirm = true },
+                    type = ButtonType.DANGER,
+                    testTag = "result_clear_stats_button"
+                )
+            }
         }
+    }
 
-        // Result actions are gesture-only: swipe up to play again or swipe
-        // down for the main menu. No in-game buttons are rendered.
+    if (showClearStatsConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearStatsConfirm = false },
+            title = { Text(viewModel.t("clearStats"), fontWeight = FontWeight.Bold) },
+            text = { Text(viewModel.t("clearStatsRestartMessage")) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearStatsConfirm = false
+                        viewModel.clearStatsAndRestart()
+                    }
+                ) { Text(viewModel.t("clearAndRestart"), color = WarnBright) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearStatsConfirm = false }) {
+                    Text(viewModel.t("cancel"), color = TextAccent)
+                }
+            },
+            containerColor = CardBg,
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
+
+    if (showRoundPicker) {
+        AlertDialog(
+            onDismissRequest = { showRoundPicker = false },
+            title = { Text(viewModel.t("chooseRoundTitle"), fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text(viewModel.t("replayCarryOver"))
+                    (1..5).forEach { round ->
+                        TextButton(
+                            onClick = {
+                                showRoundPicker = false
+                                viewModel.playRoundAgain(round)
+                            },
+                            modifier = Modifier.testTag("replay_round_$round")
+                        ) {
+                            Text("${viewModel.t("round")} $round", color = TextAccent)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showRoundPicker = false }) {
+                    Text(viewModel.t("cancel"), color = TextAccent)
+                }
+            },
+            containerColor = CardBg,
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
     }
 }

@@ -23,8 +23,8 @@ import kotlin.random.Random
  *    three;
  *  - the enemy carries two grenades and two anti-bomb explosives in round
  *    three, all three bombs three times each plus a missile and two
- *    interceptors in round four, and two missiles, four interceptors, five
- *    anti-bomb explosives and unlimited bombs and ammunition in round five;
+ *    interceptors in round four, and finite level-specific missile, bomb,
+ *    interceptor and anti-bomb stocks in round five;
  *  - round five is limited to seven minutes and a defeat costs 20 coins;
  *  - the enemy fires one or two shots at 2 s, 2.5 s or 3 s and repositions.
  */
@@ -70,11 +70,25 @@ class RoundRulesTest {
             assertEquals(3, BombRules.enemyBombUsesForRound(4, kind))
         }
         assertEquals(9, BombRules.enemyBombsForRound(4))
-        // Round five: unlimited bombs.
-        assertEquals(99, BombRules.enemyBombsForRound(5))
-        for (kind in BombKind.entries) {
-            assertEquals(99, BombRules.enemyBombUsesForRound(5, kind))
+        // Round five stock is finite and varies by level.
+        assertEquals(2, BombRules.enemyBombsForRound(5, 1))
+        assertEquals(4, BombRules.enemyBombsForRound(5, 2))
+        assertEquals(5, BombRules.enemyBombsForRound(5, 3))
+        assertEquals(5, BombRules.enemyBombsForRound(5, 4))
+        assertEquals(6, BombRules.enemyBombsForRound(5, 5))
+        for (level in 1..5) {
+            assertEquals(
+                BombRules.enemyBombsForRound(5, level),
+                BombKind.entries.sumOf { BombRules.enemyBombUsesForRound(5, it, level) }
+            )
         }
+        assertEquals(2, BombRules.enemyBombUsesForRound(5, BombKind.GRENADE, 1))
+        assertEquals(0, BombRules.enemyBombUsesForRound(5, BombKind.ATOM, 1))
+        assertEquals(2, BombRules.enemyBombUsesForRound(5, BombKind.GRENADE, 2))
+        assertEquals(1, BombRules.enemyBombUsesForRound(5, BombKind.ATOM, 2))
+        assertEquals(1, BombRules.enemyBombUsesForRound(5, BombKind.TIMER, 2))
+        assertEquals(2, BombRules.enemyBombUsesForRound(5, BombKind.ATOM, 3))
+        assertEquals(2, BombRules.enemyBombUsesForRound(5, BombKind.TIMER, 5))
         // Rounds one and two have no bombs.
         assertEquals(0, BombRules.enemyBombsForRound(1))
         assertEquals(0, BombRules.enemyBombsForRound(2))
@@ -103,13 +117,19 @@ class RoundRulesTest {
     fun enemyInterceptorsAndMissilesFollowTheRoundTable() {
         assertEquals(0, MissileRules.enemyMissilePowersForRound(3))
         assertEquals(1, MissileRules.enemyMissilePowersForRound(4))
-        assertEquals(2, MissileRules.enemyMissilePowersForRound(5))
+        assertEquals(1, MissileRules.enemyMissilePowersForRound(5, 1))
+        assertEquals(2, MissileRules.enemyMissilePowersForRound(5, 5))
         assertEquals(0, MissileRules.antiMissilesForRound(3))
         assertEquals(2, MissileRules.antiMissilesForRound(4))
-        assertEquals(4, MissileRules.antiMissilesForRound(5))
+        assertEquals(1, MissileRules.antiMissilesForRound(5, 1))
+        assertEquals(2, MissileRules.antiMissilesForRound(5, 5))
         assertEquals(2, BombRules.antiBombsForRound(3))
         assertEquals(3, BombRules.antiBombsForRound(4))
-        assertEquals(5, BombRules.antiBombsForRound(5))
+        assertEquals(2, BombRules.antiBombsForRound(5, 1))
+        assertEquals(2, BombRules.antiBombsForRound(5, 2))
+        assertEquals(1, BombRules.antiBombsForRound(5, 3))
+        assertEquals(3, BombRules.antiBombsForRound(5, 4))
+        assertEquals(5, BombRules.antiBombsForRound(5, 5))
     }
 
     @Test
@@ -140,11 +160,11 @@ class RoundRulesTest {
     }
 
     @Test
-    fun roundFiveHasUnlimitedBombsAndAmmunition() {
+    fun roundFiveHasFiniteBombStockAndUnlimitedGunAmmunition() {
         assertFalse(RobertRules.infiniteAmmo(4))
         assertTrue(RobertRules.infiniteAmmo(5))
         assertFalse(RobertRules.infiniteBombs(4))
-        assertTrue(RobertRules.infiniteBombs(5))
+        assertFalse(RobertRules.infiniteBombs(5))
     }
 
     @Test

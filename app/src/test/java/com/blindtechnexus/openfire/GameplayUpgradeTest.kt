@@ -104,9 +104,12 @@ class GameplayUpgradeTest {
         assertEquals(1, MissileRules.enemyMissilePowersForRound(4))
         assertEquals(2, MissileRules.antiMissilesForRound(4))
         assertEquals(2, BombRules.antiBombsForRound(3))
-        assertEquals(5, BombRules.antiBombsForRound(5))
-        assertEquals(2, MissileRules.enemyMissilePowersForRound(5))
-        assertEquals(4, MissileRules.antiMissilesForRound(5))
+        assertEquals(2, BombRules.antiBombsForRound(5, 1))
+        assertEquals(5, BombRules.antiBombsForRound(5, 5))
+        assertEquals(1, MissileRules.enemyMissilePowersForRound(5, 1))
+        assertEquals(2, MissileRules.enemyMissilePowersForRound(5, 5))
+        assertEquals(1, MissileRules.antiMissilesForRound(5, 1))
+        assertEquals(2, MissileRules.antiMissilesForRound(5, 5))
 
         // The anti-missile system unlocks after round three and grants one
         // free interceptor exactly once.
