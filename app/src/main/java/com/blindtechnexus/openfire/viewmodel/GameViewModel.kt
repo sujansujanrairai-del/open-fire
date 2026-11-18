@@ -5454,6 +5454,30 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * The one authority on whether the player's shock is burning right now.
+     *
+     * Everything - the hum, the per-tick damage and the barrier break - reads
+     * this single test. A hold that is refused for a projectile in the air is
+     * therefore silent AND harmless, and the moment the sky clears the same
+     * hold really starts burning. Two separate conditions used to drift apart,
+     * which is what let a shock look armed while it dealt nothing.
+     */
+    private fun playerShockArmed(state: GameState = _gameState.value): Boolean =
+        state.shockHolding && !state.timerSelectActive && !skyNotEmpty(state)
+
+    /**
+     * Warns the user that a hold could not be armed, once per hold: a refused
+     * swipe is never silent, because silence is what makes a blind player swipe
+     * again and again without knowing why nothing happens.
+     */
+    private fun refuseShock(messageKey: String) {
+        if (shockOutOfRangeAnnounced) return
+        shockOutOfRangeAnnounced = true
+        playSound("click")
+        msg(t(messageKey))
+    }
+
+    /**
      * A held up-swipe with the electric shock selected.
      *
      * The action is refused completely - no hum, no state, no damage - while
