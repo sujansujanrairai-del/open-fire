@@ -111,10 +111,17 @@ object VolumeMixer {
     /**
      * The natural window of every playback rate. A recording is only ever
      * played inside this window, so no sound can be shifted into the shrill,
-     * chipped pitch the game must never produce.
+     * chipped pitch the game must never produce. The window is wide enough for
+     * three clearly distinct running levels and narrow enough that none of them
+     * ever sounds chipped; the native engine enforces the same bounds.
      */
-    const val MIN_RATE = 0.8f
-    const val MAX_RATE = 1.25f
+    const val MIN_RATE = 0.70f
+    const val MAX_RATE = 1.60f
+
+    /** The three fixed footstep rates of the running levels. */
+    const val SLOW_FOOTSTEP_RATE = 0.78f
+    const val NORMAL_FOOTSTEP_RATE = 1.00f
+    const val FAST_FOOTSTEP_RATE = 1.45f
 
     /**
      * The keys of every weapon that fires a shot. They play at the same level
@@ -284,16 +291,59 @@ object VolumeMixer {
     /**
      * Footstep playback rate for a movement speed in metres per second.
      *
-     * The steps follow the real speed inside the narrow natural window
-     * [MIN_RATE]..[MAX_RATE]. The old wide range (0.6 to 2.0) is exactly what
-     * made a normal walk sound like a chipmunk: a rate of 2.0 doubles every
-     * frequency of the recording. Nothing outside the window is ever used, and
-     * the same window applies to every other rate in the game.
+     * Three levels, three clearly different paces: a slow run drags the steps
+     * ([SLOW_FOOTSTEP_RATE]), a normal run plays the recording at its natural
+     * speed ([NORMAL_FOOTSTEP_RATE]) and a fast run drives it clearly quicker
+     * ([FAST_FOOTSTEP_RATE]). Between two levels the rate blends with the real
+     * speed, so the transition is smooth instead of stepping, and nothing ever
+     * leaves the natural window [MIN_RATE]..[MAX_RATE].
+     *
+     * The base speed is [RunPressure.BASE_SPEED_MPS]; a fast level reaches the
+     * enemy's own fleeing speed, which is where [FAST_FOOTSTEP_RATE] applies.
+     */
+    fun footstepRate(
+        speedMps: Float,
+        slowSpeedMps: Float,
+        baseSpeedMps: Float,
+        fastSpeedMps: Float
+    ): Float {
+        if (speedMps.isNaN() || speedMps <= 0f) return NORMAL_FOOTSTEP_RATE
+        val slow = if (slowSpeedMps > 0f) slowSpeedMps else baseSpeedMps * 0.5f
+        val base = if (baseSpeedMps > slow) baseSpeedMps else slow * 2f
+        val fast = if (fastSpeedMps > base) fastSpeedMps else base * 3f
+        if (speedMps <= slow * 1.02f) return SLOW_FOOTSTEP_RATE
+        if (speedMps >= fast * 0.98f) return FAST_FOOTSTEP_RATE
+        if (speedMps <= base) {
+            val t = ((speedMps - slow) / (base - slow)).coerceIn(0f, 1f)
+            return (SLOW_FOOTSTEP_RATE + t * (NORMAL_FOOTSTEP_RATE - SLOW_FOOTSTEP_RATE))
+                .coerceIn(MIN_RATE, MAX_RATE)
+        }
+        val t = ((speedMps - base) / (fast - base)).coerceIn(0f, 1f)
+        return (NORMAL_FOOTSTEP_RATE + t * (FAST_FOOTSTEP_RATE - NORMAL_FOOTSTEP_RATE))
+            .coerceIn(MIN_RATE, MAX_RATE)
+    }
+
+    /**
+     * Footstep playback rate for a movement speed in metres per second: the
+     * steps follow the real speed smoothly inside the natural window. This is
+     * the continuous companion of [footstepRate]'s three levels; both are
+     * used, and both stay inside [MIN_RATE]..[MAX_RATE].
      */
     fun walkRate(speedMps: Float): Float {
         val safeSpeed = if (speedMps.isNaN()) 0f else speedMps.coerceAtLeast(0f)
         return (0.90f + safeSpeed * 0.010f).coerceIn(MIN_RATE, MAX_RATE)
     }
+
+    /**
+     * The engine's SFX bus gain for a stored 0..1 effects setting. The native
+     * engine applies it once, on every block, so moving the slider is heard
+     * on the sounds that are already playing.
+     */
+    fun sfxGainForBus(setting: Float): Float = clamp(setting)
+
+    /** The extra playback rate of a projectile at [proximity] (0 far, 1 at impact). */
+    fun approachRate(proximity: Float): Float =
+        if (proximity.isNaN()) 1f else 1f + 0.16f * proximity.coerceIn(0f, 1f)
 
     /** Highest playback rate a footstep loop may ever reach. */
     const val MAX_WALK_RATE = MAX_RATE

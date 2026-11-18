@@ -3,9 +3,10 @@
 
 These checks mirror (and go beyond) what the JVM unit tests can see:
 
-  1. Every sound key used anywhere in the Kotlin sources is declared in
-     AudioManager.SOUND_FILES, and every declared key points at a file that
-     really exists in app/src/main/assets/sounds.
+  1. Every sound key used anywhere in the Kotlin sources is declared in the
+     sound catalogue (SoundLibrary, re-exported as AudioManager.SOUND_FILES),
+     and every declared key points at a file that really exists in
+     app/src/main/assets/sounds.
   2. Every asset sound file is actually referenced by the alias table.
   3. Every translation key used through t("...") exists in the English table,
      and the English, Hindi and Nepali tables define exactly the same keys.
@@ -27,6 +28,9 @@ SOUNDS_DIR = os.path.join(ROOT, "app", "src", "main", "assets", "sounds")
 MAIN = os.path.join(ROOT, "app", "src", "main", "java")
 AUDIO = os.path.join(
     MAIN, "com", "blindtechnexus", "openfire", "audio", "AudioManager.kt"
+)
+SOUND_LIBRARY = os.path.join(
+    MAIN, "com", "blindtechnexus", "openfire", "audio", "SoundLibrary.kt"
 )
 STRINGS = os.path.join(
     MAIN, "com", "blindtechnexus", "openfire", "data", "Strings.kt"
@@ -119,16 +123,27 @@ def strip_noise(text):
 
 # ---------------------------------------------------------------- 1 & 2: sounds
 assets = set(os.listdir(SOUNDS_DIR))
-audio_src = open(AUDIO, encoding="utf-8").read()
+# The catalogue lives in one place and is re-exported by AudioManager. The
+# native engine reads SoundLibrary directly, so that is the table to verify.
+catalogue = open(SOUND_LIBRARY, encoding="utf-8").read() if os.path.exists(SOUND_LIBRARY) else ""
+if "val SOUND_FILES: Map<String, String> = mapOf(" in catalogue:
+    audio_src = catalogue
+else:
+    audio_src = open(AUDIO, encoding="utf-8").read()
 
-alias_block = audio_src.split("val SOUND_FILES: Map<String, String> = mapOf(", 1)[1]
-alias_block = alias_block.split("\n        )", 1)[0]
+marker = "val SOUND_FILES: Map<String, String> = mapOf("
+if marker not in audio_src:
+    fail("could not find the SOUND_FILES table in SoundLibrary.kt or AudioManager.kt")
+    print("\n".join(failures))
+    sys.exit(1)
+alias_block = audio_src.split(marker, 1)[1]
+alias_block = alias_block.split("\n    )", 1)[0]
 aliases = {}
 for key, file_name in re.findall(r'"([A-Za-z0-9]+)"\s+to\s+"([^"]+)"', alias_block):
     aliases.setdefault(key, []).append(file_name)
 
 if not aliases:
-    fail("could not parse SOUND_FILES from AudioManager.kt")
+    fail("could not parse SOUND_FILES from the sound catalogue")
 
 alias_keys = re.findall(r'"([A-Za-z0-9]+)"\s+to\s+"', alias_block)
 for key in sorted(set(alias_keys)):

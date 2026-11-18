@@ -1,0 +1,14 @@
+/*
+ * Export map of libopenfire_audio.so.
+ *
+ * Only the one symbol the runtime needs is visible: JNI_OnLoad. Everything
+ * else - the engine, Oboe, the C++ runtime - stays private to the library,
+ * which keeps the .so small and makes an accidental ABI clash with another
+ * native library impossible.
+ */
+{
+    global:
+        JNI_OnLoad;
+    local:
+        *;
+};
