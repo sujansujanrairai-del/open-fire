@@ -41,7 +41,10 @@ scripts/verify-installable-apk.sh open-fire-release.apk
 
 ## Build from source
 
-Requirements: JDK 17+ (CI uses 21), Android SDK with platform 36 and build-tools 36.
+Requirements: JDK 17+ (CI uses 21), Android SDK with platform 36 and build-tools 36,
+plus NDK r28c (`28.2.13676358`) and CMake 3.22.1 for the native audio engine. The audio
+library ships with its own copy of Oboe, so the build needs no network access beyond the
+Gradle dependencies.
 
 ```sh
 ./gradlew :app:assembleDebug          # installable debug build
@@ -60,7 +63,8 @@ Signing keys are resolved in this order:
 
 ```
 app/                      Android application module
-  src/main/assets/sounds/ uncompressed audio assets (played through AssetManager.openFd)
+  src/main/assets/sounds/ uncompressed audio assets (decoded into the native mixer)
+  src/main/cpp/           native audio engine (Oboe, mixer, JNI bridge, vendored Oboe)
   src/main/java/          Kotlin sources (audio, model, ui, viewmodel, data)
   src/test/               JVM unit tests
 .github/workflows/        CI: tests, release build, signing, packaging
