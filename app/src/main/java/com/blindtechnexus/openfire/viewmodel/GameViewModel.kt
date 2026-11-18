@@ -4469,7 +4469,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 msg(text)
             } else {
                 playSound("click")
-                msg(if (antiMissileIdle) t("noActiveMissile") else t("noActiveBomb"))
+                msg(t("noActiveBomb"))
             }
             resetMenuSelection()
             return
