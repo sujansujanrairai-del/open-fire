@@ -2,6 +2,7 @@ package com.blindtechnexus.openfire.audio.native
 
 import android.content.Context
 import android.util.Log
+import com.blindtechnexus.openfire.audio.SoundLibrary
 
 /**
  * Kotlin face of the native Oboe engine (`libopenfire_audio.so`).
@@ -47,21 +48,30 @@ class OpenFireAudioEngine(context: Context) {
         const val OWNER_ENEMY = 2
 
         /**
-         * True when the native library is present in this build. The class is
-         * loaded once, on first use, and a missing library is reported instead
-         * of thrown.
+         * True once the native library of this build has been loaded.
+         *
+         * Loading is attempted when an engine is actually created, never from a
+         * static initializer: a plain JVM unit test (and any device without the
+         * ABI) must be able to read the pure parts of this class without the
+         * class loader failing under it.
          */
         @Volatile
         var libraryLoaded: Boolean = false
             private set
 
-        init {
-            libraryLoaded = try {
-                System.loadLibrary("openfire_audio")
-                true
-            } catch (error: Throwable) {
-                Log.e(TAG, "The native audio engine is not available", error)
-                false
+        /** Loads the library once. Returns true when it is usable. */
+        private fun ensureLoaded(): Boolean {
+            if (libraryLoaded) return true
+            synchronized(this) {
+                if (libraryLoaded) return true
+                libraryLoaded = try {
+                    System.loadLibrary("openfire_audio")
+                    true
+                } catch (error: Throwable) {
+                    Log.e(TAG, "The native audio engine is not available", error)
+                    false
+                }
+                return libraryLoaded
             }
         }
 
@@ -98,15 +108,7 @@ class OpenFireAudioEngine(context: Context) {
          * The 32-bit hash of a sound key. Every stop-by-key call uses it, so
          * the native side never has to compare strings.
          */
-        fun keyIdOf(key: String): Int {
-            // 32-bit FNV-1a, identical to `of_key_id` of the native engine.
-            var hash = -2_128_831_035 // 0x811C9DC5
-            for (character in key) {
-                hash = hash xor character.code
-                hash *= 16_777_619
-            }
-            return hash
-        }
+        fun keyIdOf(key: String): Int = SoundLibrary.keyIdOf(key)
     }
 
     private val appContext = context.applicationContext
@@ -133,7 +135,7 @@ class OpenFireAudioEngine(context: Context) {
     private val scratch = IntArray(PARAM_COUNT)
 
     init {
-        if (libraryLoaded) {
+        if (ensureLoaded()) {
             try {
                 handle = create()
             } catch (error: Throwable) {

@@ -152,6 +152,23 @@ object SoundLibrary {
         "music", "carMoving", "carEngine", "airplane", "airplaneEngine"
     )
 
+    /**
+     * The 32-bit FNV-1a hash of a sound key.
+     *
+     * The native engine compares keys as integers, so Kotlin and C++ have to
+     * agree on exactly one hash. It lives here, in plain Kotlin with no JNI and
+     * no Android dependency, so it can be tested on its own and a change on
+     * either side is caught by a unit test.
+     */
+    fun keyIdOf(key: String): Int {
+        var hash = -2_128_831_035 // 0x811C9DC5
+        for (character in key) {
+            hash = hash xor character.code
+            hash *= 16_777_619
+        }
+        return hash
+    }
+
     /** Asset file of [key], or null when the key is unknown. */
     fun fileOf(key: String): String? = SOUND_FILES[key]
 

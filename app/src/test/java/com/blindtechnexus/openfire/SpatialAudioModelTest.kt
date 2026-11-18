@@ -157,11 +157,18 @@ class SpatialAudioModelTest {
 
     @Test
     fun aSoundKeyHashesToTheSameIdOnBothSidesOfJni() {
-        // The native engine compares sound keys as 32-bit FNV-1a hashes; the
-        // value is pinned here so a change on either side is caught.
+        // The native engine compares sound keys as 32-bit FNV-1a hashes. The
+        // value is pinned here, and the catalogue hash is the single
+        // implementation both sides agree on.
+        assertEquals(-2_060_735_908, SoundLibrary.keyIdOf("machineGun"))
         assertEquals(-2_060_735_908, OpenFireAudioEngine.keyIdOf("machineGun"))
-        assertEquals(OpenFireAudioEngine.keyIdOf("enemyWalk"), OpenFireAudioEngine.keyIdOf("enemyWalk"))
-        assertNotEquals(OpenFireAudioEngine.keyIdOf("enemyWalk"), OpenFireAudioEngine.keyIdOf("playerWalk"))
+        assertEquals(SoundLibrary.keyIdOf("enemyWalk"), OpenFireAudioEngine.keyIdOf("enemyWalk"))
+        assertNotEquals(SoundLibrary.keyIdOf("enemyWalk"), SoundLibrary.keyIdOf("playerWalk"))
+        assertNotEquals(SoundLibrary.keyIdOf("walk"), SoundLibrary.keyIdOf("playerWalk"))
+        // A key id is stable: two calls never disagree.
+        for (key in SoundLibrary.SOUND_FILES.keys) {
+            assertEquals(SoundLibrary.keyIdOf(key), SoundLibrary.keyIdOf(key))
+        }
     }
 
     @Test
