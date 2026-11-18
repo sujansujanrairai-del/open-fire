@@ -526,6 +526,38 @@ object RobertRules {
     // Where Robert prefers to fire from
     // ------------------------------------------------------------------
 
+    /**
+     * Metres beyond which Robert refuses to pull a trigger at all.
+     *
+     * Beyond this distance the arena is in the miss zone (0%-40% proximity,
+     * see [Combat.MISS_ZONE_MAX]), so a shot could not land whatever he holds.
+     * He closes the distance first and fires when the shot is real, instead of
+     * emptying a magazine into a band where nothing can connect. The value is
+     * deliberately a little inside the zone edge, so a shot at the edge is
+     * still allowed: a miss at the edge is audible feedback, a shot from the
+     * far corner never is.
+     */
+    val MISS_IS_AUDIBLE_DISTANCE_M: Float =
+        Combat.distanceFor(Combat.MISS_ZONE_MAX + MISS_REFUSAL_MARGIN_PROXIMITY)
+
+    /** The extra proximity points Robert expects before he fires. */
+    const val MISS_REFUSAL_MARGIN_PROXIMITY = 2f
+
+    /**
+     * True when a shot from [distanceM] metres has a real chance to land.
+     * Robert only fires while this is true, which is what keeps him from
+     * shooting uselessly from the far half of the square.
+     *
+     * [weapon] is the gun he is really holding. The AWM is the one exception
+     * to the miss zone: inside its precision band it connects from 15 to 20
+     * metres, and he is allowed to use that.
+     */
+    fun canLandShotAt(distanceM: Float, weapon: Weapon? = null): Boolean {
+        val proximity = Combat.proximityOf(distanceM)
+        if (proximity >= Combat.MISS_ZONE_MAX + MISS_REFUSAL_MARGIN_PROXIMITY) return true
+        return weapon != null && DamageTable.isAwmLongRangeBand(weapon, proximity)
+    }
+
     /** The two bands Robert really fights from: 40%-70% or 90%-100%. */
     fun preferredRange(random: Random): FireRange =
         if (random.nextBoolean()) FireRange.MID else FireRange.CLOSE

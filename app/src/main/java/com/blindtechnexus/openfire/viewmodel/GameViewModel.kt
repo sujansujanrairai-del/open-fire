@@ -230,6 +230,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         const val FLEE_STEP = RobertRules.FLEE_STEP_M
         const val FLEE_TICK_MS = RobertRules.FLEE_TICK_MS
 
+        /** The step interval of Robert's ordinary advance (the standard tick). */
+        const val ROBERT_STEP_INTERVAL_MS = 100L
+
+        /**
+         * How often he may say that he is closing the distance, so an approach
+         * across the arena is announced once instead of ten times a second.
+         */
+        const val ENEMY_RANGE_NOTICE_MS = 2_500L
+
         /**
          * Player movement at the normal speed level: [RunPressure.BASE_STEP_METRES]
          * metres per [PLAYER_MOVE_TICK_MS]. The live step is scaled by the
@@ -324,11 +333,43 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         /** The hum of an electric shock runs for as long as it is held. */
         const val SHOCK_HUM_VOLUME = 0.8f
 
+        /**
+         * True until the opening greeting of this process has been announced.
+         * It lives here, not on the instance, so a configuration change cannot
+         * make the app talk over itself on every rotation.
+         */
+        private var launchGreetingPending = true
+
     }
 
     init {
         syncSettingsToManagers(_settings.value)
         updateAudioForScreen(_currentScreen.value)
+        // The app greets the user as soon as it opens. The greeting is spoken
+        // by the TTS engine (which queues it until it is ready), so a fresh
+        // launch is never silent, and it is announced exactly once per process
+        // - never repeated when the view model is rebuilt for a configuration
+        // change.
+        if (launchGreetingPending) {
+            launchGreetingPending = false
+            speak(launchGreeting())
+        }
+    }
+
+    /**
+     * The opening announcement: the title of the game, who made it, and what
+     * to do next. It is built from the same translated strings the screens
+     * use, so it follows the user's language from the very first second.
+     */
+    private fun launchGreeting(): String {
+        val title = t("title")
+        val developed = t("developed")
+        val next = if (_currentScreen.value == Screen.WELCOME) {
+            t("chooseLang") + ". " + t("enterName") + "."
+        } else {
+            t("welcome") + ", " + _settings.value.name + "."
+        }
+        return "$title. $developed. $next"
     }
 
     // ---------------------------------------------------------------------
@@ -2279,6 +2320,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             state = _gameState.value
             pool = allowed
         }
+        // He never fires from a band where the shot cannot land: the far half
+        // of the square is walking ground, not fighting ground. Closing the
+        // distance is the answer, and his next trigger pull is a real one.
+        if (!RobertRules.canLandShotAt(state.distance, state.robertWeapon)) {
+            stopEnemyFireSound()
+            if (state.robertState != "advance") {
+                _gameState.update { it.copy(robertState = "advance") }
+                planRobertStep(ROBERT_STEP_INTERVAL_MS)
+            }
+            // He says it once per approach, so the user knows the silence is
+            // movement and not a missing gun.
+            if (nowMs - lastEnemyRangeNoticeAtMs > ENEMY_RANGE_NOTICE_MS) {
+                lastEnemyRangeNoticeAtMs = nowMs
+                setLog(t("robertClosingIn"))
+            }
+            return
+        }
         val proximityNow = Combat.proximityOf(state.distance)
         // Panic check: falling health really spends one of his defences at
         // once instead of only arming a flag nobody reads.
@@ -2313,7 +2371,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             smartChoice != null && (Random.nextFloat() < 0.75f || isStrategyRound) -> smartChoice
             else -> pool[Random.nextInt(pool.size)]
         }
-        val chosenIndex = state.robertWeapons.indexOf(chosen.id).coerceAtLeast(0)
+        // The weapon he actually pulls the trigger on decides what happens: a
+        // gun fired from a band where it cannot connect is still a shot, and
+        // it still costs a round of its magazine. Without this the user hears
+        // (and reads) an enemy who shoots from useless range for a whole match.
+        val storedIndex = state.robertWeapons.indexOf(state.robertWeapon?.id)
+        val chosenIndex = if (state.robertWeapon != null && storedIndex >= 0) {
+            storedIndex
+        } else {
+            state.robertWeapons.indexOf(chosen.id).coerceAtLeast(0)
+        }
+        val firingWeapon = state.robertWeapons.getOrNull(chosenIndex) ?: chosen
 
         if (chosenIndex != state.robertWeaponIndex) {
             // Changing weapon is silent for Robert: a stray gun sound on the
@@ -2325,11 +2393,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Six rounds per magazine, then a free reload. From round five every
         // gun is unlimited, so he never reloads and never runs dry.
         val unlimitedAmmo = RobertRules.infiniteAmmo(state.round)
-        if (!unlimitedAmmo && chosen.needsReload && state.robertAmmoNow <= 0) {
+        if (!unlimitedAmmo && firingWeapon.needsReload && (state.robertAmmo.getOrNull(chosenIndex) ?: 0) <= 0) {
             _gameState.update { s ->
                 s.copy(
                     robertAmmo = s.robertAmmo.toMutableList().also {
-                        it[s.robertWeaponIndex] = chosen.magazine
+                        it[chosenIndex] = firingWeapon.magazine
                     }
                 )
             }
@@ -2353,7 +2421,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 EnemyFireStrategy.playerInterval(playerShotTimes.toList())
             )
         }
-        val fireInterval = AutomaticFirePowerMap.intervalFor(chosen) ?: answerInterval
+        val fireInterval = AutomaticFirePowerMap.intervalFor(firingWeapon) ?: answerInterval
         markRobertShot(fireInterval)
         if (closingBurst) {
             stopBurstShotsLeft -= 1
@@ -2364,17 +2432,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 stopBurstFinished = true
             }
         }
-        if (!chosen.melee) {
-            playEnemyFireSound(chosen)
+        if (!firingWeapon.melee) {
+            playEnemyFireSound(firingWeapon)
         } else {
             // A melee attack owns no firing channel either: cut any burst that
             // was still sounding before his swing.
             stopEnemyFireSound()
         }
         _gameState.update { s ->
-            val nextAmmo = if (chosen.needsReload && !unlimitedAmmo) {
+            val nextAmmo = if (firingWeapon.needsReload && !unlimitedAmmo) {
                 s.robertAmmo.toMutableList().also {
-                    it[s.robertWeaponIndex] = (it[s.robertWeaponIndex] - 1).coerceAtLeast(0)
+                    it[chosenIndex] = ((it.getOrNull(chosenIndex) ?: firingWeapon.magazine) - 1)
+                        .coerceAtLeast(0)
                 }
             } else {
                 s.robertAmmo
@@ -2391,12 +2460,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val proxPercent = Combat.proximityOf(state.distance)
         val zone = Combat.zoneFor(proxPercent)
 
-        if (zone == HitZone.MISS) {
-            if (chosen.melee) {
-                playEnemyWeaponSound(chosen.missSoundKey, volume = 0.55f)
+        // The AWM is the one long-range exception: inside its precision band
+        // (20%-40% proximity) its shot still connects. Every other weapon - and
+        // the AWM elsewhere - needs a real hit zone. The check reads the same
+        // long-range rule the damage table and the player's own shot use, so
+        // the enemy can never connect through a band the player cannot.
+        val longRange = DamageTable.isAwmLongRangeBand(firingWeapon, proxPercent)
+        if (zone == HitZone.MISS && !longRange) {
+            // A shot that cannot land is still a shot: the user hears the
+            // miss - the weapon's own miss sound, or the shot itself for a
+            // gun fired from a band where it cannot connect - and hears him
+            // say it. A silent miss read as "Robert is not firing at all".
+            if (firingWeapon.melee) {
+                playEnemyWeaponSound(firingWeapon.missSoundKey, volume = 0.55f)
+            } else if (state.distance <= RobertRules.MISS_IS_AUDIBLE_DISTANCE_M) {
+                playEnemyWeaponSound(firingWeapon.fireSoundKey, volume = 0.45f, rate = 0.96f)
             }
             _gameState.update { it.copy(consecutiveHeavyHits = 0) }
-            setLog("${t("robertMissed")} ${t(chosen.nameKey)}.")
+            setLog("${t("robertMissed")} ${t(firingWeapon.nameKey)}.")
             return
         }
 
@@ -2430,10 +2511,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         // Robert's assault rifle and shotgun use his explicit per-zone table;
         // every other weapon uses the standard player table.
-        var dealt = if (chosen.autoFire) {
-            AutomaticFirePowerMap.damageAt(chosen, proxPercent, state.playerMaxHp)
+        var dealt = if (firingWeapon.autoFire) {
+            AutomaticFirePowerMap.damageAt(firingWeapon, proxPercent, state.playerMaxHp)
         } else {
-            RobertRules.weaponDamage(chosen, proxPercent, state.playerMaxHp)
+            RobertRules.weaponDamage(firingWeapon, proxPercent, state.playerMaxHp)
         }
         // While the quick menu is genuinely being navigated every hit is cut
         // down to a fixed percentage of maximum health. The protection expires
@@ -2471,11 +2552,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         // The weapon's own hit sound is always mixed with the sound of the
         // fighter that was hit: here the player, so player-hit.
-        playSound(chosen.hitSoundKey, volume = 1.0f)
+        playSound(firingWeapon.hitSoundKey, volume = 1.0f)
         playSound("playerHit", volume = 1.0f)
 
         val hitHead = if (zone == HitZone.HEAVY) t("youWereHit") else t("youWereGrazed")
-        var text = "$hitHead ${t(chosen.nameKey)}. ${t("hitFor")} $dealt. " +
+        var text = "$hitHead ${t(firingWeapon.nameKey)}. ${t("hitFor")} $dealt. " +
             "${t("yourHealth")} $newPlayerHp."
         if (brokeWeapon) {
             text += " ${t("gunDamaged")} ${t("recovery")}. " +
@@ -5128,14 +5209,28 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             CarStage.INSIDE_ENGINE_ON -> {
-                // The engine idles under the brake. The moment the enemy moves
-                // again (or drifts out of reach) the car starts and follows.
-                val outOfReach = state.distance > CarRules.STOP_DISTANCE_M + 1f
-                if (enemyMoved || outOfReach) carResumeDriving()
+                // The engine idles under the brake. The car only starts again
+                // when there is a reason to move: the enemy stepped, or the
+                // enemy is still on the other side of a wall and the car has
+                // to close the gap. The mere fact that the distance is larger
+                // than the braking distance is NOT such a reason - an enemy
+                // who stands still 15 m away used to keep the car starting and
+                // braking every second, which sounded as if the brake were
+                // broken. A standing enemy means a standing car.
+                if (enemyMoved || carNeedsToCloseGap(state)) carResumeDriving()
             }
             else -> Unit
         }
     }
+
+    /**
+     * True when the idle car really has to set off: the enemy stands further
+     * away than the car's reach and is not moving toward the player either.
+     * A car that is already parked within its own braking distance stays
+     * parked, so the brake never fires twice for a standing enemy.
+     */
+    private fun carNeedsToCloseGap(state: GameState): Boolean =
+        state.distance > CarRules.STOP_DISTANCE_M + CarRules.GAP_TOLERANCE_M
 
     /** The automatic brake: the moving loop stops and the engine idles. */
     private fun carAutoBrake() {
@@ -5366,13 +5461,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (_gameState.value.shockHolding || shockSpent) return
         val state = _gameState.value
         if (state.timerSelectActive || state.playerHp <= 0 || state.robertHp <= 0) return
-        // The range gate: no sound and no hold action out of the band.
+        // The range gate: a shock that cannot reach the enemy is refused - no
+        // state, no damage - and the refusal is spoken, so the user knows to
+        // close the distance instead of holding a dead weapon.
         if (!shockInRange(state)) {
-            playSound("click")
-            if (!shockOutOfRangeAnnounced) {
-                shockOutOfRangeAnnounced = true
-                msg(t("shockOutOfRange"))
-            }
+            refuseShock("shockOutOfRange")
+            return
+        }
+        // A projectile in the air blocks the shock completely: the weapon
+        // cannot target the enemy through it, so the hold is refused with its
+        // own explanation rather than being "armed" at an enemy it can never
+        // touch. The user swipes again once the sky is clear.
+        if (skyNotEmpty(state)) {
+            refuseShock("shockBlockedByProjectile")
             return
         }
         shockOutOfRangeAnnounced = false
@@ -5385,24 +5486,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         playerShockDamageMs = 0L
         duelShockDamageMs = 0L
         robertFleeingShock = false
-        // A projectile in the air stops the shock from reaching the enemy: the
-        // weapon is deployed aiming at him and drifts back to the player.
-        val deployLocked = skyNotEmpty(state)
-        shockDeployLocked = deployLocked
+        shockDeployLocked = false
         _gameState.update {
             it.copy(
                 shockHolding = true,
                 electricShockInPlay = true,
                 shockFirstActivator = if (it.robertShocking) it.shockFirstActivator else "player"
             )
-        }
-        if (deployLocked) {
-            // Holding the weapon in place, facing the enemy, without a shock:
-            // this is the warning that lets the player deploy a defence.
-            playSound("click")
-            msg(t("shockBlockedByProjectile"))
-            ensureShockTicker()
-            return
         }
         audioManager.startWeaponLoop(
             "magicalSound",
@@ -5503,6 +5593,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * True while the player's own shock hum is open. Kept as a cheap query so
+     * the ticker re-arms the hum of a hold that had to go quiet (a projectile
+     * in the air) without restarting a hum that is already playing.
+     */
+    private fun mixerHasShockHum(): Boolean =
+        audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
+
     /** The single damage ticker of every active shock, whichever side holds it. */
     private fun ensureShockTicker() {
         if (shockJob != null) return
@@ -5545,54 +5643,60 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             stopRobertShock()
         }
 
+        val state = _gameState.value
+        if (!state.shockHolding && !state.robertShocking) return false
+
+        // The ONE authority on whether the player's shock is burning: inside
+        // the 40%-100% band, with no projectile in the air. The hum, the damage
+        // and the barrier break all read it, so they can never disagree.
+        val burning = playerShockArmed(state)
+        shockDeployLocked = state.shockHolding && !burning &&
+            (skyNotEmpty(state) || !shockInRange(state))
+
         // The range gate: out of the 40%-100% band the shock neither sounds nor
         // hurts. Robert also stops fleeing once he is really out of the band.
-        val proximity = Combat.proximityOf(_gameState.value.distance)
+        val proximity = Combat.proximityOf(state.distance)
         val inBand = ElectricShockRules.inCloseBand(proximity)
         if (!inBand) {
-            if (_gameState.value.robertShocking) {
+            if (state.robertShocking) {
                 audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_ENEMY)
                 _gameState.update { it.copy(robertShocking = false, shockFirstActivator = "") }
             }
-            if (_gameState.value.shockHolding && !shockDeployLocked) {
+            if (state.shockHolding) {
                 audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
+                refuseShock("shockOutOfRange")
             }
             if (robertFleeingShock) robertFleeingShock = false
             playerShockDamageMs = 0L
             duelShockDamageMs = 0L
-            return _gameState.value.shockHolding || _gameState.value.robertShocking
+            return state.shockHolding || state.robertShocking
         }
-
-        val state = _gameState.value
-        if (!state.shockHolding && !state.robertShocking) return false
 
         // While a missile or a bomb is in the air the shock cannot target the
-        // enemy: the weapon is held in place, aims at him, and drifts back
-        // toward the player. No damage is dealt in that time.
-        val projectileGate = skyNotEmpty(state)
-        if (projectileGate != shockDeployLocked) {
-            shockDeployLocked = projectileGate
-            if (projectileGate) {
-                audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
-                if (state.robertShocking) stopRobertShock()
-                msg(t("shockBlockedByProjectile"))
-            } else if (state.shockHolding) {
-                audioManager.startWeaponLoop(
-                    "magicalSound",
-                    volume = SHOCK_HUM_VOLUME,
-                    posZ = 0.1f,
-                    owner = AudioManager.LOOP_OWNER_PLAYER
-                )
-            }
-        }
-        if (shockDeployLocked) {
+        // enemy: it goes quiet, and it says so once. The moment the sky clears
+        // the same hold burns again, with its hum.
+        if (state.shockHolding && !burning) {
+            audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
+            if (state.robertShocking) stopRobertShock()
+            // Only the projectile can block a hold that is inside the band.
+            refuseShock("shockBlockedByProjectile")
             playerShockDamageMs = 0L
             duelShockDamageMs = 0L
-            return _gameState.value.shockHolding
+            return true
+        }
+        // A hold that is burning again is a new state: a later refusal has to
+        // be spoken again, because it is about a different moment of the fight.
+        shockOutOfRangeAnnounced = false
+        if (burning && !mixerHasShockHum()) {
+            audioManager.startWeaponLoop(
+                "magicalSound",
+                volume = SHOCK_HUM_VOLUME,
+                posZ = 0.1f,
+                owner = AudioManager.LOOP_OWNER_PLAYER
+            )
         }
 
         val live = _gameState.value
-        val bothShocking = live.shockHolding && live.robertShocking
         // Robert answers once, a moment after the shock really started to burn.
         if (live.shockHolding && !live.robertShocking && !robertFleeingShock) {
             respondToPlayerShock()
