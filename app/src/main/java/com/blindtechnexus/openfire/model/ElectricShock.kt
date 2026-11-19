@@ -21,8 +21,8 @@ package com.blindtechnexus.openfire.model
  * that decision at random.
  */
 object ElectricShockRules {
-    /** Longest single use, in milliseconds. */
-    const val MAX_USE_MS = 30_000L
+    /** Longest continuous use, measured on the pausable battle clock. */
+    const val MAX_USE_MS = 10_000L
 
     /** The robot answers after five seconds when a shock is detected. */
     const val COUNTER_DELAY_MS = 5_000L
@@ -68,8 +68,11 @@ object ElectricShockRules {
      */
     const val BREAK_BAND_MIN_PROXIMITY = 90f
 
-    /** Continuous shock needed to destroy a gloo wall. */
-    const val GLUE_WALL_BREAK_MS = 15_000L
+    /**
+     * Continuous shock needed to destroy a gloo wall. This must fit within one
+     * ten-second use; cover remains the quicker barrier to break.
+     */
+    const val GLUE_WALL_BREAK_MS = 9_000L
 
     /** Continuous shock needed to destroy a cover. */
     const val COVER_BREAK_MS = 7_000L
@@ -159,58 +162,61 @@ object ElectricShockRules {
     fun paysCoins(drainedHp: Int): Boolean = drainedHp >= MIN_PAYABLE_DRAIN_HP
 
     // ------------------------------------------------------------------
-    // The throw
+    // The throw and the way back
     // ------------------------------------------------------------------
-    //
-    // A shock that lands throws the opponent away from the player: the fight
-    // is about closing a distance, so being pushed back is the real cost of
-    // standing in a shock. The throw has to be a *throw*, not a teleport to
-    // the far wall:
-    //
-    //  - it is bounded, so the enemy always lands at a reachable spot inside
-    //    the arena and is not launched across the whole square;
-    //  - it never carries him past [KNOCKBACK_CEILING_M], so a shock cannot
-    //    end the engagement by itself;
-    //  - the way back is planned, so he does not need a long detour to reach
-    //    the player again: the return time is derived from the distance the
-    //    throw really created.
 
-    /** Metres the shock throws the opponent away from the player. */
-    const val KNOCKBACK_M = 3.5f
-
-    /** The farthest a single throw may carry him, in metres. */
-    const val KNOCKBACK_CEILING_M = 14f
-
-    /** Metres the returning enemy covers in one turn-back tick. */
+    /** Metres the returning enemy covers on each movement tick. */
     const val RETURN_STEP_M = 1.6f
 
-    /** Length of one turn-back tick, in milliseconds. */
+    /** Length of a return tick, in pausable battle-clock milliseconds. */
     const val RETURN_TICK_MS = 300L
 
     /**
-     * Where the throw lands him: the current distance plus [KNOCKBACK_M],
-     * never past [KNOCKBACK_CEILING_M] and never past the arena wall.
+     * The farthest reachable point in the square from the player. The farthest
+     * point is always a corner, even when the player is in the centre or at a
+     * wall. Every landing is beyond ordinary gun range. An AWM can still reach
+     * some centre-to-corner landings: no point farther away exists there, so
+     * the battle engine separately blocks attacks until Robert returns. Ties
+     * are deterministic and coordinates use Arena's normal bounds/fallbacks.
      */
-    fun knockbackTarget(distance: Float, arenaSize: Float = Combat.MAX_RANGE): Float {
-        val safe = if (distance.isNaN()) 0f else distance.coerceIn(0f, arenaSize)
-        val thrown = (safe + KNOCKBACK_M).coerceAtMost(KNOCKBACK_CEILING_M)
-        return thrown.coerceIn(0f, arenaSize)
+    fun farthestLanding(playerX: Float, playerY: Float): Pair<Float, Float> {
+        val x = Arena.clampX(playerX)
+        val y = Arena.clampY(playerY)
+        val middle = Arena.SIZE / 2f
+        return Pair(
+            if (x < middle) Arena.MAX else Arena.MIN,
+            if (y < middle) Arena.MAX else Arena.MIN
+        )
     }
 
     /**
-     * Turn-back ticks that bring a thrown enemy back to fighting distance.
-     *
-     * One tick covers [RETURN_STEP_M], so the return is proportional to the
-     * throw: a short throw is answered in a couple of steps, and even the
-     * longest throw ends in a couple of seconds instead of a slow walk back
-     * across the square.
+     * One real step toward the player's current position. A square is convex,
+     * so this direct route stays inside its walls even when the throw lands
+     * exactly on a corner. Clamp the step to the *uncapped* Euclidean distance
+     * to avoid overshooting, including when both fighters are on the same spot.
      */
-    fun returnTicks(fromDistance: Float, toDistance: Float = 0f): Int {
-        val gap = (fromDistance - toDistance).coerceAtLeast(0f)
-        return kotlin.math.ceil(gap / RETURN_STEP_M).toInt().coerceIn(1, 8)
+    fun returnPosition(playerX: Float, playerY: Float, enemyX: Float, enemyY: Float): Pair<Float, Float> {
+        val px = Arena.clampX(playerX)
+        val py = Arena.clampY(playerY)
+        val ex = Arena.clampX(enemyX)
+        val ey = Arena.clampY(enemyY)
+        val actualDistance = kotlin.math.hypot(px - ex, py - ey)
+        val move = Arena.moveToward(ex, ey, px, py, minOf(RETURN_STEP_M, actualDistance))
+        return Pair(move.x, move.y)
     }
 
-    /** Milliseconds the return of a throw takes, for the guide and the tests. */
+    /**
+     * Return ticks for an actual, uncapped distance. There is no arbitrary
+     * eight-tick ceiling: a diagonal across the arena is longer than one side.
+     */
+    fun returnTicks(fromDistance: Float, toDistance: Float = 0f): Int {
+        val from = if (fromDistance.isFinite()) fromDistance.coerceAtLeast(0f) else 0f
+        val to = if (toDistance.isFinite()) toDistance.coerceAtLeast(0f) else 0f
+        val gap = (from - to).coerceAtLeast(0f)
+        return kotlin.math.ceil(gap / RETURN_STEP_M).toInt()
+    }
+
+    /** Milliseconds of movement for the corresponding distance. */
     fun returnTimeMs(fromDistance: Float, toDistance: Float = 0f): Long =
         returnTicks(fromDistance, toDistance) * RETURN_TICK_MS
 }

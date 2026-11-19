@@ -4,8 +4,11 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.blindtechnexus.openfire.audio.AudioManager
 import com.blindtechnexus.openfire.audio.BinauralPosition
+import com.blindtechnexus.openfire.audio.SoundLibrary
+import com.blindtechnexus.openfire.audio.SpatialPlace
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -69,6 +72,58 @@ class AudioLoopLifecycleTest {
         } finally {
             audio.release()
         }
+    }
+
+    @Test
+    fun playerAutomaticSoundsStayAtTheListenerWhileEnemySoundsRemainSpatial() {
+        val audio = AudioManager(ApplicationProvider.getApplicationContext<Context>())
+        try {
+            audio.sfxVolume = 0.35f
+            assertEquals(0.35f, audio.engine.sfxGain, 0.001f)
+            val placeMethod = AudioManager::class.java.getDeclaredMethod(
+                "automaticWeaponPlace", String::class.java, String::class.java,
+                java.lang.Float.TYPE, java.lang.Float.TYPE
+            ).apply { isAccessible = true }
+            val field = AudioManager::class.java.getDeclaredField("loops").apply { isAccessible = true }
+            @Suppress("UNCHECKED_CAST")
+            val loops = field.get(audio) as Map<String, Any>
+            fun property(slot: Any, name: String): Any? =
+                slot.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(slot)
+
+            for (key in automatic) {
+                val shot = AudioManager.AUTO_LOOP_OF.entries.first { it.value == key }.key
+                assertTrue(SoundLibrary.isStereoRecording(key))
+                assertTrue(SoundLibrary.isStereoRecording(shot))
+                for (distance in listOf(5f, 15f, 25f)) {
+                    // This same placement rule is used for tapped shots and holds.
+                    for (sound in listOf(key, shot)) {
+                        assertNull(placeMethod.invoke(audio, sound, AudioManager.LOOP_OWNER_PLAYER, 0f, -distance))
+                        val enemy = placeMethod.invoke(audio, sound, AudioManager.LOOP_OWNER_ENEMY, 0f, -distance) as SpatialPlace
+                        assertEquals(distance, enemy.distance, 0.001f)
+                    }
+                    audio.startWeaponLoop(key, owner = AudioManager.LOOP_OWNER_PLAYER, posZ = -distance)
+                    val playerSlot = loops.getValue("${AudioManager.LOOP_OWNER_PLAYER}|$key")
+                    assertNull(property(playerSlot, "spatialPosition"))
+                    assertEquals(1f, property(playerSlot, "left") as Float, 0.001f)
+                    assertEquals(1f, property(playerSlot, "right") as Float, 0.001f)
+                }
+                audio.startEnemyWeaponLoop(key, depthOffset = 25f)
+                val enemySlot = loops.getValue("${AudioManager.LOOP_OWNER_ENEMY}|$key")
+                assertTrue(property(enemySlot, "spatialPosition") is BinauralPosition)
+                assertTrue((property(enemySlot, "left") as Float) < 0.1f)
+                audio.stopWeaponLoops()
+            }
+        } finally {
+            audio.release()
+        }
+    }
+
+    @Test
+    fun shockReleaseUsesTheTwoNamedAssets() {
+        assertEquals(listOf("electricShock", "shockKnockback"), SoundLibrary.SHOCK_RELEASE_KEYS)
+        assertEquals("electric-shock.ogg", SoundLibrary.SOUND_FILES[SoundLibrary.SHOCK_RELEASE_KEYS[0]])
+        assertEquals("enemy-throw-shock.ogg", SoundLibrary.SOUND_FILES[SoundLibrary.SHOCK_RELEASE_KEYS[1]])
+        assertTrue(SoundLibrary.SHOCK_RELEASE_KEYS.all(SoundLibrary::isStereoRecording))
     }
 
     @Test

@@ -309,9 +309,9 @@ inline bool renderVoice(Voice* voice,
         float outLeft;
         float outRight;
         if (keepStereo) {
-            /* A non-positional stereo clip keeps its recording's own image. */
-            outLeft = left * level;
-            outRight = right * level;
+            /* Preserve the recording's image and the same stop fade as mono. */
+            outLeft = left * level * voice->stopFade;
+            outRight = right * level * voice->stopFade;
         } else {
             /* Constant-power placement, then the binaural refinement. */
             const float pan = openfire::panForOutput(
