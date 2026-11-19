@@ -3139,15 +3139,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val remaining = (missileImpactAtMs - now).coerceAtLeast(0L)
         if (!MissileRules.canShockDeflect(remaining, missileFlightDurationMs)) return
         missileDeflectionUsed = true
-        // Restore the missile to its original launch distance. A countershock
-        // cancels half of the displacement; the same guided missile remains live.
-        val displacement = (missileFlightDurationMs - remaining).coerceAtLeast(0L)
-        val added = if (state.robertShocking) displacement / 2 else displacement
-        scheduleMissileImpact(
-            delayMs = remaining + added,
-            preserveFlight = true
-        )
-        skyHeldSinceMs = now
+        // The tracked missile is represented by its remaining distance along
+        // the approach. Rebase that approach on the farthest arena corner,
+        // preserving the current distance before applying counter resistance.
+        val (farX, farY) = ElectricShockRules.farthestLanding(state.playerX, state.playerY)
+        val farDistance = kotlin.math.hypot(farX - state.playerX, farY - state.playerY)
+        val currentDistance = missileLaunchDistanceM *
+            (1f - MissileRules.flightProgress(remaining, missileFlightDurationMs))
+        val targetDistance = if (state.robertShocking) {
+            (currentDistance + farDistance) / 2f
+        } else farDistance
+        missileLaunchDistanceM = farDistance.coerceAtLeast(0.001f)
+        missileFlightDurationMs = MissileRules.flightMs(missileLaunchDistanceM)
+        val newRemaining = (missileFlightDurationMs *
+            (targetDistance / missileLaunchDistanceM).coerceIn(0f, 1f)).toLong().coerceAtLeast(1L)
+        scheduleMissileImpact(delayMs = newRemaining, preserveFlight = true)
+        // Do not let the stale-projectile watchdog clear a legitimate extended flight.
+        skyHeldSinceMs = now + (newRemaining - SkyLock.MAX_HOLD_MS).coerceAtLeast(0L)
         audioManager.playMixed(SoundLibrary.SHOCK_RELEASE_KEYS)
         msg(t("missileShockPushed"))
     }
