@@ -6,6 +6,7 @@ import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.RunPressure
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -35,8 +36,14 @@ import java.util.concurrent.atomic.AtomicInteger
 class NativeMixer(context: Context) {
 
     companion object {
-        /** Decoding runs here, never on the audio or the UI thread. */
-        private const val DECODE_THREADS = 2
+        /**
+         * How long the catalogue warm-up waits after the engine is created.
+         *
+         * Long enough for the first frame of the app, short enough that the
+         * menus feel instant; a sound asked for during the wait is decoded on
+         * the priority lane instead, so no interaction is ever delayed by it.
+         */
+        private const val WARMUP_DELAY_MS = 1_200L
 
         /** How many voice handles are remembered at most. */
         private const val MAX_HANDLES = 512
@@ -83,15 +90,24 @@ class NativeMixer(context: Context) {
         val startDelayMs: Int
     )
 
-    private val decodeExecutor = Executors.newFixedThreadPool(DECODE_THREADS) { runnable ->
-        Thread(runnable, "OpenFireDecode").apply {
-            priority = Thread.NORM_PRIORITY + 1
+    /**
+     * The priority decode lane.
+     *
+     * The catalogue is warmed up by the engine's own background lane; this
+     * single lane exists for the sounds the game actually asked for, so a
+     * first click is decoded *now* instead of waiting behind fifty other
+     * files. A single thread is enough: decoding is the slow part and the
+     * requests are naturally serialised by gameplay.
+     */
+    private val requestExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "OpenFireRequest").apply {
+            priority = Thread.NORM_PRIORITY + 2
             isDaemon = true
         }
     }
 
-    /** Guards the "decode once" bookkeeping. */
-    private val decodeLock = Any()
+    /** True once the catalogue warm-up has been handed to the engine. */
+    private val warmUpStarted = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** Children born in [playOneShot] get a short, unique handle of their own. */
     private val nextHandle = AtomicInteger(1)
@@ -147,27 +163,57 @@ class NativeMixer(context: Context) {
      * still heard immediately.
      */
     private fun warmUp() {
-        decodeExecutor.execute {
-            for (file in SoundLibrary.files()) {
-                if (Thread.currentThread().isInterrupted) return@execute
-                ensureDecoded(file)
-            }
+        if (!warmUpStarted.compareAndSet(false, true)) return
+        // The catalogue is warmed up on its own low-priority thread, after the
+        // first frame of the app has been drawn: creating fifty-odd media
+        // codecs during start-up competes with the UI for the same cores. A
+        // sound the game asks for in the meantime takes the priority lane
+        // above, so nothing is ever late because of this delay.
+        val thread = Thread({ decodeCatalogue() }, "OpenFireWarmUp")
+        thread.isDaemon = true
+        thread.priority = Thread.NORM_PRIORITY - 1
+        thread.start()
+    }
+
+    /**
+     * Hands the whole catalogue to the engine's decode lane, most used first.
+     *
+     * Runs on the warm-up thread only. The sleep is the quiet period after the
+     * first frame; a sound the game asks for during it is decoded on the
+     * priority lane instead, so this delay never delays an interaction.
+     */
+    private fun decodeCatalogue() {
+        try {
+            Thread.sleep(WARMUP_DELAY_MS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return
+        }
+        val ordered = SoundLibrary.ESSENTIAL_FILES + SoundLibrary.files()
+            .filter { it !in SoundLibrary.ESSENTIAL_FILES }
+        for (file in ordered) {
+            if (Thread.currentThread().isInterrupted || !available) break
+            engine.warmUp(file)
         }
     }
 
-    /** Decodes [file] at most once, on any thread. */
+    /** Decodes [file] at most once, on a background thread only. */
     private fun ensureDecoded(file: String): Int {
         if (!available) return 0
         val cached = engine.loadClipIfPresent(file)
         if (cached > 0) return cached
-        synchronized(decodeLock) {
-            val again = engine.loadClipIfPresent(file)
-            if (again > 0) return again
-            return engine.loadClip(file)
-        }
+        return engine.loadClip(file)
     }
 
-    /** Requests a decode now and runs [action] as soon as the clip is ready. */
+    /**
+     * Runs [action] with the clip of [file].
+     *
+     * When the clip is already uploaded - the normal case after the first
+     * second of play - this is synchronous and allocation-free, which is what
+     * makes a shot audible on the very next audio callback. Only a genuinely
+     * cold sound takes the priority lane, and it still plays as soon as its
+     * decode finishes.
+     */
     private fun withClip(file: String, action: (Int) -> Unit) {
         val cached = engine.loadClipIfPresent(file)
         if (cached > 0) {
@@ -175,12 +221,22 @@ class NativeMixer(context: Context) {
             return
         }
         if (!available) return
-        // A requested sound is not lost to a cold cache: it is decoded now and
-        // played the moment its clip is ready. Repeated requests for the same
-        // file are coalesced by `ensureDecoded`, which uploads it exactly once.
-        decodeExecutor.execute {
+        submitRequest {
             val id = ensureDecoded(file)
             if (id > 0 && available) action(id)
+        }
+    }
+
+    /** Submits a priority decode, ignoring a submission after [release]. */
+    private fun submitRequest(task: () -> Unit) {
+        try {
+            requestExecutor.execute {
+                try {
+                    task()
+                } catch (_: Throwable) {
+                }
+            }
+        } catch (_: RejectedExecutionException) {
         }
     }
 
@@ -210,6 +266,11 @@ class NativeMixer(context: Context) {
     ): Int {
         if (!available) return -1
         val file = SoundLibrary.fileOf(key) ?: return -1
+        // One throttled, lock-free probe of the stream: if the platform closed
+        // it (a route change, a phone call), the reopen is handed to the
+        // engine's stream lane instead of being attempted here. This is a
+        // boolean read at most every 400 ms, never a lock or an open.
+        engine.ensureStream()
         val flags = buildFlags(key, place, deadlineMs, approachProximity, loops = false)
         val handle = nextHandle.getAndIncrement()
         val record = VoiceHandle(handle, key, owner, flags, place, 0, volume, rate, deadlineMs)
@@ -341,7 +402,7 @@ class NativeMixer(context: Context) {
                 startDelayMs = startDelayMs
             )
             if (available) {
-                decodeExecutor.execute {
+                submitRequest {
                     if (ensureDecoded(file) > 0) openPendingLoop(slotKey)
                 }
             }
@@ -549,6 +610,16 @@ class NativeMixer(context: Context) {
 
     // -------------------------------------------------------------- controls
 
+    /**
+     * Chooses the spatial model of the engine: the binaural head model on
+     * headphones, the crossfeed model on loudspeakers. Called by
+     * [AudioManager] whenever the audio route changes.
+     */
+    fun setOutputMode(headphones: Boolean) = engine.setOutputMode(headphones)
+
+    /** True while the headphone spatial model is active. */
+    val headphoneMode: Boolean get() = engine.headphonesMode
+
     fun pause() {
         paused = true
         engine.setPaused(true)
@@ -567,7 +638,10 @@ class NativeMixer(context: Context) {
         loopVoices.clear()
         loopStartedAtMs.clear()
         handles.clear()
-        decodeExecutor.shutdownNow()
+        try {
+            requestExecutor.shutdownNow()
+        } catch (_: Throwable) {
+        }
         engine.release()
     }
 

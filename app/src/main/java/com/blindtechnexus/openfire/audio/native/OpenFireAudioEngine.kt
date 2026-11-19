@@ -3,23 +3,38 @@ package com.blindtechnexus.openfire.audio.native
 import android.content.Context
 import android.util.Log
 import com.blindtechnexus.openfire.audio.SoundLibrary
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * Kotlin face of the native Oboe engine (`libopenfire_audio.so`).
  *
- * Responsibilities
- * ----------------
- *  - load the library once and fail softly: a device without the ABI, a
- *    library that cannot be loaded, or an engine that cannot open a stream
- *    simply leaves [available] false, and the caller falls back to the
- *    platform player instead of crashing the game;
- *  - decode the OGG assets through the platform decoder (which is the only
- *    place the game decodes anything) and hand the raw samples to C++ once;
- *  - mirror the small, stateful part of the API: clip ids, voice ids and the
- *    voice parameters, so the rest of the audio stack speaks plain Kotlin.
+ * This class is the *only* place that talks to the native library. Three
+ * rules make it fast enough for a game and safe enough for a phone:
+ *
+ *  1. **No caller ever blocks.** Decoding, opening the stream and re-opening
+ *     it after a route change all happen on background lanes. A call from the
+ *     UI or gameplay thread is a hash lookup plus one JNI call, never a media
+ *     codec, a mutex held across a decode, or an `AAudio` open (which can take
+ *     hundreds of milliseconds and used to freeze the game).
+ *  2. **A requested sound never waits behind the warm-up.** The catalogue is
+ *     decoded in the background on one lane, but a sound the game asks for is
+ *     decoded on a *priority* lane immediately, so the first shot of a battle
+ *     is heard now - not three seconds later, behind fifty other sounds.
+ *  3. **The stream heals itself.** The native engine supervises its own
+ *     stream, and this class additionally re-opens it (on a background lane,
+ *     rate-limited) when the platform reports that the stream died. A route
+ *     change, a headset being plugged in, or a vendor stack reclaiming the
+ *     device therefore never leaves the game silent.
  *
  * Everything here is thread-safe. The heavy lifting - mixing, panning,
- * distance, the binaural head model - happens in C++ on the Oboe callback.
+ * distance, front/rear, the binaural head model and the speaker crossfeed -
+ * happens in C++ on the Oboe callback.
  */
 class OpenFireAudioEngine(context: Context) {
 
@@ -75,12 +90,14 @@ class OpenFireAudioEngine(context: Context) {
             }
         }
 
-        /**
-         * How often the live stream is re-checked while the game plays. The
-         * check is one lock-free boolean read in C++, but there is no reason
-         * to ask it for every single shot.
-         */
+        /** How often the live stream is re-checked while the game plays. */
         private const val STREAM_CHECK_INTERVAL_MS = 400L
+
+        /**
+         * The rate the native loader resamples to before any stream exists.
+         * It mirrors `kPreferredSampleRate` in the engine.
+         */
+        private const val PREFERRED_RATE = 48_000
 
         /* ------------------------------------------------------------- natives */
 
@@ -107,6 +124,7 @@ class OpenFireAudioEngine(context: Context) {
         @JvmStatic private external fun setBusGain(handle: Long, bus: Int, gain: Float)
         @JvmStatic private external fun setMasterGain(handle: Long, gain: Float)
         @JvmStatic private external fun setPaused(handle: Long, paused: Boolean)
+        @JvmStatic private external fun setOutputMode(handle: Long, headphones: Boolean)
         @JvmStatic private external fun info(handle: Long): NativeStreamInfo?
         @JvmStatic private external fun activeVoices(handle: Long): Int
         @JvmStatic private external fun isKeySounding(handle: Long, keyId: Int): Boolean
@@ -125,9 +143,14 @@ class OpenFireAudioEngine(context: Context) {
     @Volatile
     private var handle: Long = 0L
 
-    /** True when the native engine is loaded and its stream is open. */
+    /** True when the native engine exists and can accept sounds. */
     @Volatile
     var available: Boolean = false
+        private set
+
+    /** True when the engine believes its output stream is running. */
+    @Volatile
+    var streamRunning: Boolean = false
         private set
 
     /** Reason the engine is unavailable, for the diagnostics line. */
@@ -135,21 +158,62 @@ class OpenFireAudioEngine(context: Context) {
     var unavailableReason: String? = null
         private set
 
-    /** Decoded clips by asset file, guarded by [clipLock]. */
-    private val clipIds = HashMap<String, Int>()
-    private val clipLock = Any()
+    /** Decoded clips by asset file. Never held across a decode. */
+    private val clipIds = ConcurrentHashMap<String, Int>()
 
-    /** The output rate the uploaded clips were resampled to, or 0. */
+    /** A decode that is already running, so the same file is decoded once. */
+    private val decodesInFlight = ConcurrentHashMap<String, CompletableFuture<Int>>()
+
+    /** The output rate the stream reported, or 0 before it opens. */
     @Volatile
     private var loadedSampleRate: Int = 0
 
-    /** When the stream was last checked, so a play never probes on every shot. */
+    /**
+     * The rate the uploaded clips are actually resampled for.
+     *
+     * The native loader resamples a clip once, at upload, for the rate of the
+     * stream that is running - or, before the first stream opens, for the rate
+     * the engine prefers (48 kHz). If the device later opens a stream at
+     * another rate, those clips are reloaded instead of being played at the
+     * wrong pitch.
+     */
     @Volatile
-    private var lastStreamCheckMs: Long = 0L
-    private val streamLock = Any()
+    private var clipRate: Int = 0
+
+    /**
+     * Background lane for the catalogue warm-up. Below the normal priority:
+     * nothing the player is waiting for runs on this lane, and the first frame
+     * of the app must not compete with fifty codec instances.
+     */
+    private val decodeLane: ExecutorService =
+        newLane("OpenFireDecode", Thread.NORM_PRIORITY - 1)
+
+    /**
+     * Priority lane: the sounds the game actually asked for. Kept separate
+     * from [decodeLane] so a first click is never queued behind the warm-up of
+     * the whole catalogue - that queueing was the three-second delay.
+     */
+    private val requestLane: ExecutorService = newLane("OpenFireRequest")
+
+    /** Owns every stream operation: opening, closing and health checks. */
+    private val streamLane: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "OpenFireStream").apply { isDaemon = true }
+        }
 
     /** Per-thread parameter buffers: public calls may arrive concurrently. */
     private val scratch = ThreadLocal.withInitial { IntArray(PARAM_COUNT) }
+
+    /** Guards the "open the stream once" decision. */
+    private val streamLock = Any()
+
+    @Volatile
+    private var lastStreamCheckMs: Long = 0L
+
+    /** True while the last known output route is headphones or a headset. */
+    @Volatile
+    var headphonesMode: Boolean = true
+        private set
 
     init {
         if (ensureLoaded()) {
@@ -163,118 +227,226 @@ class OpenFireAudioEngine(context: Context) {
         } else {
             unavailableReason = "the native audio library could not be loaded"
         }
-        if (handle != 0L) {
-            val result = try {
-                start(handle)
-            } catch (error: Throwable) {
-                Log.e(TAG, "Could not start the native stream", error)
-                -1
-            }
-            available = result == 0
-            if (!available) {
-                unavailableReason = "the output stream could not be opened"
-            } else {
-                loadedSampleRate = streamInfo()?.sampleRate ?: 0
+
+        // An `init` block cannot `return`, so the two outcomes are branches.
+        if (handle == 0L) {
+            available = false
+            unavailableReason = unavailableReason ?: "the native engine is unavailable"
+        } else {
+            available = true
+            // Opening the stream takes milliseconds to hundreds of
+            // milliseconds on a cold device. It must never happen on the
+            // thread that created the engine (the UI thread), so it is the
+            // first job of the stream lane.
+            val priority = Thread.NORM_PRIORITY + 2
+            submitStream {
+                Thread.currentThread().priority = priority
+                openStreamNow()
             }
         }
     }
 
     /**
-     * Makes sure the Oboe stream is still running before a sound is posted.
+     * Creates a daemon background lane at [threadPriority].
      *
-     * A stream really can stop: a route change the error callback could not
-     * recover, a vendor stack that reclaims the device, an app that came back
-     * from a long background pause. Every request would then be posted to a
-     * callback that never runs, and the game would stay silent for the rest of
-     * the process. This re-opens the stream once the check fails, and it is
-     * throttled so a burst of shots still costs one lock-free native read.
+     * The parameter is not called `priority` on purpose: inside `apply` an
+     * unqualified `priority` would resolve to the thread's own property and
+     * the assignment would be the silent no-op `thread.priority =
+     * thread.priority`.
+     */
+    private fun newLane(name: String, threadPriority: Int = Thread.NORM_PRIORITY + 1) =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, name).apply {
+                priority = threadPriority
+                isDaemon = true
+            }
+        }
+
+    /** Submits a stream task, ignoring a submission after [release]. */
+    private fun submitStream(task: () -> Unit) {
+        try {
+            streamLane.execute {
+                try {
+                    task()
+                } catch (error: Throwable) {
+                    Log.e(TAG, "Stream management failed", error)
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+        }
+    }
+
+    /** Submits a priority decode, ignoring a submission after [release]. */
+    private fun submitRequest(task: () -> Unit) {
+        try {
+            requestLane.execute {
+                try {
+                    task()
+                } catch (_: Throwable) {
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+        }
+    }
+
+    /** Submits a warm-up decode, ignoring a submission after [release]. */
+    private fun submitDecode(task: () -> Unit) {
+        try {
+            decodeLane.execute {
+                try {
+                    task()
+                } catch (_: Throwable) {
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+        }
+    }
+
+    /** Opens the stream on the stream lane. */
+    private fun openStreamNow() {
+        val current = handle
+        if (current == 0L) return
+        val result = try {
+            start(current)
+        } catch (error: Throwable) {
+            Log.e(TAG, "Could not start the native stream", error)
+            -1
+        }
+        if (result == 0) {
+            streamRunning = true
+            unavailableReason = null
+            val rate = streamInfo()?.sampleRate ?: 0
+            if (rate > 0) {
+                loadedSampleRate = rate
+                val built = clipRate
+                if (clipIds.isNotEmpty() && built != rate) {
+                    // Clips are resampled once, at upload. A stream that opened
+                    // at a different rate than the one they were built for
+                    // (a 44.1 kHz device, or a route change) must be refilled
+                    // instead of played at the wrong pitch.
+                    Log.i(TAG, "The output rate is $rate Hz; reloading every sound")
+                    unloadAllClips()
+                    for (file in SoundLibrary.files()) warmUp(file)
+                }
+            }
+        } else {
+            // The native supervisor keeps retrying in the background, so this
+            // is not fatal: sounds are queued and heard as soon as it opens.
+            streamRunning = false
+            unavailableReason = "the output stream could not be opened yet"
+        }
+    }
+
+    /**
+     * Makes sure the Oboe stream is running, without ever blocking the caller.
+     *
+     * The probe is one lock-free boolean read in C++ and is throttled, so a
+     * burst of shots costs one call every [STREAM_CHECK_INTERVAL_MS]. A dead
+     * stream is handed to the stream lane, never reopened here.
      */
     fun ensureStream(): Boolean {
         if (handle == 0L) return false
         val now = System.nanoTime() / 1_000_000L
-        if (now - lastStreamCheckMs < STREAM_CHECK_INTERVAL_MS) return available
-        var reloadClips = false
-        synchronized(streamLock) {
-            if (now - lastStreamCheckMs < STREAM_CHECK_INTERVAL_MS) return available
-            lastStreamCheckMs = now
-            val running = try {
-                isRunning(handle)
-            } catch (_: Throwable) {
-                false
-            }
-            if (running) {
-                available = true
-                return true
-            }
-            val result = try {
-                start(handle)
-            } catch (error: Throwable) {
-                Log.e(TAG, "Could not restart the native stream", error)
-                -1
-            }
-            if (result != 0) {
-                available = false
-                unavailableReason = "the output stream could not be reopened"
-                return false
-            }
-            available = true
-            unavailableReason = null
-            // Clips are resampled once, at load time: a stream that came back
-            // on another rate needs its catalogue resampled as well. The
-            // catalogue is dropped outside this lock, so a decoder thread that
-            // holds the clip lock can never meet this one head on.
-            val rate = streamInfo()?.sampleRate ?: 0
-            if (rate > 0) {
-                if (loadedSampleRate > 0 && rate != loadedSampleRate) reloadClips = true
-                loadedSampleRate = rate
-            }
+        if (now - lastStreamCheckMs < STREAM_CHECK_INTERVAL_MS) return streamRunning
+        lastStreamCheckMs = now
+        val running = try {
+            isRunning(handle)
+        } catch (_: Throwable) {
+            false
         }
-        if (reloadClips) {
-            Log.i(TAG, "The output rate changed; reloading the sounds")
-            unloadAllClips()
+        if (running) {
+            streamRunning = true
+            return true
         }
-        return true
+        streamRunning = false
+        submitStream { openStreamNow() }
+        return false
     }
 
     /* ------------------------------------------------------------------ clips */
 
     /**
-     * Decodes `assets/sounds/[file]` once and loads it into the engine.
-     * Returns the native clip id, or 0 when it cannot be decoded.
+     * True when [file] was already decoded and uploaded. A pure map read: it
+     * is the fast path of every play and it never waits for a decoder.
      */
-    fun loadClip(file: String): Int {
-        if (handle == 0L) return 0
-        if (!ensureStream()) return 0
-        synchronized(clipLock) {
-            clipIds[file]?.let { return it }
-            val decoded = try {
-                appContext.assets.openFd("sounds/$file").use { NativePcmDecoder.decode(it) }
-            } catch (error: Throwable) {
-                Log.e(TAG, "Could not decode sounds/$file", error)
-                null
-            } ?: return 0
-            if (decoded.frames <= 0 || decoded.channels <= 0 ||
-                decoded.frames * decoded.channels > decoded.samples.size
-            ) {
-                Log.e(TAG, "sounds/$file decoded to an impossible geometry")
-                return 0
-            }
-            val id = try {
-                loadClip(handle, decoded.samples, decoded.frames, decoded.channels, decoded.sampleRate)
-            } catch (error: Throwable) {
-                Log.e(TAG, "Could not upload sounds/$file", error)
-                0
-            }
-            if (id > 0) clipIds[file] = id
-            return id
-        }
-    }
+    fun loadClipIfPresent(file: String): Int = clipIds[file] ?: 0
 
     /** True when [file] was already decoded and uploaded. */
-    fun hasClip(file: String): Boolean = synchronized(clipLock) { clipIds.containsKey(file) }
+    fun hasClip(file: String): Boolean = clipIds.containsKey(file)
 
-    /** The native id of an already uploaded clip, or 0. Never decodes. */
-    fun loadClipIfPresent(file: String): Int = synchronized(clipLock) { clipIds[file] ?: 0 }
+    /**
+     * Decodes `assets/sounds/[file]` once and uploads it. Returns the native
+     * clip id, or 0 when it cannot be decoded.
+     *
+     * The decode happens **outside** every lock: two callers that ask for the
+     * same file share one decode through [decodesInFlight], and a caller that
+     * asks for a different file is never blocked by it. Blocking the UI thread
+     * on a media codec (what the old code did) is what froze the game.
+     */
+    fun loadClip(file: String): Int {
+        val existing = clipIds[file]
+        if (existing != null) return existing
+        val mine = CompletableFuture<Int>()
+        val running = decodesInFlight.putIfAbsent(file, mine)
+        if (running != null) {
+            return try {
+                running.get(4, TimeUnit.SECONDS)
+            } catch (_: Throwable) {
+                0
+            }
+        }
+        var id = 0
+        try {
+            id = decodeAndUpload(file)
+        } finally {
+            decodesInFlight.remove(file, mine)
+            mine.complete(id)
+        }
+        return id
+    }
+
+    /** Requests a decode on the priority lane, if it is not already there. */
+    fun requestClip(file: String) {
+        if (handle == 0L) return
+        if (clipIds.containsKey(file)) return
+        submitRequest { loadClip(file) }
+    }
+
+    /** Decodes on the warm-up lane, one file at a time. */
+    fun warmUp(file: String) {
+        if (handle == 0L) return
+        if (clipIds.containsKey(file)) return
+        submitDecode { loadClip(file) }
+    }
+
+    /** Decodes and uploads one file. Called on a background lane only. */
+    private fun decodeAndUpload(file: String): Int {
+        val current = handle
+        if (current == 0L) return 0
+        val decoded = try {
+            appContext.assets.openFd("sounds/$file").use { NativePcmDecoder.decode(it) }
+        } catch (error: Throwable) {
+            Log.e(TAG, "Could not decode sounds/$file", error)
+            null
+        } ?: return 0
+        if (decoded.frames <= 0 || decoded.channels <= 0 ||
+            decoded.frames.toLong() * decoded.channels > decoded.samples.size
+        ) {
+            Log.e(TAG, "sounds/$file decoded to an impossible geometry")
+            return 0
+        }
+        val id = try {
+            loadClip(current, decoded.samples, decoded.frames, decoded.channels, decoded.sampleRate)
+        } catch (error: Throwable) {
+            Log.e(TAG, "Could not upload sounds/$file", error)
+            0
+        }
+        if (id > 0) {
+            clipIds[file] = id
+            clipRate = loadedSampleRate.takeIf { it > 0 } ?: PREFERRED_RATE
+        }
+        return id
+    }
 
     /** True while one voice of [key] is still sounding. */
     fun isKeySounding(key: String): Boolean {
@@ -297,19 +469,20 @@ class OpenFireAudioEngine(context: Context) {
     }
 
     /** Number of assets uploaded to the engine right now. */
-    val clipCount: Int get() = synchronized(clipLock) { clipIds.size }
+    val clipCount: Int get() = clipIds.size
 
     /** Drops every uploaded clip (a full reset of the audio stack). */
     fun unloadAllClips() {
-        if (handle == 0L) return
-        synchronized(clipLock) {
-            for (id in clipIds.values) {
-                try {
-                    unloadClip(handle, id)
-                } catch (_: Throwable) {
-                }
+        val current = handle
+        if (current == 0L) return
+        val ids = clipIds.values.toList()
+        clipIds.clear()
+        clipRate = 0
+        for (id in ids) {
+            try {
+                unloadClip(current, id)
+            } catch (_: Throwable) {
             }
-            clipIds.clear()
         }
     }
 
@@ -338,12 +511,12 @@ class OpenFireAudioEngine(context: Context) {
         maxDistanceM: Int,
         delayMs: Int = 0
     ): Int {
-        if (handle == 0L || clipId <= 0) return 0
-        if (!ensureStream()) return 0
+        val current = handle
+        if (current == 0L || clipId <= 0) return 0
         pack(clipId, key, owner, flags, volume, rate, pan, distance, rear, approach,
             deadlineMs, startOffsetMs, maxDistanceM, delayMs)
         return try {
-            play(handle, scratch.get())
+            play(current, scratch.get())
         } catch (_: Throwable) {
             0
         }
@@ -367,51 +540,57 @@ class OpenFireAudioEngine(context: Context) {
         approach: Float,
         maxDistanceM: Int
     ) {
-        if (handle == 0L || voiceId <= 0) return
+        val current = handle
+        if (current == 0L || voiceId <= 0) return
         pack(0, key, owner, flags, volume, rate, pan, distance, rear, approach, 0, 0,
             maxDistanceM, 0)
         try {
-            update(handle, voiceId, scratch.get())
+            update(current, voiceId, scratch.get())
         } catch (_: Throwable) {
         }
     }
 
     fun stopVoice(voiceId: Int) {
-        if (handle == 0L || voiceId <= 0) return
+        val current = handle
+        if (current == 0L || voiceId <= 0) return
         try {
-            stop(handle, voiceId)
+            stop(current, voiceId)
         } catch (_: Throwable) {
         }
     }
 
     fun stopKey(key: String) {
-        if (handle == 0L) return
+        val current = handle
+        if (current == 0L) return
         try {
-            stopKey(handle, keyIdOf(key))
+            stopKey(current, keyIdOf(key))
         } catch (_: Throwable) {
         }
     }
 
     fun stopOwnerKey(owner: Int, key: String) {
-        if (handle == 0L) return
+        val current = handle
+        if (current == 0L) return
         try {
-            stopOwnerKey(handle, owner, keyIdOf(key))
+            stopOwnerKey(current, owner, keyIdOf(key))
         } catch (_: Throwable) {
         }
     }
 
     fun stopOwner(owner: Int) {
-        if (handle == 0L) return
+        val current = handle
+        if (current == 0L) return
         try {
-            stopOwner(handle, owner)
+            stopOwner(current, owner)
         } catch (_: Throwable) {
         }
     }
 
     fun stopAll() {
-        if (handle == 0L) return
+        val current = handle
+        if (current == 0L) return
         try {
-            stopAll(handle)
+            stopAll(current)
         } catch (_: Throwable) {
         }
     }
@@ -420,50 +599,76 @@ class OpenFireAudioEngine(context: Context) {
 
     /** Applies a bus gain (0..1). The SFX slider is one call. */
     fun setBusGain(bus: Int, gain: Float) {
-        if (handle == 0L) return
+        val current = handle
+        if (current == 0L) return
         try {
-            setBusGain(handle, bus, gain.coerceIn(0f, 1f))
+            setBusGain(current, bus, gain.coerceIn(0f, 1f))
         } catch (_: Throwable) {
         }
     }
 
     fun setMasterGain(gain: Float) {
-        if (handle == 0L) return
+        val current = handle
+        if (current == 0L) return
         try {
-            setMasterGain(handle, gain.coerceIn(0f, 1f))
+            setMasterGain(current, gain.coerceIn(0f, 1f))
         } catch (_: Throwable) {
         }
     }
 
     fun setPaused(paused: Boolean) {
-        if (handle == 0L) return
+        val current = handle
+        if (current == 0L) return
         try {
-            setPaused(handle, paused)
+            setPaused(current, paused)
         } catch (_: Throwable) {
         }
     }
 
-    fun isRunning(): Boolean = handle != 0L && try {
-        isRunning(handle)
-    } catch (_: Throwable) {
-        false
+    /**
+     * Chooses the spatial model: binaural on headphones, crossfeed on
+     * loudspeakers. Safe to call from a route-change callback.
+     */
+    fun setOutputMode(headphones: Boolean) {
+        headphonesMode = headphones
+        val current = handle
+        if (current == 0L) return
+        try {
+            setOutputMode(current, headphones)
+        } catch (_: Throwable) {
+        }
+    }
+
+    fun isRunning(): Boolean {
+        val current = handle
+        if (current == 0L) return false
+        return try {
+            isRunning(current).also { streamRunning = it }
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     /** Live stream information, or null when the engine is not available. */
     fun streamInfo(): NativeStreamInfo? {
-        if (handle == 0L) return null
+        val current = handle
+        if (current == 0L) return null
         return try {
-            info(handle)
+            info(current)
         } catch (_: Throwable) {
             null
         }
     }
 
     /** Voices the mixer is rendering right now. */
-    fun voiceCount(): Int = if (handle == 0L) 0 else try {
-        activeVoices(handle)
-    } catch (_: Throwable) {
-        0
+    fun voiceCount(): Int {
+        val current = handle
+        if (current == 0L) return 0
+        return try {
+            activeVoices(current)
+        } catch (_: Throwable) {
+            0
+        }
     }
 
     /** Closes the stream and frees the engine. Every later call is a no-op. */
@@ -471,7 +676,23 @@ class OpenFireAudioEngine(context: Context) {
         val current = handle
         handle = 0L
         available = false
+        streamRunning = false
         loadedSampleRate = 0
+        clipIds.clear()
+        clipRate = 0
+        decodesInFlight.clear()
+        try {
+            streamLane.shutdownNow()
+        } catch (_: Throwable) {
+        }
+        try {
+            decodeLane.shutdownNow()
+        } catch (_: Throwable) {
+        }
+        try {
+            requestLane.shutdownNow()
+        } catch (_: Throwable) {
+        }
         if (current == 0L) return
         try {
             stopStream(current)
@@ -481,7 +702,6 @@ class OpenFireAudioEngine(context: Context) {
             destroy(current)
         } catch (_: Throwable) {
         }
-        synchronized(clipLock) { clipIds.clear() }
     }
 
     /**
@@ -489,12 +709,16 @@ class OpenFireAudioEngine(context: Context) {
      * how many sounds are loaded, and - when it is not working - why.
      */
     fun diagnostics(): String {
-        if (handle == 0L) {
+        val current = handle
+        if (current == 0L) {
             return "Native audio engine unavailable (${unavailableReason ?: "unknown reason"})"
         }
         val line = streamInfo()?.summary
             ?: return "Native audio engine present, stream details unavailable"
-        val state = if (available) "streaming" else "stream stopped"
+        val state = when {
+            streamRunning -> "streaming"
+            else -> "stream stopped"
+        }
         return "$line, $clipCount clips, $state"
     }
 

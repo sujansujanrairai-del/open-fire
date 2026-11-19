@@ -175,6 +175,29 @@ object SoundLibrary {
     /** Every distinct asset file, in catalogue order. */
     fun files(): List<String> = SOUND_FILES.values.distinct()
 
+    /**
+     * The sounds of the first second of play, decoded before the rest of the
+     * catalogue: a menu click, a reload, the four most used guns, the two
+     * footstep loops and the hit markers. Decoding them first is what makes
+     * the very first interaction of a fresh install instant.
+     */
+    val ESSENTIAL_FILES: List<String> = listOf(
+        "click.ogg",
+        "gun-reload.ogg",
+        "assault-gun.ogg",
+        "pistol-gun.ogg",
+        "shotgun.ogg",
+        "submachine-gun.ogg",
+        "machine-gun.ogg",
+        "ak-47-gun.ogg",
+        "walk.ogg",
+        "gun-hit.ogg",
+        "enemy-hit.ogg",
+        "player-hit.ogg",
+        "explosion.ogg",
+        "missile.ogg"
+    )
+
     /** True when [key] is a projectile with a rising approach cue. */
     fun isProjectile(key: String): Boolean = key in PROJECTILE_KEYS
 

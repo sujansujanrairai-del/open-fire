@@ -157,4 +157,60 @@ object ElectricShockRules {
 
     /** True once one shock use has drained enough health to be worth coins. */
     fun paysCoins(drainedHp: Int): Boolean = drainedHp >= MIN_PAYABLE_DRAIN_HP
+
+    // ------------------------------------------------------------------
+    // The throw
+    // ------------------------------------------------------------------
+    //
+    // A shock that lands throws the opponent away from the player: the fight
+    // is about closing a distance, so being pushed back is the real cost of
+    // standing in a shock. The throw has to be a *throw*, not a teleport to
+    // the far wall:
+    //
+    //  - it is bounded, so the enemy always lands at a reachable spot inside
+    //    the arena and is not launched across the whole square;
+    //  - it never carries him past [KNOCKBACK_CEILING_M], so a shock cannot
+    //    end the engagement by itself;
+    //  - the way back is planned, so he does not need a long detour to reach
+    //    the player again: the return time is derived from the distance the
+    //    throw really created.
+
+    /** Metres the shock throws the opponent away from the player. */
+    const val KNOCKBACK_M = 3.5f
+
+    /** The farthest a single throw may carry him, in metres. */
+    const val KNOCKBACK_CEILING_M = 14f
+
+    /** Metres the returning enemy covers in one turn-back tick. */
+    const val RETURN_STEP_M = 1.6f
+
+    /** Length of one turn-back tick, in milliseconds. */
+    const val RETURN_TICK_MS = 300L
+
+    /**
+     * Where the throw lands him: the current distance plus [KNOCKBACK_M],
+     * never past [KNOCKBACK_CEILING_M] and never past the arena wall.
+     */
+    fun knockbackTarget(distance: Float, arenaSize: Float = Combat.MAX_RANGE): Float {
+        val safe = if (distance.isNaN()) 0f else distance.coerceIn(0f, arenaSize)
+        val thrown = (safe + KNOCKBACK_M).coerceAtMost(KNOCKBACK_CEILING_M)
+        return thrown.coerceIn(0f, arenaSize)
+    }
+
+    /**
+     * Turn-back ticks that bring a thrown enemy back to fighting distance.
+     *
+     * One tick covers [RETURN_STEP_M], so the return is proportional to the
+     * throw: a short throw is answered in a couple of steps, and even the
+     * longest throw ends in a couple of seconds instead of a slow walk back
+     * across the square.
+     */
+    fun returnTicks(fromDistance: Float, toDistance: Float = 0f): Int {
+        val gap = (fromDistance - toDistance).coerceAtLeast(0f)
+        return kotlin.math.ceil(gap / RETURN_STEP_M).toInt().coerceIn(1, 8)
+    }
+
+    /** Milliseconds the return of a throw takes, for the guide and the tests. */
+    fun returnTimeMs(fromDistance: Float, toDistance: Float = 0f): Long =
+        returnTicks(fromDistance, toDistance) * RETURN_TICK_MS
 }

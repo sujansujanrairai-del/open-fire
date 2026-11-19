@@ -60,6 +60,49 @@ constexpr float kGainRampMs = 8.0f;
 /** Fade used when a voice is stopped, in milliseconds. */
 constexpr float kStopFadeMs = 12.0f;
 
+/**
+ * Front/rear cue of the head model.
+ *
+ * A source behind the listener is heard through the back of the head: it
+ * loses some of its high end and a little of its level, while a source in
+ * front keeps the full, bright spectrum. This is the cue that tells the
+ * player whether the enemy is closing in from the front or sneaking up from
+ * behind, and it works on a phone speaker as well as on headphones because
+ * it is a spectral (mono-compatible) difference, not an inter-channel one.
+ */
+constexpr float kRearCutoffHz = 2400.0f;
+
+/** Level of a source that sits exactly behind the listener (0..1). */
+constexpr float kRearLevel = 0.80f;
+
+/** Cut-off of the far ear's shadow filter, in Hz. */
+constexpr float kShadowCutoffHz = 3200.0f;
+
+/**
+ * Speaker crossfeed.
+ *
+ * On two loudspeakers each ear hears both speakers, so a hard-panned voice is
+ * heard by both ears a few hundred microseconds apart and the image collapses
+ * towards the nearest speaker. Feeding a small, slightly delayed and slightly
+ * low-passed copy of each channel into the other one restores a stable centre
+ * image and keeps hard pans audible without the "sound only in one ear"
+ * effect that makes a speaker mix unusable.
+ */
+constexpr float kCrossfeedGain = 0.28f;
+
+/** Delay of the crossfeed path, in seconds (about 0.3 ms). */
+constexpr float kCrossfeedDelaySeconds = 0.00030f;
+
+/** Cut-off of the crossfeed low-pass, in Hz. */
+constexpr float kCrossfeedCutoffHz = 700.0f;
+
+/**
+ * How much of the geometric pan survives on speakers. A speaker mix is panned
+ * less aggressively than a binaural one, because both ears already hear both
+ * speakers.
+ */
+constexpr float kSpeakerPanScale = 0.72f;
+
 inline float clamp01(float value) {
     if (!(value > 0.0f)) return 0.0f;  // also catches NaN
     return value > 1.0f ? 1.0f : value;
@@ -162,6 +205,24 @@ inline void headShadowGains(float pan, float* nearGain, float* farGain) {
 }
 
 /**
+ * Gain of a source at `rear` (-1 fully in front, 0 at the side, +1 fully
+ * behind). Behind the listener is a little quieter; in front is untouched.
+ */
+inline float rearGain(float rear) {
+    const float behind = clamp01(rear);
+    return 1.0f - (1.0f - kRearLevel) * behind;
+}
+
+/**
+ * Pan used for one output mode. Headphones get the full geometric pan;
+ * loudspeakers get a gentler one, so neither ear is ever left silent.
+ */
+inline float panForOutput(float pan, bool headphones) {
+    const float safe = clampFloat(pan, -1.0f, 1.0f);
+    return headphones ? safe : safe * kSpeakerPanScale;
+}
+
+/**
  * One-pole low-pass coefficient of the far ear for a given cut-off. A
  * shadowed ear loses its high end, so the two fighters never sound like the
  * same point source even when they stand on the same spot.
@@ -171,6 +232,33 @@ inline float shadowCoefficient(float cutoffHz, int32_t sampleRate) {
     const float cutoff = clampFloat(cutoffHz, 200.0f, rate * 0.45f);
     const float x = std::exp(-2.0f * 3.14159265f * cutoff / rate);
     return clamp01(1.0f - x);
+}
+
+/**
+ * Cut-off of the rear cue for `rear` (-1..1). A frontal source keeps a
+ * cut-off far above the audible band (no colouring at all); a source behind
+ * the listener is dulled like a sound arriving through the back of the head.
+ */
+inline float rearCutoff(float rear, int32_t sampleRate) {
+    const float behind = clamp01(rear);
+    if (behind <= 0.0f) {
+        // A source in front is not filtered at all.
+        return (sampleRate > 0 ? static_cast<float>(sampleRate) : 48000.0f) * 0.45f;
+    }
+    const float rate = sampleRate > 0 ? static_cast<float>(sampleRate) : 48000.0f;
+    const float cutoff = kRearCutoffHz + behind * (rate * 0.45f - kRearCutoffHz);
+    return clampFloat(cutoff, 400.0f, rate * 0.45f);
+}
+
+/**
+ * One-pole coefficients of the rear cue, as a single exponential smoothing
+ * factor. A coefficient of 1 means "no filtering", which is what a source in
+ * front uses.
+ */
+inline float rearCoefficient(float rear, int32_t sampleRate) {
+    const float behind = clamp01(rear);
+    if (behind <= 0.0001f) return 1.0f;
+    return shadowCoefficient(rearCutoff(rear, sampleRate), sampleRate);
 }
 
 /**

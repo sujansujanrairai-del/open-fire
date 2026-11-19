@@ -100,6 +100,8 @@ typedef struct of_stream_info {
     int32_t active_voices;
     int32_t peak_voices;
     int32_t xrun_count;
+    int32_t buffer_frames;    /* the negotiated buffer size: the latency budget */
+    int32_t headphones;       /* 1 = binaural model, 0 = speaker crossfeed model */
 } of_stream_info;
 
 /** Creates an engine. Returns NULL when memory is exhausted. */
@@ -147,6 +149,20 @@ void of_engine_set_bus_gain(of_engine* engine, int32_t bus, float gain);
 
 /** Sets the master gain (0..1). */
 void of_engine_set_master_gain(of_engine* engine, float gain);
+
+/**
+ * Chooses the spatial model of the whole mix.
+ *
+ *  - `headphones != 0`: full binaural placement (interaural delay and head
+ *    shadow) on top of pan and distance.
+ *  - `headphones == 0`: the loudspeaker model - a gentler pan plus a crossfeed
+ *    stage, so both ears hear both speakers and no sound is trapped in one
+ *    speaker. This is what makes the 3D mix usable without headphones.
+ *
+ * The change is applied on the next audio block, so it can be called from a
+ * route-change callback at any time.
+ */
+void of_engine_set_output_mode(of_engine* engine, int32_t headphones);
 
 /** Freezes (paused != 0) or resumes the mix without closing the stream. */
 void of_engine_set_paused(of_engine* engine, int32_t paused);

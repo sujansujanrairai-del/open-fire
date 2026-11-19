@@ -106,6 +106,11 @@ void of_engine_set_master_gain(of_engine* engine, float gain) {
     engine->engine->setMasterGain(gain);
 }
 
+void of_engine_set_output_mode(of_engine* engine, int32_t headphones) {
+    if (engine == nullptr) return;
+    engine->engine->setOutputMode(headphones != 0);
+}
+
 void of_engine_set_paused(of_engine* engine, int32_t paused) {
     if (engine == nullptr) return;
     engine->engine->setPaused(paused != 0);

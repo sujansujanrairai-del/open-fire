@@ -65,15 +65,18 @@ constexpr const char* kInfoClass =
  *   NativeStreamInfo(
  *       sampleRate: Int, framesPerBurst: Int, channels: Int,
  *       isFloat: Boolean, isLowLatency: Boolean,
- *       activeVoices: Int, peakVoices: Int, xrunCount: Int
+ *       activeVoices: Int, peakVoices: Int, xrunCount: Int,
+ *       bufferFrames: Int, headphones: Boolean
  *   )
  *
  * `Int` is `I` and Kotlin's `Boolean` is `Z`, so the two flags in the middle
- * are `ZZ` - not `IZ`, and not `II`. This constant must stay in lockstep with
- * the Kotlin declaration: when it drifts, `GetMethodID` returns null, the
- * library fails to load, and the game plays no sound at all.
+ * are `ZZ` - not `IZ`, and not `II` - the four voice counters are `IIII` and
+ * the last flag is `Z`. This constant must stay in lockstep with the Kotlin declaration:
+ * when it drifts, `GetMethodID` returns null, the diagnostics value object
+ * disappears (the audio itself keeps working, because the value object is
+ * optional by design).
  */
-constexpr const char* kInfoConstructorSignature = "(IIIZZIII)V";
+constexpr const char* kInfoConstructorSignature = "(IIIZZIIIIZ)V";
 
 /** Cached ids of the two Kotlin classes the bridge touches. */
 struct JniCache {
@@ -226,6 +229,12 @@ void nativeSetPaused(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle, jboolean p
     of_engine_set_paused(fromHandle(handle), paused == JNI_TRUE ? 1 : 0);
 }
 
+/** Chooses the binaural (headphone) or the crossfeed (speaker) spatial model. */
+void nativeSetOutputMode(JNIEnv* /*env*/, jclass /*clazz*/, jlong handle,
+                         jboolean headphones) {
+    of_engine_set_output_mode(fromHandle(handle), headphones == JNI_TRUE ? 1 : 0);
+}
+
 /**
  * Builds a `NativeStreamInfo` value object. The constructor is cached in
  * `JNI_OnLoad`, so this path does a single NewObject and no lookup.
@@ -236,7 +245,8 @@ jobject nativeInfo(JNIEnv* env, jclass /*clazz*/, jlong handle) {
     return env->NewObject(gCache.infoClass, gCache.infoConstructor,
                           info.sample_rate, info.frames_per_burst, info.channels,
                           info.is_float != 0, info.is_low_latency != 0,
-                          info.active_voices, info.peak_voices, info.xrun_count);
+                          info.active_voices, info.peak_voices, info.xrun_count,
+                          info.buffer_frames, info.headphones != 0);
 }
 
 /** Voices the mixer is rendering right now. */
@@ -290,6 +300,8 @@ JNINativeMethod gMethods[] = {
      reinterpret_cast<void*>(nativeSetMasterGain)},
     {const_cast<char*>("setPaused"), const_cast<char*>("(JZ)V"),
      reinterpret_cast<void*>(nativeSetPaused)},
+    {const_cast<char*>("setOutputMode"), const_cast<char*>("(JZ)V"),
+     reinterpret_cast<void*>(nativeSetOutputMode)},
     {const_cast<char*>("info"), const_cast<char*>("(J)Lcom/blindtechnexus/openfire/audio/native/NativeStreamInfo;"),
      reinterpret_cast<void*>(nativeInfo)},
     {const_cast<char*>("activeVoices"), const_cast<char*>("(J)I"),
