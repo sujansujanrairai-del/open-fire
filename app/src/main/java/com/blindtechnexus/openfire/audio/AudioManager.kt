@@ -2,8 +2,12 @@ package com.blindtechnexus.openfire.audio
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.MediaPlayer
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -229,6 +233,24 @@ class AudioManager(private val context: Context) {
     @Volatile
     var battleActive: Boolean = false
 
+    /**
+     * The platform audio manager, used only to follow the output route: the
+     * engine renders a binaural mix on headphones and a crossfeed mix on the
+     * phone's own speaker, because the two need genuinely different spatial
+     * models to sound right. Without this switch a hard-panned enemy is heard
+     * in one ear only on a speaker, and the arena collapses onto one side.
+     */
+    private val platformAudio: android.media.AudioManager? =
+        context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+
+    /** Told when a headset is plugged in or out, so the model can follow. */
+    private var deviceCallback: AudioDeviceCallback? = null
+
+    /** The route the engine is currently rendering for. */
+    @Volatile
+    var headphoneMode: Boolean = true
+        private set
+
     private val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val manager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
         manager?.defaultVibrator
@@ -238,9 +260,94 @@ class AudioManager(private val context: Context) {
     }
 
     init {
-        // The engine is already streaming, so the first click is heard on the
-        // very next Oboe callback. The library warms up in the background.
+        // The SFX bus is applied once per audio block, so the very first click
+        // is already at the level the user chose.
         mixer.sfxVolume = sfxVolume
+        followOutputRoute()
+    }
+
+    // ------------------------------------------------------- output route
+
+    /**
+     * Applies the spatial model that matches the current output device and
+     * keeps following it: plugging in a headset switches the engine to the
+     * binaural model, unplugging it switches back to the speaker crossfeed.
+     */
+    private fun followOutputRoute() {
+        headphoneMode = detectHeadphones()
+        mixer.setOutputMode(headphoneMode)
+        val manager = platformAudio ?: return
+        val callback = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+                applyOutputRoute()
+            }
+
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                applyOutputRoute()
+            }
+        }
+        deviceCallback = callback
+        try {
+            manager.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
+        } catch (_: Throwable) {
+            deviceCallback = null
+        }
+    }
+
+    /** Re-reads the route and applies it to the engine. */
+    private fun applyOutputRoute() {
+        val now = detectHeadphones()
+        if (now == headphoneMode) return
+        headphoneMode = now
+        mixer.setOutputMode(now)
+    }
+
+    /**
+     * True when a headphone-style output (wired headset, Bluetooth headset,
+     * USB or BLE headset) is connected. Anything else - the phone's own
+     * speaker, a Bluetooth speaker, a dock - gets the crossfeed model, which
+     * is what makes the 3D mix usable without headphones.
+     */
+    @Suppress("DEPRECATION")
+    private fun detectHeadphones(): Boolean {
+        val manager = platformAudio ?: return true
+        val devices = try {
+            manager.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)
+        } catch (_: Throwable) {
+            return true
+        }
+        for (device in devices) {
+            if (isHeadphoneRoute(device.type)) return true
+        }
+        return false
+    }
+
+    /**
+     * True for the device types that put one driver on each ear.
+     *
+     * The newer types are read inside a version check instead of being named
+     * in a `when`, so this file compiles and passes lint against the whole
+     * supported range (24..34) without an `@RequiresApi` escape hatch.
+     */
+    private fun isHeadphoneRoute(type: Int): Boolean {
+        if (type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+            type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+            type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+            type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        ) {
+            return true
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            type == AudioDeviceInfo.TYPE_USB_HEADSET
+        ) {
+            return true
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            type == AudioDeviceInfo.TYPE_BLE_HEADSET
+        ) {
+            return true
+        }
+        return false
     }
 
     // ------------------------------------------------------------- spatial
@@ -1077,6 +1184,14 @@ class AudioManager(private val context: Context) {
     fun release() {
         if (released) return
         released = true
+        val callback = deviceCallback
+        deviceCallback = null
+        if (callback != null) {
+            try {
+                platformAudio?.unregisterAudioDeviceCallback(callback)
+            } catch (_: Throwable) {
+            }
+        }
         stopMusic()
         loops.clear()
         mixer.release()

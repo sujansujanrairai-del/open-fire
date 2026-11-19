@@ -50,10 +50,12 @@ import com.blindtechnexus.openfire.model.RunSpeed
 import com.blindtechnexus.openfire.model.Screen
 import com.blindtechnexus.openfire.model.Shop
 import com.blindtechnexus.openfire.model.ShopResult
+import com.blindtechnexus.openfire.model.SkyLock
 import com.blindtechnexus.openfire.model.Weapon
 import com.blindtechnexus.openfire.model.movePlayer
 import com.blindtechnexus.openfire.model.movePlayerLateral
 import com.blindtechnexus.openfire.model.moveRobertSafely
+import com.blindtechnexus.openfire.model.placeRobertAt
 import com.blindtechnexus.openfire.model.SoundDurations
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -238,6 +240,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         /** The languages the speech voice can be set to. */
         val VOICE_LANGUAGES: Set<String> = setOf("en", "hi", "ne")
+
+        /**
+         * Minimum gap between two spoken "Can't fire" lines, in milliseconds.
+         *
+         * A held trigger or a double swipe asks twice in a row; the second
+         * answer is written to the log but not spoken, so the announcement
+         * never turns into a stutter.
+         */
+        const val CANT_FIRE_REPEAT_MS = 1_200L
 
         /** Fast retreat: metres gained per flee tick, and the tick length. */
         const val FLEE_STEP = RobertRules.FLEE_STEP_M
@@ -604,7 +615,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 speak(t("settings"))
             }
             Screen.GUIDE -> speak(t("guideTitle"))
-            Screen.SHOP -> speak("${t("shopTitle")}. ${t("shopSubtitle")}. ${coinsSpeech()}")
+            // The shop is opened with one short line: the balance. The title
+            // and the subtitle are read on screen (and the shop's own headings
+            // are spoken as the user moves through them), so repeating them
+            // here only delayed the one thing the player wants to hear.
+            Screen.SHOP -> speak(coinsSpeech())
             Screen.PROFILE -> speak(
                 "${t("profileTitle")}. ${t("round")} ${_stats.value.round}. " +
                     "${t("level")} ${_stats.value.level}. " +
@@ -2238,11 +2253,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             stopEnemyFireSound()
             return
         }
-        if (state.robertHp <= 0 || state.playerHp <= 0 || state.timerSelectActive || state.missileInFlight ||
-            (state.bombInFlight && state.bombFromPlayer)
+        if (state.robertHp <= 0 || state.playerHp <= 0 || state.timerSelectActive ||
+            skyNotEmpty(state)
         ) {
-            // A held sound belongs only to a real firing exchange. Selection,
-            // projectile flight, death and screen changes all release it now.
+            // The same clear-sky rule the player obeys: while any projectile is
+            // in the air - his own or the player's - he holds his fire. A held
+            // sound belongs only to a real firing exchange, so it is released.
             stopEnemyFireSound()
             return
         }
@@ -3808,8 +3824,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _gameState.update {
                 it.copy(weaponDriftM = GraceRules.driftAfter(it.weaponDriftM))
             }
-            playSound("click")
-            msg(t("waitProjectile"))
+            // One short announcement, exactly as asked: "Can't fire." The
+            // locked fighter is never left guessing why the trigger is dead.
+            // A blind player who swipes twice in a row is not read the same
+            // line twice: the repetition only updates the log line, so the
+            // speech queue stays clean.
+            val now = battleClock.nowMs()
+            if (now - cantFireSpokenAtMs >= CANT_FIRE_REPEAT_MS) {
+                cantFireSpokenAtMs = now
+                msg(t(SkyLock.CANT_FIRE_KEY))
+            } else {
+                setLog(t(SkyLock.CANT_FIRE_KEY))
+            }
             return
         }
 
@@ -5575,9 +5601,45 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         return !MissileRules.canShockDeflect(remaining, missileFlightDurationMs)
     }
 
-    /** True while a guided missile or a bomb is in the air; guns wait for clear sky. */
-    private fun skyNotEmpty(state: GameState = _gameState.value): Boolean =
-        state.missileInFlight || state.bombInFlight
+    /** When the projectile that holds the sky was launched, or 0 when the sky is clear. */
+    private var skyHeldSinceMs = 0L
+
+    /** How recently "Can't fire" was spoken, so a double swipe is not read twice. */
+    private var cantFireSpokenAtMs = 0L
+
+    /**
+     * True while a guided missile or a bomb is in the air; guns wait for a
+     * clear sky.
+     *
+     * This is the single authority for BOTH fighters ([SkyLock]): the player's
+     * trigger and Robert's trigger read the same answer, so a bomb thrown by
+     * the enemy can never lock the player out while the enemy keeps firing -
+     * the asymmetry that this rule replaces.
+     *
+     * The hold is bounded. A projectile that never resolves (a lost callback,
+     * a screen change in the middle of a flight) would otherwise keep the sky
+     * closed for the rest of the match, so a flight older than
+     * [SkyLock.MAX_HOLD_MS] is treated as stale: the flags are released and
+     * the fight resumes.
+     */
+    private fun skyNotEmpty(state: GameState = _gameState.value): Boolean {
+        val held = SkyLock.blocksWeapons(state.missileInFlight, state.bombInFlight)
+        if (!held) {
+            skyHeldSinceMs = 0L
+            return false
+        }
+        val now = battleClock.nowMs()
+        if (skyHeldSinceMs == 0L) skyHeldSinceMs = now
+        if (SkyLock.expired(skyHeldSinceMs, now)) {
+            // The projectile never landed: release the lock instead of hanging
+            // on a flag nobody will ever clear.
+            skyHeldSinceMs = 0L
+            _gameState.update { it.copy(missileInFlight = false, bombInFlight = false) }
+            setLog(t("waitProjectile"))
+            return false
+        }
+        return true
+    }
 
     /**
      * Walks a held weapon back in once the sky is clear again: the drift of
@@ -5742,22 +5804,41 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Robert's other answer: he sprints out of the 40% band instead of trading
-     * shocks. The moment he leaves the band the shock can no longer reach him,
-     * and the player has to close the distance again.
+     * Robert's other answer: the shock throws him out of the 40% band instead
+     * of trading shocks.
+     *
+     * The throw is a real, bounded throw ([ElectricShockRules.knockbackTarget]):
+     * he lands [ElectricShockRules.KNOCKBACK_M] metres further away, at a point
+     * that always exists inside the arena and never past
+     * [ElectricShockRules.KNOCKBACK_CEILING_M]. It used to be an eight-tick
+     * sprint at twice the player's top speed, which launched him across the
+     * whole square in about a second and then made the player wait a long time
+     * for him to walk back.
+     *
+     * The way back is planned at the same moment: the turn-back ticks are
+     * derived from the distance the throw really created, so he is back in
+     * fighting distance within a couple of seconds instead of a slow detour.
      */
     private fun fleeFromShock() {
         if (_gameState.value.robertShocking) return
         robertFleeingShock = true
         msg(t("enemyFleesShock"))
         stopEnemyFireSound()
-        if (_gameState.value.robertState != "retreat") {
-            _gameState.update {
-                it.copy(robertState = "retreat", robertConsecutiveHits = 0, robertExchangeShots = 0)
-            }
-            robertSprintTicks = RobertRules.SPRINT_TICKS
-            planRobertStep(FLEE_TICK_MS)
+        val before = _gameState.value
+        val target = ElectricShockRules.knockbackTarget(before.distance, Arena.SIZE)
+        val thrown = before.placeRobertAt(target)
+        val landingDistance = thrown.state.distance
+        _gameState.update {
+            thrown.state.copy(
+                robertState = "turnBack",
+                robertTurnBackTicks = ElectricShockRules.returnTicks(landingDistance),
+                robertConsecutiveHits = 0,
+                robertExchangeShots = 0,
+                robertLateral = 0f
+            )
         }
+        robertSprintTicks = 0
+        planRobertStep(ElectricShockRules.RETURN_TICK_MS)
     }
 
     /**

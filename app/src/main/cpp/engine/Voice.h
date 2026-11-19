@@ -1,25 +1,36 @@
 /*
  * One playing sound.
  *
- * A voice owns its read position, its ramped gains and its own short delay
- * line, so the binaural placement of one sound can never leak into another
- * one. Everything the game thread changes (gains, pan, distance, rate) is a
- * plain float written through the engine's command ring and picked up once
- * per block, then glided towards with a few-millisecond ramp - a moving
- * source therefore never clicks, and a stop is heard as a short clean fade
- * instead of a cut.
+ * A voice owns its read position, its ramped gains, its own short delay line
+ * and its own rear-cue filter, so the placement of one sound can never leak
+ * into another one and a crash of one voice can never exist. Everything the
+ * game thread changes (gains, pan, distance, rate) is a plain float written
+ * through the engine's command ring and picked up once per block, then glided
+ * towards with a few-millisecond ramp - a moving source therefore never
+ * clicks, and a stop is heard as a short clean fade instead of a cut.
  *
- * Two features make the player and the enemy distinguishable through
- * headphones even when they play the exact same recording at the same rate:
+ * The spatial model, in order of importance:
  *
- *  - a fractional interaural delay (an interpolated delay line) places the
- *    sound at the correct side and time-of-arrival, and
- *  - a head-shadow one-pole filter on the far ear removes the high end of the
- *    sound that reaches the ear away from the source.
+ *  1. **Distance** - the one distance curve of the game. It is what makes an
+ *     enemy audible far away, swelling as he closes in and fading as he
+ *     recedes. It is the cue a listener localises most reliably, and it works
+ *     on any output: speaker, headphones or a single earpiece.
+ *  2. **Pan (ILD)** - constant-power left/right placement. On speakers the pan
+ *     is gently scaled and the mixer adds crossfeed, so the image never
+ *     collapses into one speaker.
+ *  3. **Front/rear** - a source behind the listener loses high end and a
+ *     little level. This is a spectral cue: it survives a mono speaker, which
+ *     is exactly why it is preferred over anything inter-channel here.
+ *  4. **Interaural delay and head shadow (ITD)** - the two binaural refinements
+ *     that separate two fighters standing on the same spot through
+ *     headphones. They are applied only to a genuinely sideways source, and
+ *     only in headphone mode: on loudspeakers the two channels are summed by
+ *     the room anyway, so an ITD would only smear the image and comb-filter
+ *     the sound.
  *
- * A head-on source is centred exactly and bypasses both, so a fighter running
- * straight at the listener is heard in the middle of the head with no comb
- * filtering - the clean image the game needs for aiming.
+ * A head-on source is centred exactly and bypasses every inter-channel trick,
+ * so a fighter running straight at the listener is heard in the middle of the
+ * head with no comb filtering - the clean image the game needs for aiming.
  */
 #ifndef OPENFIRE_VOICE_H
 #define OPENFIRE_VOICE_H
@@ -29,18 +40,42 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+
 #include "AudioMath.h"
 #include "Clip.h"
 
 namespace openfire {
 
-/** Delay-line length: 5 ms at 48 kHz, far more than the 0.63 ms needed. */
-constexpr int32_t kDelayLineFrames = 256;
+/** Delay-line length: 6 ms at 48 kHz, far more than the 0.63 ms needed. */
+constexpr int32_t kDelayLineFrames = 288;
+
+/** Voice flags, mirroring `enum of_voice_flags` in of_audio.h. */
+enum VoiceFlag {
+    kFlagLoop = 1 << 0,
+    kFlagStereo = 1 << 1,
+    kFlagSpatial = 1 << 2,
+    kFlagDeadline = 1 << 3,
+    kFlagApproach = 1 << 4,
+    kFlagCritical = 1 << 5
+};
 
 enum VoiceState {
     VOICE_PENDING = 0,   /* created, not yet mixed */
     VOICE_ACTIVE = 1,
     VOICE_FINISHED = 2
+};
+
+/**
+ * The published mirror of a voice.
+ *
+ * Only the audio thread writes these fields and only game threads read them,
+ * so `isVoiceSounding` / `isKeySounding` never touch callback-owned state and
+ * never take a lock.
+ */
+struct VoicePublication {
+    std::atomic<int32_t> id{0};
+    std::atomic<int32_t> keyId{0};
+    std::atomic<bool> active{false};
 };
 
 class Voice {
@@ -52,9 +87,7 @@ public:
     const Clip* clip = nullptr;
 
     /* Lock-free query mirror; only the mixer writes, API callers read. */
-    std::atomic<int32_t> publishedId{0};
-    std::atomic<int32_t> publishedKeyId{0};
-    std::atomic<bool> publishedActive{false};
+    VoicePublication published;
 
     /* Callback-owned targets, populated from commands drained by the mixer. */
     float targetVolume = 1.0f;   /* the voice's own level */
@@ -78,13 +111,61 @@ public:
     float stopFade = 1.0f;
     VoiceState state = VOICE_PENDING;
 
-    /* Spatial state of the binaural model. */
+    /* Spatial state of the head model. */
     float farEarState = 0.0f;
+    float rearState = 0.0f;
+    float rearCoeff = 1.0f;
     float currentDelay = 0.0f;
     int32_t delayCursor = 0;
     float delayLine[kDelayLineFrames] = {0.0f};
 
-    bool loop() const { return (flags & 1) != 0; }  /* OF_FLAG_LOOP */
+    bool loop() const { return (flags & kFlagLoop) != 0; }
+    bool spatial() const { return (flags & kFlagSpatial) != 0; }
+    bool stereo() const { return (flags & kFlagStereo) != 0; }
+    bool approaching() const { return (flags & kFlagApproach) != 0; }
+
+    /** Resets every field that belongs to a previous voice generation. */
+    void resetForReuse() {
+        id = 0;
+        keyId = 0;
+        owner = 0;
+        flags = 0;
+        clip = nullptr;
+        targetVolume = 1.0f;
+        targetPan = 0.0f;
+        targetDistance = 0.0f;
+        targetRear = 0.0f;
+        targetRate = 1.0f;
+        approachProximity = 0.0f;
+        maxDistance = 25;
+        stopping = false;
+        position = 0.0;
+        playedFrames = 0;
+        deadlineFrames = INT64_MAX;
+        currentVolume = 0.0f;
+        currentPan = 0.0f;
+        currentDistance = 0.0f;
+        currentRear = 0.0f;
+        currentRate = 1.0f;
+        stopFade = 1.0f;
+        state = VOICE_PENDING;
+        farEarState = 0.0f;
+        rearState = 0.0f;
+        rearCoeff = 1.0f;
+        currentDelay = 0.0f;
+        delayCursor = 0;
+        published.active.store(false, std::memory_order_release);
+        published.id.store(0, std::memory_order_relaxed);
+        published.keyId.store(0, std::memory_order_relaxed);
+    }
+};
+
+/** Options of one render pass; the mixer fills it once per callback. */
+struct RenderContext {
+    int32_t sampleRate = 48000;
+    float rampStep = 0.01f;
+    float stopFadeStep = 0.001f;
+    bool headphones = true;
 };
 
 /**
@@ -96,35 +177,35 @@ public:
 inline bool renderVoice(Voice* voice,
                         float* output,
                         int32_t frames,
-                        int32_t sampleRate,
-                        float rampStep,
-                        float stopFadeStep) {
-    if (voice == nullptr || voice->clip == nullptr) return false;
+                        const RenderContext& context) {
+    if (voice == nullptr || voice->clip == nullptr || output == nullptr || frames <= 0) {
+        return false;
+    }
     const Clip& clip = *voice->clip;
     const int32_t total = clip.frames();
-    if (total <= 0) return false;
+    if (total <= 0 || clip.channels() <= 0) return false;
 
     const bool looping = voice->loop();
-    const bool spatial = (voice->flags & (1 << 2)) != 0;   /* OF_FLAG_SPATIAL */
-    const bool isStereo = (voice->flags & (1 << 1)) != 0;  /* OF_FLAG_STEREO */
-    const bool approach = (voice->flags & (1 << 4)) != 0;  /* OF_FLAG_APPROACH */
+    const bool spatial = voice->spatial();
+    const bool isStereo = voice->stereo();
+    const bool approach = voice->approaching();
+    const int32_t sampleRate = context.sampleRate > 0 ? context.sampleRate : 48000;
 
-    /*
-     * The two spatial features are only ever used by a genuinely sideways
-     * source. A centred one keeps a clean, symmetric image.
-     */
+    /* The two inter-channel refinements are only used by a genuinely
+     * sideways source on headphones. A centred source keeps a clean,
+     * symmetric image on every output. */
     const bool sideways = spatial && std::fabs(voice->currentPan) >= kPanDeadZone;
+    const bool binaural = sideways && context.headphones;
     const bool rightSide = voice->currentPan > 0.0f;
-    const float shadowCoefficient = openfire::shadowCoefficient(3200.0f, sampleRate);
+    const float shadowCoefficient = openfire::shadowCoefficient(kShadowCutoffHz, sampleRate);
 
     /* Delay target of the far ear, in fractional samples. */
     float delayTarget = 0.0f;
-    if (sideways) {
+    if (binaural) {
         delayTarget = std::fabs(
             openfire::interauralDelaySamples(voice->currentPan, sampleRate));
-        if (delayTarget > static_cast<float>(kDelayLineFrames - 4)) {
-            delayTarget = static_cast<float>(kDelayLineFrames - 4);
-        }
+        const float limit = static_cast<float>(kDelayLineFrames - 4);
+        if (delayTarget > limit) delayTarget = limit;
     }
 
     /*
@@ -139,21 +220,28 @@ inline bool renderVoice(Voice* voice,
             voice->state = VOICE_FINISHED;
             return false;
         }
-        if (!looping && voice->playedFrames >= voice->deadlineFrames && !voice->stopping) {
+        if (!looping && voice->deadlineFrames != INT64_MAX &&
+            voice->playedFrames >= voice->deadlineFrames && !voice->stopping) {
             voice->stopping = true;
         }
 
         /* Glide every live parameter: no step is ever applied at once. */
-        voice->currentVolume += (voice->targetVolume - voice->currentVolume) * rampStep;
-        voice->currentPan += (voice->targetPan - voice->currentPan) * rampStep;
-        voice->currentDistance += (voice->targetDistance - voice->currentDistance) * rampStep;
-        voice->currentRear += (voice->targetRear - voice->currentRear) * rampStep;
-        voice->currentRate += (voice->targetRate - voice->currentRate) * rampStep;
-        voice->currentDelay += (delayTarget - voice->currentDelay) * rampStep;
+        const float step = context.rampStep;
+        voice->currentVolume += (voice->targetVolume - voice->currentVolume) * step;
+        voice->currentPan += (voice->targetPan - voice->currentPan) * step;
+        voice->currentDistance += (voice->targetDistance - voice->currentDistance) * step;
+        voice->currentRear += (voice->targetRear - voice->currentRear) * step;
+        voice->currentRate += (voice->targetRate - voice->currentRate) * step;
+        voice->currentDelay += (delayTarget - voice->currentDelay) * step;
+        if (voice->rearCoeff < 1.0f || voice->currentRear > 0.0f) {
+            const float wanted = openfire::rearCoefficient(voice->currentRear, sampleRate);
+            voice->rearCoeff += (wanted - voice->rearCoeff) * step;
+        }
 
         if (voice->stopping) {
-            voice->stopFade -= stopFadeStep;
+            voice->stopFade -= context.stopFadeStep;
             if (voice->stopFade <= 0.0f) {
+                voice->stopFade = 0.0f;
                 voice->state = VOICE_FINISHED;
                 return false;
             }
@@ -167,7 +255,8 @@ inline bool renderVoice(Voice* voice,
         }
 
         if (looping && voice->position >= static_cast<double>(total)) {
-            voice->position = std::fmod(voice->position, static_cast<double>(total));
+            const double wrapped = std::fmod(voice->position, static_cast<double>(total));
+            voice->position = (wrapped >= 0.0) ? wrapped : 0.0;
         }
 
         const int32_t index = static_cast<int32_t>(voice->position);
@@ -192,14 +281,30 @@ inline bool renderVoice(Voice* voice,
 
         if (voice->stopFade < 1.0f) source *= voice->stopFade;
 
-        /* Level of the whole source: own volume, distance and approach cue. */
+        /* Level of the whole source: own volume, distance, front/rear and the
+         * approach cue of a projectile. */
         float level = voice->currentVolume;
         if (spatial) {
             level *= openfire::distanceGain(
                 voice->currentDistance, static_cast<float>(voice->maxDistance));
+            level *= openfire::rearGain(voice->currentRear);
         }
         if (approach) level *= openfire::approachGain(voice->approachProximity);
         level = openfire::clampFloat(level, 0.0f, 8.0f);
+
+        /*
+         * The rear cue: a one-pole low-pass whose cut-off falls as the source
+         * moves behind the listener. It is mono-compatible, so it still works
+         * on a phone speaker; `rearCoeff` of 1 is exactly "no filtering".
+         */
+        if (!keepStereo) {
+            if (voice->rearCoeff < 0.9999f) {
+                voice->rearState += voice->rearCoeff * (source - voice->rearState);
+                source = voice->rearState;
+            } else {
+                voice->rearState = source;
+            }
+        }
 
         float outLeft;
         float outRight;
@@ -209,9 +314,11 @@ inline bool renderVoice(Voice* voice,
             outRight = right * level;
         } else {
             /* Constant-power placement, then the binaural refinement. */
+            const float pan = openfire::panForOutput(
+                sideways ? voice->currentPan : 0.0f, context.headphones);
             float panLeft = 1.0f;
             float panRight = 1.0f;
-            openfire::panGains(voice->currentPan, &panLeft, &panRight);
+            openfire::panGains(pan, &panLeft, &panRight);
             outLeft = source * level * panLeft;
             outRight = source * level * panRight;
 
@@ -224,7 +331,7 @@ inline bool renderVoice(Voice* voice,
              */
             voice->delayLine[voice->delayCursor] = source;
 
-            if (sideways) {
+            if (binaural) {
                 /*
                  * The ear away from the source hears the sound through the
                  * head: later (fractional delay) and duller (shadow filter).
@@ -250,10 +357,9 @@ inline bool renderVoice(Voice* voice,
                     outLeft = source * level * panLeft;
                 }
             } else {
-                /* Dead centre: perfectly symmetric, no comb filter, no shadow. */
-                const float centre = 0.5f * (outLeft + outRight);
-                outLeft = centre;
-                outRight = centre;
+                /* Dead centre (or a speaker mix): symmetric, no comb filter,
+                 * no shadow. The pan above already carries the placement. */
+                voice->farEarState = source;
             }
             voice->delayCursor = (voice->delayCursor + 1) % kDelayLineFrames;
         }
