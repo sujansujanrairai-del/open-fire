@@ -55,7 +55,7 @@ object MissileRules {
     const val MISSILE_POWER_PRICE = 1000
 
     /** Shop price of one anti-missile defence system. */
-    const val ANTI_MISSILE_PRICE = 1_500
+    const val ANTI_MISSILE_PRICE = 1_000
 
     /**
      * Length of `missile.ogg` (about 14 seconds). A direct hit lands
@@ -185,6 +185,7 @@ object MissileRules {
         when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
             4 -> 2
             5 -> 1
+            6 -> 2
             else -> 0
         }
 
@@ -192,6 +193,7 @@ object MissileRules {
     fun enemyMissilePowersForRound(round: Int, level: Int = 1): Int =
         when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
             4 -> 1
+            6 -> 8
             5 -> when (level.coerceIn(1, Progression.LEVELS_PER_ROUND)) {
                 1 -> 1
                 2 -> 2

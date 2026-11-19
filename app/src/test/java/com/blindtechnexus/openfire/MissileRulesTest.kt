@@ -20,7 +20,7 @@ class MissileRulesTest {
         // Prices respect the new cap.
         assertEquals(2200, MissileRules.MISSILE_PRICE)
         assertEquals(1000, MissileRules.MISSILE_POWER_PRICE)
-        assertEquals(1500, MissileRules.ANTI_MISSILE_PRICE)
+        assertEquals(1000, MissileRules.ANTI_MISSILE_PRICE)
         assertEquals(2, Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS)
         assertEquals(2200, Weapon.MISSILE.price)
         // The flight sound is about fourteen seconds long.

@@ -22,7 +22,10 @@ package com.blindtechnexus.openfire.model
  */
 object ElectricShockRules {
     /** Longest continuous use, measured on the pausable battle clock. */
-    const val MAX_USE_MS = 10_000L
+    const val MAX_USE_MS = 11_000L
+
+    /** Continuous use needed to push a missile or moving car. */
+    const val PUSH_DELAY_MS = 5_000L
 
     /** The robot answers after five seconds when a shock is detected. */
     const val COUNTER_DELAY_MS = 5_000L
@@ -187,6 +190,15 @@ object ElectricShockRules {
             if (x < middle) Arena.MAX else Arena.MIN,
             if (y < middle) Arena.MAX else Arena.MIN
         )
+    }
+
+    /** A countershock halves the displacement, without changing the release sound. */
+    fun pushLanding(playerX: Float, playerY: Float, targetX: Float, targetY: Float, countered: Boolean): Pair<Float, Float> {
+        val (farX, farY) = farthestLanding(playerX, playerY)
+        val fraction = if (countered) 0.5f else 1f
+        val x = Arena.clampX(targetX)
+        val y = Arena.clampY(targetY)
+        return Pair(x + (farX - x) * fraction, y + (farY - y) * fraction)
     }
 
     /**

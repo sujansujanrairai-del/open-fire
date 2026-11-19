@@ -478,7 +478,9 @@ object RobertRules {
                 }
             }
             // From round two on he always carries two gloo walls per game.
-            2 -> RobertProfile(2, maxHp, 3, ENEMY_GLUE_WALLS_FROM_ROUND_TWO, 2, weapons, true, fleeAfterHits(2))
+            2 -> RobertProfile(2, maxHp, 3, ENEMY_GLUE_WALLS_FROM_ROUND_TWO, 2, weapons, true, fleeAfterHits(2),
+                bombs = BombRules.enemyBombsForRound(2),
+                grenades = BombRules.enemyBombUsesForRound(2, BombKind.GRENADE))
             3 -> RobertProfile(
                 3, maxHp, 3, 2, 4, weapons, false, fleeAfterHits(3),
                 bombs = BombRules.enemyBombsForRound(3),
@@ -497,7 +499,7 @@ object RobertRules {
                 atomBombs = BombRules.enemyBombUsesForRound(4, BombKind.ATOM),
                 timerBombs = BombRules.enemyBombUsesForRound(4, BombKind.TIMER)
             )
-            else -> RobertProfile(
+            5 -> RobertProfile(
                 5, maxHp, 5, 4, 7, weapons, false, fleeAfterHits(5),
                 missilePowers = MissileRules.enemyMissilePowersForRound(5, safeLevel),
                 antiMissiles = MissileRules.antiMissilesForRound(5, safeLevel),
@@ -506,6 +508,16 @@ object RobertRules {
                 grenades = BombRules.enemyBombUsesForRound(5, BombKind.GRENADE, safeLevel),
                 atomBombs = BombRules.enemyBombUsesForRound(5, BombKind.ATOM, safeLevel),
                 timerBombs = BombRules.enemyBombUsesForRound(5, BombKind.TIMER, safeLevel)
+            )
+            else -> RobertProfile(
+                6, maxHp, 6, 5, 8, weapons, false, fleeAfterHits(6),
+                missilePowers = MissileRules.enemyMissilePowersForRound(6, safeLevel),
+                antiMissiles = MissileRules.antiMissilesForRound(6, safeLevel),
+                bombs = BombRules.enemyBombsForRound(6, safeLevel),
+                antiBombs = BombRules.antiBombsForRound(6, safeLevel),
+                grenades = BombRules.enemyBombUsesForRound(6, BombKind.GRENADE, safeLevel),
+                atomBombs = BombRules.enemyBombUsesForRound(6, BombKind.ATOM, safeLevel),
+                timerBombs = BombRules.enemyBombUsesForRound(6, BombKind.TIMER, safeLevel)
             )
         }
     }
@@ -1251,7 +1263,7 @@ object RobertRules {
     }
 
     /** The robot uses the electric shock from round three onwards. */
-    fun robotShockUnlocked(round: Int): Boolean = round >= 3
+    fun robotShockUnlocked(round: Int): Boolean = round >= 2
 
     /**
      * The enemy counters only an active player shock, immediately, and only

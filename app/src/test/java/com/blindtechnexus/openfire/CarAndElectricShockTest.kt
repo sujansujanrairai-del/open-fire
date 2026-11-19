@@ -25,8 +25,8 @@ class CarAndElectricShockTest {
 
     @Test
     fun theCarCostsFifteenHundredAndRefuelsForFiveHundred() {
-        assertEquals(1500, CarRules.PRICE)
-        assertEquals(1500, DefenceItem.CAR.price)
+        assertEquals(2200, CarRules.PRICE)
+        assertEquals(2200, DefenceItem.CAR.price)
         assertEquals(500, CarRules.REFUEL_PRICE)
         assertEquals(5, CarRules.GAMES_PER_FUEL)
         assertEquals(1, DefenceItem.CAR.requiredCompletedRounds)
@@ -104,7 +104,7 @@ class CarAndElectricShockTest {
 
     @Test
     fun buyingTheCarGivesOneCarWithFiveGames() {
-        val bought = Shop.buyDefence(Inventory(), 1500, DefenceItem.CAR, completedRounds = 1)
+        val bought = Shop.buyDefence(Inventory(), 2200, DefenceItem.CAR, completedRounds = 1)
         assertTrue(bought.success)
         assertEquals(0, bought.coins)
         assertEquals(1, bought.inventory.cars)
@@ -152,7 +152,7 @@ class CarAndElectricShockTest {
 
     @Test
     fun aCarIsUsableInFiveGamesThenNeedsFuel() {
-        var inventory = Shop.buyDefence(Inventory(), 1500, DefenceItem.CAR, completedRounds = 1).inventory
+        var inventory = Shop.buyDefence(Inventory(), 2200, DefenceItem.CAR, completedRounds = 1).inventory
         repeat(5) {
             inventory = Shop.useCarGame(inventory)
         }
@@ -184,12 +184,15 @@ class CarAndElectricShockTest {
 
     @Test
     fun enemyReceivesCarStartingInRoundFive() {
-        assertFalse(RobertRules.robotCarGranted(3))
-        assertFalse(RobertRules.robotCarGranted(4))
+        assertFalse(RobertRules.robotCarGranted(1))
+        assertTrue(RobertRules.robotCarGranted(2))
+        assertTrue(RobertRules.robotCarGranted(3))
+        assertTrue(RobertRules.robotCarGranted(4))
         assertTrue(RobertRules.robotCarGranted(5))
         assertTrue(RobertRules.shouldEnterCar(5, 399, false))
-        assertFalse(RobertRules.shouldEnterCar(3, 399, false))
-        assertFalse(RobertRules.shouldEnterCar(4, 399, false))
+        assertTrue(RobertRules.shouldEnterCar(3, 399, false))
+        assertFalse(RobertRules.shouldEnterCar(1, 399, false))
+        assertTrue(RobertRules.shouldEnterCar(4, 399, false))
     }
 
     // ------------------------------------------------------------------
@@ -210,7 +213,7 @@ class CarAndElectricShockTest {
     @Test
     fun theElectricShockIsNeverAGunOrAutonomous() {
         assertEquals(1500, Weapon.ELECTRIC_SHOCK.price)
-        assertEquals(3, Weapon.ELECTRIC_SHOCK.unlockRound)
+        assertEquals(2, Weapon.ELECTRIC_SHOCK.unlockRound)
         assertTrue(Weapon.ELECTRIC_SHOCK.electricShock)
         assertFalse(Weapon.ELECTRIC_SHOCK.isFirearm)
         assertFalse(Weapon.ELECTRIC_SHOCK.needsReload)
@@ -220,7 +223,8 @@ class CarAndElectricShockTest {
             assertFalse(RobertRules.isEnemyAllowed(Weapon.ELECTRIC_SHOCK, round))
         }
         assertFalse(RobertRules.ENEMY_WEAPONS.contains(Weapon.ELECTRIC_SHOCK))
-        assertFalse(RobertRules.robotShockUnlocked(2))
+        assertFalse(RobertRules.robotShockUnlocked(1))
+        assertTrue(RobertRules.robotShockUnlocked(2))
         assertTrue(RobertRules.robotShockUnlocked(3))
         assertFalse(RobertRules.shouldStartShock(3, 40f, robertShocking = false))
         assertFalse(RobertRules.shouldStartShock(3, 39f, robertShocking = false))
@@ -229,7 +233,7 @@ class CarAndElectricShockTest {
 
     @Test
     fun theElectricShockIsOnlyUnlockedAfterRoundTwo() {
-        assertEquals(2, Weapon.ELECTRIC_SHOCK.requiredCompletedRounds)
+        assertEquals(1, Weapon.ELECTRIC_SHOCK.requiredCompletedRounds)
         assertTrue(Weapon.forSale().contains(Weapon.ELECTRIC_SHOCK))
     }
 
@@ -306,7 +310,7 @@ class CarAndElectricShockTest {
         repeat(50) {
             assertEquals(
                 RobertRules.ShockAnswer.FLEE,
-                RobertRules.chooseShockAnswer(2, 400, 400, kotlin.random.Random(it))
+                RobertRules.chooseShockAnswer(1, 400, 400, kotlin.random.Random(it))
             )
         }
         // Fleeing only happens while the shock really is in range.
@@ -326,9 +330,9 @@ class CarAndElectricShockTest {
 
     @Test
     fun aUseEndsAtTenSeconds() {
-        assertFalse(ElectricShockRules.timeUp(9_999))
-        assertTrue(ElectricShockRules.timeUp(10_000))
-        assertEquals(10_000L, ElectricShockRules.MAX_USE_MS)
+        assertFalse(ElectricShockRules.timeUp(10_999))
+        assertTrue(ElectricShockRules.timeUp(11_000))
+        assertEquals(11_000L, ElectricShockRules.MAX_USE_MS)
         assertTrue(ElectricShockRules.GLUE_WALL_BREAK_MS < ElectricShockRules.MAX_USE_MS)
     }
 

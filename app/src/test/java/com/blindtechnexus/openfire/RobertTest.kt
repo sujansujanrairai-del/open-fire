@@ -93,7 +93,8 @@ class RobertTest {
         assertTrue(roundTwo.sniperLocked)
         assertEquals(0, roundTwo.missilePowers)
         assertEquals(0, roundTwo.antiMissiles)
-        assertEquals(0, roundTwo.bombs)
+        assertEquals(2, roundTwo.bombs)
+        assertEquals(2, roundTwo.grenades)
         assertEquals(0, roundTwo.antiBombs)
         // The loadout is the same throughout the round.
         assertEquals(roundTwo.weapons, RobertRules.profile(2, 5).weapons)
@@ -126,14 +127,14 @@ class RobertTest {
         assertEquals(0, roundThree.antiMissiles)
         assertEquals(0, MissileRules.antiMissilesForRound(3))
         // Two grenades and two anti-bomb explosives per game from round three.
-        assertEquals(2, roundThree.bombs)
+        assertEquals(3, roundThree.bombs)
         assertEquals(2, roundThree.antiBombs)
-        assertEquals(2, roundThree.grenades)
+        assertEquals(3, roundThree.grenades)
         assertEquals(0, roundThree.atomBombs)
         assertEquals(0, roundThree.timerBombs)
-        assertEquals(2, BombRules.enemyBombsForRound(3))
+        assertEquals(3, BombRules.enemyBombsForRound(3))
         assertEquals(2, BombRules.antiBombsForRound(3))
-        assertEquals(2, BombRules.enemyBombUsesForRound(3, BombKind.GRENADE))
+        assertEquals(3, BombRules.enemyBombUsesForRound(3, BombKind.GRENADE))
         assertEquals(0, BombRules.enemyBombUsesForRound(3, BombKind.ATOM))
         assertEquals(4, RobertRules.profile(3, 5).covers)
     }
@@ -709,7 +710,7 @@ class RobertTest {
         assertTrue(throws())
         assertTrue(throws(round = 4, bombs = 2, robertHp = 200, playerHp = 500))
         // Never before round three, never without a bomb left.
-        assertFalse(throws(round = 2))
+        assertTrue(throws(round = 2))
         assertFalse(throws(round = 1))
         assertFalse(throws(bombs = 0))
         // A healthy or winning Robert keeps his bombs.

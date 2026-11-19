@@ -2459,7 +2459,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             hasSniper = false
         )
         // Round 5 strategic logic: equal power — prioritize positioning over brute force
-        val isStrategyRound = state.round == 5
+        val isStrategyRound = state.round >= 5
         val chosen = when {
             smartChoice != null && (Random.nextFloat() < 0.75f || isStrategyRound) -> smartChoice
             else -> pool[Random.nextInt(pool.size)]
@@ -3112,8 +3112,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             missileLaunchDistanceM = _gameState.value.distance
             missileFlightDurationMs = delayMs.coerceAtLeast(1L)
             missileDeflectionUsed = false
-        } else {
-            missileFlightDurationMs += MissileRules.SHOCK_DEFLECTION_DELAY_MS
         }
         missileJob?.cancel()
         missileApproachJob?.cancel()
@@ -3141,10 +3139,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val remaining = (missileImpactAtMs - now).coerceAtLeast(0L)
         if (!MissileRules.canShockDeflect(remaining, missileFlightDurationMs)) return
         missileDeflectionUsed = true
-        scheduleMissileImpact(
-            delayMs = remaining + MissileRules.SHOCK_DEFLECTION_DELAY_MS,
-            preserveFlight = true
-        )
+        // The tracked missile is represented by its remaining distance along
+        // the approach. Rebase that approach on the farthest arena corner,
+        // preserving the current distance before applying counter resistance.
+        val (farX, farY) = ElectricShockRules.farthestLanding(state.playerX, state.playerY)
+        val farDistance = kotlin.math.hypot(farX - state.playerX, farY - state.playerY)
+        val currentDistance = missileLaunchDistanceM *
+            (1f - MissileRules.flightProgress(remaining, missileFlightDurationMs))
+        val targetDistance = if (state.robertShocking) {
+            (currentDistance + farDistance) / 2f
+        } else farDistance
+        missileLaunchDistanceM = farDistance.coerceAtLeast(0.001f)
+        missileFlightDurationMs = MissileRules.flightMs(missileLaunchDistanceM)
+        val newRemaining = (missileFlightDurationMs *
+            (targetDistance / missileLaunchDistanceM).coerceIn(0f, 1f)).toLong().coerceAtLeast(1L)
+        scheduleMissileImpact(delayMs = newRemaining, preserveFlight = true)
+        // Do not let the stale-projectile watchdog clear a legitimate extended flight.
+        skyHeldSinceMs = now + (newRemaining - SkyLock.MAX_HOLD_MS).coerceAtLeast(0L)
+        audioManager.playMixed(SoundLibrary.SHOCK_RELEASE_KEYS)
         msg(t("missileShockPushed"))
     }
 
@@ -5638,6 +5650,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var shockLastTickMs = 0L
     private var shockResponseChosen = false
     private var shockMadeContact = false
+    private var shockCarPushed = false
+    private var shockPushHeldMs = 0L
     private var playerShockDamageMs = 0L
     private var duelShockDamageMs = 0L
 
@@ -5671,7 +5685,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * only works - and only produces its hum - between 40% and 100% distance.
      */
     private fun shockInRange(state: GameState = _gameState.value): Boolean =
-        !state.robertInCar && ElectricShockRules.inCloseBand(Combat.proximityOf(state.distance))
+        ElectricShockRules.inCloseBand(Combat.proximityOf(state.distance))
 
     /** True once an incoming missile has crossed the shock's 97% cutoff. */
     private fun incomingMissileTooClose(state: GameState = _gameState.value): Boolean {
@@ -5773,11 +5787,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             msg("${t("lockOpponentActive")} ${t("lockOffenceBlocked")}")
             return
         }
-        if (state.robertInCar) {
-            playSound("click")
-            msg(t("enemyProtectedByCar"))
-            return
-        }
         if (!shockInRange(state)) {
             refuseShock("shockOutOfRange")
             return
@@ -5794,6 +5803,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         shockLastTickMs = now
         shockResponseChosen = false
         shockMadeContact = true
+        shockCarPushed = false
+        shockPushHeldMs = 0L
         playerShockBreakMs = 0L
         playerShockDamageMs = 0L
         duelShockDamageMs = 0L
@@ -5808,9 +5819,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Decode both release clips while the hum is running so even a first
         // use can play them together without waiting for two separate decodes.
         audioManager.prepareSounds(SoundLibrary.SHOCK_RELEASE_KEYS)
-        // The shock delays, but does not destroy or de-target, one incoming
-        // missile. The same missile resumes its guided approach after the pause.
-        deflectIncomingMissileWithShock()
         audioManager.startWeaponLoop(
             "magicalSound",
             volume = SHOCK_HUM_VOLUME,
@@ -5877,12 +5885,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Land at the arena corner farthest from the player, then walk back. */
-    private fun throwRobertFromShock() {
+    private fun throwRobertFromShock(countered: Boolean = false) {
         val before = _gameState.value
         if (_currentScreen.value != Screen.BATTLE || before.robertHp <= 0 || before.playerHp <= 0) return
         stopEnemyFireSound()
         audioManager.stopSound("enemyWalk")
-        val (x, y) = ElectricShockRules.farthestLanding(before.playerX, before.playerY)
+        val (x, y) = ElectricShockRules.pushLanding(
+            before.playerX, before.playerY, before.robertX, before.robertY, countered
+        )
         val fleeing = (before.robertState == "missileFlee" && before.missileInFlight) ||
             (before.robertState == "bombFlee" && before.bombInFlight)
         _gameState.update {
@@ -5987,6 +5997,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val proximity = Combat.proximityOf(state.distance)
         val inBand = ElectricShockRules.inCloseBand(proximity)
         if (!inBand) {
+            shockPushHeldMs = 0L
             if (state.robertShocking) stopRobertShock()
             if (state.shockHolding) {
                 audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
@@ -6002,12 +6013,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // An incoming missile in its final three percent is too close to
         // deflect. Bombs, earlier missiles, and outgoing missiles do not
         // disable the shock against Robert.
-        if (state.shockHolding && state.robertInCar) {
-            stopElectricShock(playRelease = false)
-            msg(t("enemyProtectedByCar"))
-            return state.robertShocking
-        }
         if (state.shockHolding && incomingMissileTooClose(state)) {
+            shockPushHeldMs = 0L
             audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
             if (state.robertShocking) stopRobertShock()
             if (!shockOutOfRangeAnnounced) {
@@ -6021,6 +6028,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return true
         }
         if (state.shockHolding && !burning) {
+            shockPushHeldMs = 0L
             // Timer selection, a lock or a changed weapon also disarm the
             // shock. Never keep dealing damage just because it is in range.
             audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
@@ -6057,6 +6065,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         var playerLoss = (10L * (duelShockDamageMs / ElectricShockRules.DUEL_WINDOW_MS)).toInt()
         duelShockDamageMs %= ElectricShockRules.DUEL_WINDOW_MS
         if (!duel && live.shockHolding && robertLoss < live.robertHp) respondToPlayerShock()
+        if (live.shockHolding && burning) shockPushHeldMs += dtMs
+        if (live.shockHolding && shockPushHeldMs >= ElectricShockRules.PUSH_DELAY_MS) {
+            deflectIncomingMissileWithShock()
+            val current = _gameState.value
+            if (!shockCarPushed && current.robertInCar && robertCarStarted) {
+                shockCarPushed = true
+                val (x, y) = ElectricShockRules.pushLanding(
+                    current.playerX, current.playerY, current.robertX, current.robertY, current.robertShocking
+                )
+                _gameState.update { it.withPositions(robertX = x, robertY = y) }
+                audioManager.playMixed(SoundLibrary.SHOCK_RELEASE_KEYS)
+            }
+        }
         // Electric shock cannot damage a fighter protected by a bulletproof car.
         if (live.robertInCar) robertLoss = 0
         if (CarRules.shieldsUser(live.carStage)) playerLoss = 0
@@ -6176,12 +6197,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             audioManager.stopWeaponLoop("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
             _gameState.update { it.copy(shockHolding = false, electricShockInPlay = false) }
         }
+        val countered = state.robertShocking
         if (robertShockIsCounter) stopRobertShock()
-        if (canThrow) {
+        if (canThrow && !state.robertInCar) {
             // Both clips start as one non-positional effect, at the moment the
             // hum ends. Do not separately play a distant, attenuated throw cue.
             audioManager.playMixed(SoundLibrary.SHOCK_RELEASE_KEYS)
-            throwRobertFromShock()
+            throwRobertFromShock(countered)
         }
         if (timedOut && wasHolding && state.playerHp > 0 && state.robertHp > 0) msg(t("electricLimit"))
         shockMadeContact = false

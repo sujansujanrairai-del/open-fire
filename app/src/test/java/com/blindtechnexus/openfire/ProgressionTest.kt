@@ -46,15 +46,26 @@ class ProgressionTest {
     }
 
     @Test
-    fun fifthRoundCompletionWinsMatchWithoutResettingLifetimeUnlocks() {
-        val stats = GameStats(level = 5, round = 5, levelWins = 4, completedRounds = 4)
+    fun fifthRoundAdvancesToSixthInsteadOfWinning() {
+        val result = Progression.applyWin(GameStats(level = 5, round = 5, levelWins = 4, completedRounds = 4))
+        assertTrue(result.roundCompleted)
+        assertFalse(result.matchWon)
+        assertEquals(6, result.stats.round)
+        assertEquals(5, result.stats.completedRounds)
+        assertEquals(2700, Progression.hpFor(6, 1))
+        assertEquals(3100, Progression.hpFor(6, 5))
+    }
+
+    @Test
+    fun sixthRoundCompletionWinsMatchWithoutResettingLifetimeUnlocks() {
+        val stats = GameStats(level = 5, round = 6, levelWins = 4, completedRounds = 5)
         val result = Progression.applyWin(stats)
         assertTrue(result.leveledUp)
         assertTrue(result.roundCompleted)
         assertTrue(result.matchWon)
         assertEquals(1, result.stats.round)
         assertEquals(1, result.stats.level)
-        assertEquals(5, result.stats.completedRounds)
+        assertEquals(6, result.stats.completedRounds)
         assertTrue(Progression.missileUnlocked(result.stats))
     }
 
@@ -108,13 +119,14 @@ class ProgressionTest {
         assertEquals(2600, Progression.hpFor(5, 5))
 
         var expected = 200
-        for (round in 1..5) {
+        for (round in 1..6) {
             for (level in 1..5) {
                 assertEquals("Round $round level $level", expected, Progression.hpFor(round, level))
                 expected += 100
             }
         }
-        assertTrue(Progression.isFinalRound(5))
+        assertTrue(Progression.isFinalRound(6))
+        assertFalse(Progression.isFinalRound(5))
         assertFalse(Progression.isFinalRound(4))
     }
 
