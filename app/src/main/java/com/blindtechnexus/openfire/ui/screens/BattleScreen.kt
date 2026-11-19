@@ -26,6 +26,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blindtechnexus.openfire.model.BattleMenuItem
+import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.Weapon
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.Extension
@@ -82,6 +83,8 @@ fun BattleScreen(viewModel: GameViewModel) {
         BattleMenuItem.GLUE_WALL -> inventory.glueWalls
         BattleMenuItem.ANTI_MISSILE -> inventory.antiMissiles
         BattleMenuItem.CAR -> inventory.cars
+        // A charged anti-bomb is one item with its own stops left, so the menu
+        // shows the weapon count and the status line reads the stops.
         BattleMenuItem.ANTI_BOMB -> inventory.antiBombs
         BattleMenuItem.LOCK -> inventory.lockCharges
         else -> 0
@@ -97,9 +100,24 @@ fun BattleScreen(viewModel: GameViewModel) {
         BattleMenuItem.EXIT -> viewModel.t("exitGame")
         BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
     }
+    // The anti-bomb read-out: a player who carries an explosive (or plays a
+    // round where it is free) also hears how many bomb stops it still has; a
+    // player who carries none gets the plain count and nothing to decode.
+    val antiBombLine = when {
+        inventory.antiBombs <= 0 && !gameState.playerAntiBombFree ->
+            "${viewModel.t("antiBomb")}: ${inventory.antiBombs}"
+        else ->
+            "${viewModel.t("antiBomb")}: ${inventory.antiBombs} " +
+                "(${viewModel.t("antiBombStopsLeft")} " +
+                "${gameState.playerAntiBombCapacity})"
+    }
     val ammoStatus = when {
         weapon.missileLauncher ->
             "${viewModel.t("extMissilePowers")}: ${inventory.missilePowers}"
+        // The gift grenade carries its own two charges in round two: the
+        // countdown of that stock is announced instead of a silent magazine.
+        weapon.bomb && BombRules.grenadeGiftForRound(gameState.round) ->
+            "${viewModel.t("grenadeChargesLeft")}: ${viewModel.grenadeChargesLeft()}"
         weapon.bomb -> "${viewModel.t("bombCharges")}: ${gameState.activeAmmo}"
         weapon.needsReload -> "${viewModel.t("ammo")}: ${gameState.activeAmmo}"
         else -> "${viewModel.t("ammo")}: ${viewModel.t("noAmmoNeeded")}"
@@ -364,7 +382,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                         "${viewModel.t("glooWall")}: ${inventory.glueWalls} | " +
                         "${viewModel.t("cover")}: ${inventory.covers} | " +
                         "${viewModel.t("antiMissile")}: ${inventory.antiMissiles} | " +
-                        "${viewModel.t("antiBomb")}: ${inventory.antiBombs} | " +
+                        antiBombLine +
                         "${viewModel.t("extMissilePowers")}: ${inventory.missilePowers}",
                     fontSize = 14.sp,
                     color = TextAccent,

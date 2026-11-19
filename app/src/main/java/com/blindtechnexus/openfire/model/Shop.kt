@@ -357,7 +357,11 @@ enum class Weapon(
         missSoundKey = "ammo",
         bomb = true,
         unlockRound = 3,
-        issuedFreeFromRound = 3
+        // The free grenade starts with round two and is a two-bomb gift for
+        // that round only: once both are thrown the weapon is spent and it
+        // leaves the battle rotation for the rest of that game
+        // ([BombRules.grenadeGiftForRound]).
+        issuedFreeFromRound = 2
     ),
     ATOM_BOMB(
         id = "atomBomb",
@@ -607,6 +611,22 @@ data class Inventory(
     val antiMissiles: Int = 0,
     /** Anti-bomb explosive defences, bought and stacked like every defence. */
     val antiBombs: Int = 0,
+    /**
+     * Capacity left in the anti-bomb explosive the player is carrying.
+     *
+     * One bought explosive stops [BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE]
+     * bombs, so a partly used one really survives a battle: an explosive that
+     * stopped one bomb is carried with two stops left, it keeps blocking the
+     * shop from selling a second one, and the next battle deploys the
+     * remainder instead of a fresh magazine.
+     *
+     * The default -1 means "never recorded" (a profile from before the
+     * magazine existed) and reads as a fresh, full explosive; 0 means the
+     * explosive is really spent and must be bought again. The two cases must
+     * never collapse into one, or an exhausted explosive would silently
+     * refill itself after a restart.
+     */
+    val antiBombRemaining: Int = -1,
     val extensions: Map<String, ExtensionState> = emptyMap(),
     val lastWeaponId: String = Weapon.SHORT_GUN.id,
     /** Last selected running-speed level, restored at the next battle. */
@@ -652,9 +672,17 @@ data class Inventory(
     /** Owned weapons that are also enabled: the real battle rotation. */
     fun battleWeapons(): List<Weapon> = ownedWeapons().filter { weaponEnabled(it) }
 
-    /** Owned and enabled weapons available in the given round. */
-    fun battleWeapons(round: Int): List<Weapon> =
-        battleWeapons().filter { it.unlockRound <= round }
+    /**
+     * Owned and enabled weapons available in the given round.
+     *
+     * A weapon is available from its shop unlock round OR from the round it is
+     * granted free in, whichever comes first - the round-two grenade gift is
+     * issued a whole round before the grenade can be bought, and the gift must
+     * really be throwable in the round it belongs to.
+     */
+    fun battleWeapons(round: Int): List<Weapon> = battleWeapons().filter {
+        it.unlockRound <= round || it.issuedFreeFromRound in 1..round
+    }
 
     val hasMissilePower: Boolean
         get() = missilePowers > 0
@@ -685,6 +713,50 @@ data class Inventory(
         DefenceItem.LOCK -> lockCharges
     }
 
+    /**
+     * The capacity left in the anti-bomb explosive the player carries.
+     *
+     * An owned explosive whose capacity was never recorded (a legacy profile,
+     * or one just bought) starts full. No explosive at all means no capacity.
+     */
+    val antiBombCapacityLeft: Int
+        get() = BombRules.deployedCapacity(antiBombRemaining, antiBombs)
+
+    /**
+     * True when another anti-bomb explosive may NOT be bought: the one being
+     * carried still has stops left in it. Only an exhausted explosive (or a
+     * destroyed/wrecked one, capacity 0) frees the shop row for a purchase.
+     */
+    val holdsUsedAntiBomb: Boolean
+        get() = BombRules.blocksNewAntiBomb(antiBombs, antiBombCapacityLeft)
+
+    /**
+     * Records that [spent] more bombs were stopped by the carried explosive.
+     *
+     * A free anti-bomb (round three and later) re-arms itself and always ends
+     * full; a bought one keeps what it has left, and an exhausted one is
+     * carried as spent (capacity 0, no explosive) so the shop can sell the
+     * next one.
+     */
+    fun withAntiBombSpent(spent: Int = 1, freeForRound: Boolean): Inventory {
+        if (freeForRound) {
+            return copy(
+                antiBombRemaining = BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE
+            )
+        }
+        val left = BombRules.capacityAfter(antiBombCapacityLeft, spent, freeForRound = false)
+        return copy(
+            antiBombs = if (left > 0) 1 else 0,
+            antiBombRemaining = left
+        )
+    }
+
+    /** A freshly bought explosive: one explosive, a full magazine. */
+    fun withFreshAntiBomb(): Inventory = copy(
+        antiBombs = 1,
+        antiBombRemaining = BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE
+    )
+
     fun withCount(item: DefenceItem, value: Int): Inventory {
         val safe = value.coerceAtLeast(0)
         return when (item) {
@@ -697,7 +769,19 @@ data class Inventory(
                 cars = safe.coerceAtMost(1),
                 carGamesLeft = if (safe > 0) carGamesLeft else 0
             )
-            DefenceItem.ANTI_BOMB -> copy(antiBombs = safe)
+            // An anti-bomb explosive carries its own capacity: dropping the
+            // last one also drops the capacity it still had.
+            DefenceItem.ANTI_BOMB -> copy(
+                antiBombs = safe,
+                antiBombRemaining = when {
+                    safe <= 0 -> 0
+                    // An inventory that already records a capacity keeps it,
+                    // even when it is a spent 0: the explosive is carried
+                    // spent, never silently refilled.
+                    antiBombRemaining >= 0 -> antiBombRemaining
+                    else -> BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE
+                }
+            )
             DefenceItem.LOCK -> copy(lockCharges = safe)
         }
     }
@@ -943,11 +1027,19 @@ object Shop {
         if (item == DefenceItem.CAR && inventory.cars > 0) {
             return ShopResult(false, coins, inventory, "alreadyOwned")
         }
+        // A partly used anti-bomb explosive is still a working explosive: it
+        // must be exhausted (all of its stops used) before another one can be
+        // bought, so no purchase silently throws away the remaining capacity.
+        if (item == DefenceItem.ANTI_BOMB && inventory.holdsUsedAntiBomb) {
+            return ShopResult(false, coins, inventory, "antiBombStillCharged")
+        }
         if (coins < item.price) {
             return ShopResult(false, coins, inventory, "notEnoughCoins")
         }
         val bought = if (item == DefenceItem.CAR) {
             inventory.copy(cars = 1, carGamesLeft = CarRules.GAMES_PER_FUEL)
+        } else if (item == DefenceItem.ANTI_BOMB) {
+            inventory.withFreshAntiBomb()
         } else {
             inventory.withCount(item, inventory.count(item) + 1)
         }

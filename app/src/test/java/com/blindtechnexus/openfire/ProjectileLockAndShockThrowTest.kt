@@ -102,4 +102,36 @@ class ProjectileLockAndShockThrowTest {
         assertEquals(0, ElectricShockRules.returnTicks(Float.NaN))
         assertEquals(1f to 1f, ElectricShockRules.returnPosition(1f, 1f, 1f, 1f))
     }
+
+    @Test
+    fun aThrowSilencesTheEnemyForTheWholeWalkPlusTheRecovery() {
+        // The promise of a throw is breathing room: the enemy keeps his gun
+        // lowered for every tick of the walk back AND for a further recovery
+        // silence, so a throw can never be answered one tick after it lands.
+        val diagonal = hypot(Arena.SIZE, Arena.SIZE)
+        assertEquals(
+            ElectricShockRules.returnTimeMs(diagonal) + ElectricShockRules.RECOVERY_SILENCE_MS,
+            ElectricShockRules.throwSilenceMs(diagonal)
+        )
+        // A point-blank throw still buys the whole recovery silence.
+        assertEquals(
+            ElectricShockRules.RECOVERY_SILENCE_MS,
+            ElectricShockRules.throwSilenceMs(0f)
+        )
+        assertEquals(1_500L, ElectricShockRules.RECOVERY_SILENCE_MS)
+        // The shortest real throw already buys more than six seconds: far
+        // more than a gun cooldown, which is what the silence is for.
+        assertTrue(ElectricShockRules.throwSilenceMs(Arena.SIZE) >= 6_000L)
+        // Silence only grows with the distance, never shrinks.
+        var previous = ElectricShockRules.throwSilenceMs(0f)
+        for (metres in 1..25) {
+            val current = ElectricShockRules.throwSilenceMs(metres.toFloat())
+            assertTrue(current >= previous)
+            previous = current
+        }
+        // The farthest corner stays a long walk: six seconds of movement plus
+        // the recovery, never a one-second round trip.
+        assertEquals(6_900L, ElectricShockRules.returnTimeMs(diagonal))
+        assertEquals(8_400L, ElectricShockRules.throwSilenceMs(diagonal))
+    }
 }

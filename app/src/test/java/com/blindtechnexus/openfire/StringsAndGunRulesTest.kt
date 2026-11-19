@@ -146,9 +146,9 @@ class StringsAndGunRulesTest {
             "missile 2200", "anti-missile 1000", "interceptor", "timer bomb",
             "lock the opponent", "2500 coins", "1000", "700 to 1000",
             "gloo wall", "second chance", "quick menu", "Settings",
-            "level-specific", "L1 has 1 missile power", "L2 has 1 missile power, no interceptor",
-            "L3 has 2 missile powers", "L4 has 2 missile powers", "L5 has 2 missile powers",
-            "5 anti-bombs"
+            "L1 has 1 missile power", "L2 has 2 missile powers", "L3 has 4 missile powers",
+            "L4 has 6 missile powers", "L5 has 7 missile powers", "7 anti-bombs",
+            "grows with the level",
         )) assertTrue("Missing guide rule: $required", en.contains(required, ignoreCase = true))
         assertFalse(en.contains("exclusive channel", ignoreCase = true))
         assertFalse(en.contains("guarantee a kill", ignoreCase = false) && !en.contains("no longer guarantee a kill"))

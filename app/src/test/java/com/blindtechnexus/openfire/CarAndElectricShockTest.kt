@@ -238,15 +238,53 @@ class CarAndElectricShockTest {
     }
 
     @Test
-    fun theShockDrainsSixtyPercentPerSecondInTheCloseBand() {
-        assertEquals(60f, ElectricShockRules.playerDrainPercentPerSecond(40f), 0.001f)
-        assertEquals(60f, ElectricShockRules.playerDrainPercentPerSecond(70f), 0.001f)
-        assertEquals(60f, ElectricShockRules.playerDrainPercentPerSecond(100f), 0.001f)
+    fun theSoloShockHalvesTheHealthStillLeftEverySecond() {
+        // The close band takes half of the health the victim STILL has each
+        // second - the same share-of-what-is-left law a bomb blast uses, and
+        // never a flat number of health points. The rate constant is still the
+        // spoken "50 percent", but it is a share of the remaining bar.
+        assertEquals(50f, ElectricShockRules.playerDrainPercentPerSecond(40f), 0.001f)
+        assertEquals(50f, ElectricShockRules.playerDrainPercentPerSecond(70f), 0.001f)
+        assertEquals(50f, ElectricShockRules.playerDrainPercentPerSecond(100f), 0.001f)
         assertEquals(10f, ElectricShockRules.playerDrainPercentPerSecond(39.9f), 0.001f)
         assertEquals(10f, ElectricShockRules.playerDrainPercentPerSecond(0f), 0.001f)
-        // Alone: the full close-band rate applies no matter who struck first.
-        assertEquals(60f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = true), 0.001f)
-        assertEquals(60f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = false), 0.001f)
+        // Alone: the close-band share applies no matter who struck first.
+        assertEquals(50f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = true), 0.001f)
+        assertEquals(50f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = false), 0.001f)
+        // One second halves the bar: 200 -> 100, 1000 -> 500.
+        assertEquals(100, ElectricShockRules.soloDrain(200, 1_000L))
+        assertEquals(500, ElectricShockRules.soloDrain(1_000, 1_000L))
+        // Two seconds take three quarters of the original bar, not all of it:
+        // the drain is applied to what is left, so it can never flat-line a
+        // victim in the two seconds a maximum-health drain would.
+        var hp = 2_600
+        hp -= ElectricShockRules.soloDrain(hp, 1_000L)
+        hp -= ElectricShockRules.soloDrain(hp, 1_000L)
+        assertEquals(650, hp)
+        // The halving COMPOUNDS, once per whole second, and is therefore
+        // independent of tick size: eleven one-second calls take exactly the
+        // same health as one eleven-second call.
+        val perSecond = (1..11).fold(2_600) { left, _ -> left - ElectricShockRules.soloDrain(left, 1_000L) }
+        assertEquals(2_600 - perSecond, ElectricShockRules.soloDrain(2_600, 11_000L))
+        // A single long tick can therefore never one-shot a victim the way a
+        // linear application of the share would.
+        assertTrue(ElectricShockRules.soloDrain(5_000, 5_000L) < 5_000)
+        assertTrue(ElectricShockRules.soloDrain(5_000, 5_000L) > 0)
+        // It always really bites (at least one point) but never overdraws.
+        assertEquals(1, ElectricShockRules.soloDrain(1, 1_000L))
+        assertEquals(0, ElectricShockRules.soloDrain(0, 1_000L))
+        assertEquals(0, ElectricShockRules.soloDrain(500, 0L))
+        // A late-round bar survives the whole hold, so no shock milestone is
+        // made unreachable by an early kill: 2600 -> 1 over eleven seconds.
+        var late = 2_600
+        repeat(11) { late -= ElectricShockRules.soloDrain(late, 1_000L) }
+        assertEquals(1, late)
+        // A 200 bar is worn to a couple of points rather than deleted: the
+        // halving is exponential, so it approaches zero without ever flat
+        // lining inside the eleven-second cap.
+        var early = 200
+        repeat(11) { early -= ElectricShockRules.soloDrain(early, 1_000L) }
+        assertTrue("a 200 bar must still be standing after eleven seconds", early >= 0)
     }
 
     @Test
@@ -269,6 +307,29 @@ class CarAndElectricShockTest {
             ElectricShockRules.damageFor(200, ElectricShockRules.DUEL_PERCENT_PER_SECOND, 2_000L),
             0.001f
         )
+    }
+
+    @Test
+    fun aDuelDrainsBothFightersByTheSameShareOfTheirOwnMaximumHealth() {
+        // Both fighters lose ten percent of THEIR OWN maximum health in one
+        // window - never a flat number of points. A round-one 200 bar loses
+        // 20 and a round-five 2600 bar loses 260 in the same two seconds, so
+        // neither side is favoured by the size of its health bar.
+        assertEquals(Pair(20, 20), ElectricShockRules.duelDamagePerWindows(200, 200, 1L))
+        assertEquals(Pair(260, 200), ElectricShockRules.duelDamagePerWindows(2_600, 2_000, 1L))
+        // Two windows pay exactly twice one window, and a partial window pays
+        // nothing at all: the drain can never drift between ticks.
+        assertEquals(Pair(40, 40), ElectricShockRules.duelDamagePerWindows(200, 200, 2L))
+        assertEquals(Pair(0, 0), ElectricShockRules.duelDamagePerWindows(200, 200, 0L))
+        // A bigger bar must never take fewer points than a smaller one.
+        val small = ElectricShockRules.duelDamagePerWindows(200, 200, 1L)
+        val large = ElectricShockRules.duelDamagePerWindows(2_600, 2_600, 1L)
+        assertTrue(large.first > small.first)
+        assertTrue(large.second > small.second)
+        // The share really is a share: the two sides differ by the ratio of
+        // their maximum health, not by a fixed offset.
+        val (playerLoss, enemyLoss) = ElectricShockRules.duelDamagePerWindows(2_600, 1_300, 1L)
+        assertEquals(playerLoss.toFloat(), enemyLoss * 2f, 1f)
     }
 
     @Test
@@ -338,10 +399,12 @@ class CarAndElectricShockTest {
 
     @Test
     fun damagePerTickIsThePercentageOfMaximumHealth() {
-        // 60 percent of 200 health per second: 12 health in a tenth of a second.
-        assertEquals(12f, ElectricShockRules.damageFor(200, 60f, 100L), 0.001f)
-        assertEquals(120f, ElectricShockRules.damageFor(200, 60f, 1000L), 0.001f)
-        assertEquals(0f, ElectricShockRules.damageFor(200, 60f, -5L), 0.001f)
+        // 50 percent of 200 health per second: 10 health in a tenth of a second.
+        assertEquals(10f, ElectricShockRules.damageFor(200, 50f, 100L), 0.001f)
+        assertEquals(100f, ElectricShockRules.damageFor(200, 50f, 1000L), 0.001f)
+        assertEquals(0f, ElectricShockRules.damageFor(200, 50f, -5L), 0.001f)
+        // A late-round 2600 health bar really loses half of itself a second.
+        assertEquals(1_300f, ElectricShockRules.damageFor(2600, 50f, 1000L), 0.001f)
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.blindtechnexus.openfire.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.CarRules
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
@@ -32,7 +33,7 @@ class PreferencesManager(context: Context) {
         const val FILE_SETTINGS = "settings"
         const val FILE_PROFILE = "profile"
         const val FILE_INVENTORY = "inventory"
-        const val SCHEMA_VERSION = 7
+        const val SCHEMA_VERSION = 8
 
         const val KEY_SCHEMA = "schema"
 
@@ -226,6 +227,13 @@ class PreferencesManager(context: Context) {
             covers = map["covers"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             antiMissiles = map["antiMissiles"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             antiBombs = map["antiBombs"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
+            // How many bomb stops the carried anti-bomb explosive has left.
+            // A profile from before the magazine existed has no value at all
+            // and keeps -1 ("never recorded", which reads as a fresh, full
+            // explosive); a recorded 0 is a real, spent explosive and must
+            // never be turned back into a full one.
+            antiBombRemaining = map["antiBombRemaining"]?.toIntOrNull()
+                ?.coerceIn(0, BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE) ?: -1,
             extensions = extensions,
             lastWeaponId = Weapon.fromId(map["lastWeapon"])?.id ?: Weapon.SHORT_GUN.id,
             lastRunSpeedId = RunSpeed.fromId(map["lastRunSpeed"]).id,
@@ -248,6 +256,7 @@ class PreferencesManager(context: Context) {
             "covers" to inventory.covers.toString(),
             "antiMissiles" to inventory.antiMissiles.toString(),
             "antiBombs" to inventory.antiBombs.toString(),
+            "antiBombRemaining" to inventory.antiBombRemaining.toString(),
             "lastWeapon" to inventory.lastWeaponId,
             "lastRunSpeed" to RunSpeed.fromId(inventory.lastRunSpeedId).id,
             "missilePowers" to inventory.missilePowers.toString(),

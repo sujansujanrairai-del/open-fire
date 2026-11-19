@@ -95,6 +95,43 @@ object VolumeMixer {
     /** Impact trim: hits play at the full SFX level the player selected. */
     const val HIT_BUS_GAIN = 1.00f
 
+    /**
+     * Per-asset loudness compensation, measured on the shipped recordings.
+     *
+     * The car recordings were mastered much quieter than the guns: the moving
+     * loop sits at 0.119 RMS, the idle engine at 0.093 and the door-open at
+     * 0.012, against 0.205 for the pistol. With every key played at the same
+     * nominal level that made the car almost inaudible - the player heard a
+     * faint hum where a car should be. Each entry is the measured RMS of the
+     * recording relative to the 0.15 reference, turned into the gain that
+     * brings that recording up to the reference; the values are capped so no
+     * recording is ever lifted more than about four times (+12 dB) and a loud
+     * one is never cut.
+     */
+    val ASSET_GAIN_KEYS: Map<String, Float> = mapOf(
+        // Moving loop: 0.119 RMS -> about +1.9 dB.
+        "carMoving" to 1.26f,
+        "enemyCarMoving" to 1.26f,
+        // Idle engine: 0.093 RMS -> about +4.2 dB.
+        "carEngine" to 1.62f,
+        "enemyCarEngine" to 1.62f,
+        // Ignition take: 0.027 RMS -> about +12 dB, the cap.
+        "carStart" to 4.0f,
+        // Tyres: 0.080 RMS -> about +5.5 dB.
+        "carBrake" to 1.88f,
+        // Doors: the opening take is almost silent (0.012 RMS), the closing
+        // one is healthy (0.048 RMS).
+        "carDoorOpen" to 4.0f,
+        "carDoorClose" to 2.0f
+    )
+
+    /**
+     * The mix gain of one recording's own loudness. Keys without a measured
+     * entry play exactly as recorded.
+     */
+    fun assetGainFor(key: String): Float =
+        (ASSET_GAIN_KEYS[key] ?: 1f).coerceIn(0.5f, 4f)
+
     /** Pans smaller than this are centred: straight motion never wobbles. */
     const val PAN_DEAD_ZONE = 0.12f
 
@@ -213,7 +250,12 @@ object VolumeMixer {
      * One slider position means one level for every bus.
      */
     fun mix(key: String, setting: Float, base: Float, distanceGain: Float): Float =
-        clamp(sfx(setting, base, distanceGain) * busGainFor(key))
+        // The one clamp sits at the very end: the asset lift of a quiet
+        // recording has to happen BEFORE it, or a full-scale setting would
+        // swallow the lift and the car would stay as quiet as its master.
+        // The returned value still never leaves 0..1, so the engine is safe.
+        (sfx(setting, base, distanceGain) * busGainFor(key) * assetGainFor(key))
+            .let { if (it.isNaN()) 0f else it.coerceIn(0f, 1f) }
 
     /**
      * Stereo pan (-1 full left, 0 centre, +1 full right) for a sound that
@@ -333,6 +375,40 @@ object VolumeMixer {
         val safeSpeed = if (speedMps.isNaN()) 0f else speedMps.coerceAtLeast(0f)
         return (0.90f + safeSpeed * 0.010f).coerceIn(MIN_RATE, MAX_RATE)
     }
+
+    /**
+     * Footstep rate of a walker whose real pace is [speedMps].
+     *
+     * [walkRate] alone tops out at [MAX_RATE] (1.60) and only reaches about
+     * 1.5 for an enemy sprint, so a running enemy used to sound almost the
+     * same as a strolling one and the speed difference was carried by the
+     * distance only. This curve follows the real speed over the whole
+     * running ladder - a stroll under [STROLL_SPEED_MPS] drags, a normal run
+     * sits at the natural rate and a sprint over [SPRINT_SPEED_MPS] is paced
+     * clearly quicker - and is then clamped to the same window, so it can
+     * never turn into the chipped pitch the game must not produce. The
+     * difference between a slow and a fast enemy is therefore audible in the
+     * step cadence as well as in the distance.
+     */
+    fun walkRateForSpeed(speedMps: Float): Float {
+        val safeSpeed = if (speedMps.isNaN()) 0f else speedMps.coerceAtLeast(0f)
+        return when {
+            safeSpeed <= STROLL_SPEED_MPS -> SLOW_FOOTSTEP_RATE
+            safeSpeed >= SPRINT_SPEED_MPS -> MAX_RATE
+            // A straight line from a dragging stroll to a sprinting pace: one
+            // rate for one speed, strictly rising, never outside the window.
+            else -> SLOW_FOOTSTEP_RATE +
+                (safeSpeed - STROLL_SPEED_MPS) /
+                (SPRINT_SPEED_MPS - STROLL_SPEED_MPS) *
+                (MAX_RATE - SLOW_FOOTSTEP_RATE)
+        }.coerceIn(MIN_RATE, MAX_RATE)
+    }
+
+    /** Speeds at or below this are a stroll: the slowest footstep rate. */
+    const val STROLL_SPEED_MPS = 2f
+
+    /** Speeds at or above this are a sprint: the quickest footstep rate. */
+    const val SPRINT_SPEED_MPS = 9f
 
     /**
      * The engine's SFX bus gain for a stored 0..1 effects setting. The native
