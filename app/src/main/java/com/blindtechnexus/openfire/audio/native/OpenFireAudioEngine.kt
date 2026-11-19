@@ -164,9 +164,21 @@ class OpenFireAudioEngine(context: Context) {
     /** A decode that is already running, so the same file is decoded once. */
     private val decodesInFlight = ConcurrentHashMap<String, CompletableFuture<Int>>()
 
-    /** The output rate the uploaded clips were resampled to, or 0. */
+    /** The output rate the stream reported, or 0 before it opens. */
     @Volatile
     private var loadedSampleRate: Int = 0
+
+    /**
+     * The rate the uploaded clips are actually resampled for.
+     *
+     * The native loader resamples a clip once, at upload, for the rate of the
+     * stream that is running - or, before the first stream opens, for the rate
+     * the engine prefers (48 kHz). If the device later opens a stream at
+     * another rate, those clips are reloaded instead of being played at the
+     * wrong pitch.
+     */
+    @Volatile
+    private var clipRate: Int = 0
 
     /**
      * Background lane for the catalogue warm-up. Below the normal priority:
@@ -216,19 +228,21 @@ class OpenFireAudioEngine(context: Context) {
             unavailableReason = "the native audio library could not be loaded"
         }
 
+        // An `init` block cannot `return`, so the two outcomes are branches.
         if (handle == 0L) {
             available = false
             unavailableReason = unavailableReason ?: "the native engine is unavailable"
-            return
-        }
-        available = true
-        // Opening the stream takes milliseconds to hundreds of milliseconds on
-        // a cold device. It must never happen on the thread that created the
-        // engine (the UI thread), so it is the first job of the stream lane.
-        val priority = Thread.NORM_PRIORITY + 2
-        submitStream {
-            Thread.currentThread().priority = priority
-            openStreamNow()
+        } else {
+            available = true
+            // Opening the stream takes milliseconds to hundreds of
+            // milliseconds on a cold device. It must never happen on the
+            // thread that created the engine (the UI thread), so it is the
+            // first job of the stream lane.
+            val priority = Thread.NORM_PRIORITY + 2
+            submitStream {
+                Thread.currentThread().priority = priority
+                openStreamNow()
+            }
         }
     }
 

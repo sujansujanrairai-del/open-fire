@@ -169,24 +169,32 @@ class NativeMixer(context: Context) {
         // codecs during start-up competes with the UI for the same cores. A
         // sound the game asks for in the meantime takes the priority lane
         // above, so nothing is ever late because of this delay.
-        val thread = Thread({
-            try {
-                Thread.sleep(WARMUP_DELAY_MS)
-            } catch (_: InterruptedException) {
-                return@Thread
-            }
-            // The sounds of the first second of play first, so a click or a
-            // shot is warm before the menus are even interactive.
-            val ordered = SoundLibrary.ESSENTIAL_FILES + SoundLibrary.files()
-                .filter { it !in SoundLibrary.ESSENTIAL_FILES }
-            for (file in ordered) {
-                if (Thread.currentThread().isInterrupted || !available) break
-                engine.warmUp(file)
-            }
-        }, "OpenFireWarmUp")
+        val thread = Thread({ decodeCatalogue() }, "OpenFireWarmUp")
         thread.isDaemon = true
         thread.priority = Thread.NORM_PRIORITY - 1
         thread.start()
+    }
+
+    /**
+     * Hands the whole catalogue to the engine's decode lane, most used first.
+     *
+     * Runs on the warm-up thread only. The sleep is the quiet period after the
+     * first frame; a sound the game asks for during it is decoded on the
+     * priority lane instead, so this delay never delays an interaction.
+     */
+    private fun decodeCatalogue() {
+        try {
+            Thread.sleep(WARMUP_DELAY_MS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return
+        }
+        val ordered = SoundLibrary.ESSENTIAL_FILES + SoundLibrary.files()
+            .filter { it !in SoundLibrary.ESSENTIAL_FILES }
+        for (file in ordered) {
+            if (Thread.currentThread().isInterrupted || !available) break
+            engine.warmUp(file)
+        }
     }
 
     /** Decodes [file] at most once, on a background thread only. */
