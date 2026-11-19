@@ -145,13 +145,19 @@ object SwipeClassifier {
     /**
      * How far a three-finger swipe must travel before it is dispatched at all.
      *
-     * The three-finger threshold alone ([THREE_FINGER_THRESHOLD], 28 px) is so
-     * close to the tap slop that a firm three-finger tap could drift into a
-     * shortcut the user never meant - and the shortcuts of this game are exit
-     * and pause, so an accidental one is expensive. The activation distance is
-     * raised a little: still cheap to perform, unmistakably deliberate.
+     * The value used to sit within a pixel of the tap slop and of a firm
+     * thumb tap of a blind player. Because the dispatch happens exactly once
+     * per touch, that made a pause (swipe down) or an exit (swipe up) fire
+     * during the settling wobble of a three-finger tap - and, worse, it made
+     * a real vertical swipe of a hand resting on the glass look like a
+     * sideways one whenever the average displacement was short and diagonal.
+     * The activation distance is lifted clearly above the tap slop
+     * ([TAP_SLOP], 24 px) so a genuine three-finger swipe never nears it
+     * accidentally, while still staying far below the one-finger threshold:
+     * still cheap to perform, unmistakably deliberate, and reachable on every
+     * screen density because it is measured in pixels of travel.
      */
-    const val THREE_FINGER_ACTIVATION = 30f
+    const val THREE_FINGER_ACTIVATION = 48f
 
     /**
      * How much the leading axis must beat the other one before a three-finger
@@ -172,6 +178,22 @@ object SwipeClassifier {
     fun reached(dx: Float, dy: Float): Boolean =
         distance(dx, dy) >= maxOf(THREE_FINGER_ACTIVATION, threshold(3)) &&
             dominant(dx, dy, THREE_FINGER_DOMINANCE)
+
+    /**
+     * The relaxed gate used when the fingers have already lifted.
+     *
+     * A hand performing a three-finger swipe is never perfectly parallel: the
+     * average displacement of three fingers of a vertical swipe is often a
+     * little diagonal, and the strict [reached] ratchet can then be crossed by
+     * no single sample even though the hand clearly swiped. Because a
+     * three-finger gesture is dispatched exactly once per touch, the gesture
+     * may still be committed at its end as long as it travelled at least the
+     * three-finger threshold ([threshold] of 3) and has any clear direction at
+     * all. Direction itself still prefers the vertical axis on a tie, so a
+     * downward pause never becomes a sideways speed change.
+     */
+    fun reachedAtEnd(dx: Float, dy: Float): Boolean =
+        distance(dx, dy) >= threshold(3) && dominant(dx, dy, 1.0f)
 
     /**
      * True when one axis carries [ratio] times the movement of the other, so

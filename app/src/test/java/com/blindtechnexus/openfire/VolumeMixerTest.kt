@@ -188,4 +188,51 @@ class VolumeMixerTest {
         assertTrue(left > 0f)
         assertTrue(VolumeMixer.panFor(-60f, 65f) < 0f)
     }
+
+    @Test
+    fun quietCarRecordingsAreLiftedAndGunsAreNot() {
+        // The car assets were mastered far quieter than the guns; each one has
+        // a measured gain that brings it up to the reference, while every
+        // recording without an entry plays exactly as recorded.
+        assertEquals(1f, VolumeMixer.assetGainFor("pistol"), 0.0001f)
+        assertTrue(VolumeMixer.assetGainFor("carEngine") > 1.4f)
+        assertTrue(VolumeMixer.assetGainFor("carMoving") > 1.1f)
+        assertTrue(VolumeMixer.assetGainFor("carDoorOpen") > 3.5f)
+        // No recording is ever lifted beyond +12 dB, and none is cut below
+        // half scale, so the fix can never clip the engine into distortion.
+        for (key in VolumeMixer.ASSET_GAIN_KEYS.keys) {
+            val gain = VolumeMixer.assetGainFor(key)
+            assertTrue("$key gain $gain out of window", gain in 0.5f..4f)
+        }
+        // The asset gain really reaches the mixed level of a quiet key. At a
+        // full slider both saturate at full scale, so the lift is measured at
+        // half volume, where the ratio is untouched.
+        val moved = VolumeMixer.mix("carMoving", 0.5f, 1f, 1f)
+        val gun = VolumeMixer.mix("pistol", 0.5f, 1f, 1f)
+        assertTrue("car $moved gun $gun", moved > gun)
+        assertEquals(1f, VolumeMixer.mix("carEngine", 1f, 1f, 1f), 0.0001f)
+    }
+
+    @Test
+    fun aRunningEnemySoundsClearlyQuickerThanAStrollingOne() {
+        // The footstep rate follows the real pace over the whole ladder, so
+        // the speed difference is heard in the cadence, not only in the
+        // distance: a stroll drags, a sprint is quicker, and the order is
+        // strict and inside the natural window.
+        assertTrue(VolumeMixer.walkRateForSpeed(1f) < VolumeMixer.walkRateForSpeed(5f))
+        assertTrue(VolumeMixer.walkRateForSpeed(5f) < VolumeMixer.walkRateForSpeed(9f))
+        assertEquals(VolumeMixer.SLOW_FOOTSTEP_RATE, VolumeMixer.walkRateForSpeed(0f), 0.0001f)
+        assertEquals(VolumeMixer.SLOW_FOOTSTEP_RATE, VolumeMixer.walkRateForSpeed(2f), 0.0001f)
+        assertEquals(VolumeMixer.MAX_RATE, VolumeMixer.walkRateForSpeed(9f), 0.0001f)
+        assertEquals(VolumeMixer.MAX_RATE, VolumeMixer.walkRateForSpeed(20f), 0.0001f)
+        // A sprint is clearly faster than a stroll, not a hair apart.
+        assertTrue(
+            VolumeMixer.walkRateForSpeed(12f) - VolumeMixer.walkRateForSpeed(1f) > 0.5f
+        )
+        for (speed in listOf(0f, 1f, 3f, 6f, 9f, 30f)) {
+            val rate = VolumeMixer.walkRateForSpeed(speed)
+            assertTrue("rate $rate out of window at $speed", rate in VolumeMixer.MIN_RATE..VolumeMixer.MAX_RATE)
+        }
+        assertEquals(VolumeMixer.SLOW_FOOTSTEP_RATE, VolumeMixer.walkRateForSpeed(Float.NaN), 0.0001f)
+    }
 }

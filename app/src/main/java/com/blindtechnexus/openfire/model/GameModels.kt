@@ -337,6 +337,26 @@ data class GameState(
      * the next bomb of the enemy by itself.
      */
     val antiBombDeployed: Boolean = false,
+    /**
+     * Bombs the player's carried anti-bomb explosive may still stop this
+     * battle. It is seeded from the profile's own capacity
+     * ([Inventory.antiBombCapacityLeft]) at the start of the battle - a partly
+     * used explosive deploys with only its remaining stops - and the profile
+     * is written back with whatever is left when the battle ends.
+     */
+    val playerAntiBombCapacity: Int = 0,
+    /**
+     * Bombs Robert's current anti-bomb explosive may still stop. The enemy's
+     * explosive stops [BombRules.ENEMY_INTERCEPTS_PER_EXPLOSIVE] bombs, so his
+     * batteries are deliberately shorter than the player's.
+     */
+    val robertAntiBombCapacity: Int = 0,
+    /**
+     * True when the last anti-bomb interception spent the last stop of the
+     * player's explosive: the guard stands down (no stale second bomb is
+     * covered for free) and the shop row is the only way back in.
+     */
+    val antiBombSpent: Boolean = false,
     /** Health the electric shock really took from the opponent this battle. */
     val shockDamageDealt: Int = 0,
     /**
@@ -490,6 +510,15 @@ data class GameState(
     val playerAntiBombFree: Boolean
         get() = BombRules.playerAntiBombsFree(round)
 
+    /**
+     * True while the carried anti-bomb explosive still has stops left, whether
+     * or not it is currently deployed. A free (round-three) explosive is
+     * always charged; a bought one is charged for as many stops as the profile
+     * carried into this battle.
+     */
+    val antiBombCharged: Boolean
+        get() = playerAntiBombFree || playerAntiBombCapacity > 0
+
     /** Distance of the player from the bomb destination, in metres. */
     val playerDistanceFromBomb: Float
         get() = Arena.distanceTo(bombX, bombY, playerX, playerY)
@@ -507,6 +536,32 @@ data class GameState(
      * engine passes the live battle-clock time so a paused battle freezes the
      * lock exactly like every other timer ([LockRules.isLocked]).
      */
+    /**
+     * The battle state with one weapon slot withdrawn from the rotation.
+     *
+     * Every parallel list (weapons, ammo, damaged) loses the same index, and
+     * the held slot follows the shift so the player keeps holding the same
+     * weapon. A player holding the withdrawn weapon itself rolls over to the
+     * slot it occupied (or the new last slot). Withdrawing a weapon that is
+     * not in the rotation, or the only remaining weapon, changes nothing.
+     */
+    fun withoutWeaponAt(index: Int): GameState {
+        if (index !in weapons.indices) return this
+        val remaining = weapons.filterIndexed { i, _ -> i != index }
+        if (remaining.isEmpty()) return this
+        val newIndex = when {
+            index == weaponIndex -> index.coerceIn(0, remaining.lastIndex)
+            index < weaponIndex -> (weaponIndex - 1).coerceAtLeast(0)
+            else -> weaponIndex.coerceIn(0, remaining.lastIndex)
+        }
+        return copy(
+            weapons = remaining,
+            ammo = ammo.filterIndexed { i, _ -> i != index },
+            damaged = damaged.filterIndexed { i, _ -> i != index },
+            weaponIndex = newIndex
+        )
+    }
+
     fun opponentLocked(nowMs: Long): Boolean = LockRules.isLocked(opponentLockedUntilMs, nowMs)
 
     /** Milliseconds the opponent lock has left (0 when not locked). */

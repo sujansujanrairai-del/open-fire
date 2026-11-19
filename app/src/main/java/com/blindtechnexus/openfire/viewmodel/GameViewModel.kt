@@ -226,6 +226,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      */
     private var lastExplicitActionAt = 0L
 
+    /** When the battle screen received its last tap, for the loan double tap. */
+    private var lastCenterTapAt = 0L
+
+    /** True once the player's tap asked for the loan prompt: the next tap takes it. */
+    private var loanPromptOpen = false
+
+    /**
+     * Grenades left in the round-two gift of this game. Two at the start of
+     * every game of that round; once both are gone the grenade is not part of
+     * the weapon rotation any more.
+     */
+    private var _grenadeChargesLeft = 0
+
+    /** True once the round-two grenade gift has been announced this battle. */
+    private var grenadeGiftAnnounced = false
+
     private val robertProfile: RobertProfile
         get() = RobertRules.profile(
             round = _stats.value.round,
@@ -296,6 +312,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         /** Pause before a finished sprint turns into the flanking re-approach. */
         const val FLANK_DELAY_MS = 600L
 
+        /** One flanking step: metres per step are covered over this tick. */
+        const val FLANK_TICK_MS = 300L
+
+        /** One turn-back step after a wall: metres per step over this tick. */
+        const val TURN_BACK_TICK_MS = 300L
+
         /** Result screen lock-out before another game may start. */
         const val RESULT_LOCK_MS = 4000L
 
@@ -305,6 +327,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
          * (or recover a weapon) and activate the quick menu.
          */
         const val TAP_ACTION_DEBOUNCE_MS = 350L
+
+        /**
+         * Two taps in the middle of the battle screen closer together than
+         * this are one double tap: the loan prompt is answered and a loan is
+         * taken. The value lives in [Loans] beside the rule that reads it, so
+         * the window, the prompt and the eligibility test can never drift
+         * apart.
+         */
+        const val LOAN_DOUBLE_TAP_WINDOW_MS = Loans.BATTLE_DOUBLE_TAP_WINDOW_MS
 
         /**
          * While the timer bomb picker is open the enemy holds his fire and
@@ -488,11 +519,67 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * The answer every refused purchase gives.
+     *
+     * In battle an empty wallet is not a dead end any more: the player is told
+     * how to take a loan with a double tap, and the very next tap in the centre
+     * of the battle screen issues it ([handleCenterTap]). The shop keeps its
+     * spoken refusal, because loans are taken with the shop's own buttons
+     * there.
+     */
     private fun notEnoughCoins() {
         playSound("ammo")
+        if (_currentScreen.value == Screen.BATTLE && canTakeBattleLoan()) {
+            loanPromptOpen = true
+            val text = "${t("notEnoughCoins")} ${t("doubleTapForLoan")}"
+            toast(text)
+            msg(text)
+            return
+        }
         val text = t("notEnoughCoins")
         toast(text)
         msg(text)
+    }
+
+    /** True when the battle loan (the fixed 1500 coin principal) is allowed. */
+    private fun canTakeBattleLoan(): Boolean {
+        val stats = _stats.value
+        return stats.loanBalance <= 0 && stats.coins < Loans.ELIGIBILITY_LIMIT
+    }
+
+    /**
+     * Takes the in-battle loan of [Loans.BATTLE_LOAN_AMOUNT] coins: the
+     * principal and the coins are written back as one profile transaction,
+     * exactly like the shop's loan buttons, so a failed save can never hand
+     * out coins that were not recorded as owed.
+     *
+     * The loan is persisted in the encrypted profile and repaid from the next
+     * win ([Loans.repay]); the battle itself never touches the balance again.
+     */
+    fun takeBattleLoan() {
+        val result = Loans.issue(_stats.value, Loans.BATTLE_LOAN_AMOUNT)
+        if (!result.success) {
+            loanPromptOpen = false
+            playSound("ammo")
+            msg(t(result.reasonKey ?: "loanNotEligible"))
+            return
+        }
+        // A refused save must not leave coins the profile never recorded as
+        // owed, so the balance is written before it is shown.
+        if (!prefs.saveStats(result.stats)) {
+            loanPromptOpen = false
+            playSound("ammo")
+            msg(t("profileSaveFailed"))
+            return
+        }
+        _stats.value = result.stats
+        loanPromptOpen = false
+        playSound("spend")
+        msg(
+            "${t("battleLoanTaken")} ${t("loanRemaining")} " +
+                "${result.stats.loanBalance}. ${t("loanRules")}"
+        )
     }
 
     fun submitName(inputName: String) {
@@ -1147,6 +1234,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         audioManager.stopScreenAudio()
         movePressure = 0f
         moveDirection = null
+        lastCenterTapAt = 0L
+        loanPromptOpen = false
         missileImpactAtMs = 0L
         bombBlastAtMs = 0L
         matchDeadlineMs = 0L
@@ -1183,14 +1272,35 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         )
         val hp = Progression.hpFor(round, level)
         // Weapons handed out for free in this round are issued before the
-        // battle rotation is built (the AWM from round two, the grenade from
-        // round three).
+        // battle rotation is built (the AWM from round two, the grenade gift
+        // from round two).
         val issued = issueRoundWeapons(round)
+        // The two free grenades of round two are a per-game gift: a fresh game
+        // always starts with both of them, whatever the previous game spent.
+        if (BombRules.grenadeGiftForRound(round)) {
+            _grenadeChargesLeft = BombRules.ROUND_GIFT_GRENADES
+            // Once per battle, in the round the gift belongs to: the player is
+            // told where the two free grenades come from and that they need no
+            // Bomb Power. It never repeats inside the same battle.
+            if (!grenadeGiftAnnounced) {
+                grenadeGiftAnnounced = true
+                msg(t("grenadeGiftIssued"))
+            }
+        } else {
+            _grenadeChargesLeft = 0
+        }
+        // A spent grenade of the gift round leaves the rotation; a bomb power
+        // or a shop purchase never revives it inside that same game.
+        val spentGrenade = BombRules.grenadeSpent(round, _grenadeChargesLeft)
         // Disabled weapons are never revealed by a left or right swipe, so the
         // battle rotation only contains owned AND enabled weapons.
-        val owned = _inventory.value.battleWeapons(round).ifEmpty { Weapon.defaults() }
+        val owned = _inventory.value.battleWeapons(round)
+            .filter { !(spentGrenade && it == Weapon.GRENADE) }
+            .ifEmpty { Weapon.defaults() }
         val starting = _inventory.value.startingWeapon()
-        val startIndex = owned.indexOfFirst { it.id == starting.id }.coerceAtLeast(0)
+        val startIndex = owned.indexOfFirst { it.id == starting.id }
+            .coerceAtLeast(0)
+            .coerceAtMost(owned.lastIndex.coerceAtLeast(0))
 
         _gameState.value = GameState(
             playerHp = hp,
@@ -1257,6 +1367,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertGrenades = profile.grenades,
             robertAtomBombs = profile.atomBombs,
             robertTimerBombs = profile.timerBombs,
+            // His anti-bomb stock is a count of explosives; the first one is
+            // carried with the enemy's own, shorter capacity.
             robertAntiBombs = profile.antiBombs,
             robertSuccessiveShots = 0,
             robertBurstLimit = RobertRules.burstLimit(Random),
@@ -1292,9 +1404,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             antiMissileDeployed = false,
             playerInterceptorsLeft = 0,
             antiBombDeployed = false,
+            // The carried anti-bomb explosive keeps its own remaining stops:
+            // a partly used one really deploys with what it has left.
+            playerAntiBombCapacity = _inventory.value.antiBombCapacityLeft,
+            antiBombSpent = false,
+            robertAntiBombCapacity = BombRules.ENEMY_INTERCEPTS_PER_EXPLOSIVE,
             shockDamageDealt = 0,
             weaponDriftM = 0f
         )
+        // A new battle starts with a free trigger for both fighters and no
+        // leftover recovery silence from a previous throw.
+        robertShockSilentUntilMs = 0L
+        grenadeGiftAnnounced = false
         lockJob?.cancel()
         lockJob = null
         // The battle screen itself starts silently: an issued weapon is only
@@ -1775,7 +1896,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      *  - "flank":       re-approach from the side after a finished sprint;
      *  - "avoid":       a glue wall he cannot break: keep away until it drops;
      *  - "missileFlee": sprint from a missile in the air;
-     *  - "bombFlee":    sprint out of the 50 m blast radius of a bomb;
+     *  - "bombFlee":    sprint out of the blast radius of a bomb;
      *  - "turnBack":    a heading change: he walks back into the open zone.
      */
     private fun robertStep() {
@@ -1805,6 +1926,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val range = currentFireRange(after)
             val finished = RobertRules.canLandShotAt(after.distance, after.robertWeapon) &&
                 after.distance <= minOf(range.targetDistance + BAND_TOLERANCE_M, Combat.distanceFor(range.minProximity))
+            if (finished) {
+                // Back inside his firing band, but never back on the trigger
+                // at once: the throw also buys a short, explicit silence
+                // ([ElectricShockRules.RECOVERY_SILENCE_MS]) so a throw can
+                // never be answered less than a second after it lands.
+                robertShockSilentUntilMs =
+                    battleClock.nowMs() + ElectricShockRules.RECOVERY_SILENCE_MS
+            } else {
+                robertShockSilentUntilMs = battleClock.nowMs() +
+                    ElectricShockRules.RETURN_TICK_MS + ElectricShockRules.RECOVERY_SILENCE_MS
+            }
             _gameState.value = after.copy(
                 robertState = if (finished) "advance" else "shockReturn",
                 robertShockRecovering = !finished,
@@ -1846,8 +1978,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 _gameState.update { turnBackStep(it, metres) }
                 val after = _gameState.value
                 if (after.robertState == "turnBack") {
-                    updateRobertWalkAudio(after.distance, fleeing = true, speedMps = metres / 0.3f)
-                    planRobertStep(300L)
+                    // The walk clip follows his REAL pace: one turn-back step
+                    // every 300 ms, so the rate is metres over that tick.
+                    updateRobertWalkAudio(
+                        after.distance,
+                        fleeing = true,
+                        speedMps = metres * 1000f / TURN_BACK_TICK_MS
+                    )
+                    planRobertStep(TURN_BACK_TICK_MS)
                 } else {
                     audioManager.stopSound("enemyWalk")
                     rollRobertFireRange()
@@ -1969,8 +2107,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     audioManager.stopSound("enemyWalk")
                     msg(t("devilFlank"))
                 } else {
-                    updateRobertWalkAudio(after.distance, fleeing = false, speedMps = speed / 0.3f)
-                    planRobertStep(300L)
+                    // He really covers `speed` metres in this 300 ms tick, so
+                    // that is the speed the footstep loop is paced at: a fast
+                    // flank sounds fast, a slow one sounds slow.
+                    updateRobertWalkAudio(
+                        after.distance,
+                        fleeing = false,
+                        speedMps = speed * 1000f / FLANK_TICK_MS
+                    )
+                    planRobertStep(FLANK_TICK_MS)
                 }
             }
             else -> {
@@ -2118,7 +2263,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Sprint out of a bomb's 50 m blast radius, in whichever direction really
+     * Sprint out of a bomb's blast radius ([BombRules.BLAST_RADIUS], the same
+     * 12 m line as [BombRules.SAFE_DISTANCE]), in whichever direction really
      * increases the distance from the destination. If the bomb explodes before
      * he crosses the line, the blast kills him. A wall never stops the run:
      * the heading is corrected before the step, so he keeps looking for open
@@ -2309,6 +2455,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             // actual return walk, even when an AWM can reach across the arena.
             stopEnemyFireSound()
             ensureRobertPositioned(ElectricShockRules.RETURN_TICK_MS)
+            return
+        }
+        if (robertShockSilentUntilMs > battleClock.nowMs()) {
+            // The recovery silence that follows the walk back: the throw has
+            // already landed, so his trigger is lowered until it ends. Damage
+            // he would otherwise take is never involved here - only his gun.
+            stopEnemyFireSound()
+            planRobertStep(
+                (robertShockSilentUntilMs - battleClock.nowMs())
+                    .coerceIn(100L, 1_000L)
+            )
             return
         }
         if (state.robertHp <= 0 || state.playerHp <= 0 || state.timerSelectActive ||
@@ -3342,6 +3499,57 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         msg("${t("missilePowerBought")} ${t("extMissilePowers")} ${result.inventory.missilePowers}.")
     }
 
+    /**
+     * Swiping down with a bomb selected buys one Bomb Power for 850 coins
+     * directly in battle - no shop trip needed -, exactly like the missile's
+     * swipe-down purchase.
+     *
+     * The grenade is free and never spends a power, so its swipe says so
+     * instead of charging the player for something he does not need. A
+     * locked profile (bomb powers not unlocked yet) and an empty wallet are
+     * answered with the same spoken lines the shop uses.
+     */
+    private fun buyBombPowerInBattle(weapon: Weapon) {
+        if (weapon == Weapon.GRENADE) {
+            playSound("click")
+            val free = if (_gameState.value.round >= BombRules.FIRST_BOMB_ROUND) {
+                t("grenadeFreeMsg")
+            } else {
+                "${t("bombPowerNeeded")} ${_inventory.value.bombPowers}."
+            }
+            msg(free)
+            return
+        }
+        val result = Shop.buyBombPower(
+            _inventory.value,
+            _stats.value.coins,
+            _stats.value.completedRounds
+        )
+        if (!result.success) {
+            when (result.reasonKey) {
+                "notEnoughCoins" -> notEnoughCoins()
+                "bombPowerLocked" -> {
+                    playSound("ammo")
+                    val text = t("bombPowerLocked")
+                    toast(text)
+                    msg(text)
+                }
+                null -> {}
+                else -> msg(t(result.reasonKey))
+            }
+            return
+        }
+        _inventory.value = result.inventory
+        prefs.saveInventory(result.inventory)
+        _stats.value = _stats.value.copy(coins = result.coins)
+        prefs.saveStats(_stats.value)
+        playSound("spend")
+        msg(
+            "${t("bombPowerBought")} ${t("extBombPowers")} " +
+                "${result.inventory.bombPowers}."
+        )
+    }
+
     // ---------------------------------------------------------------------
     // Bombs: grenade, atom bomb and timer bomb (round three onwards)
     // ---------------------------------------------------------------------
@@ -3438,9 +3646,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Throws the selected bomb — now tracking the enemy like a missile.
-     * Requires one Bomb Power (850 coins) for an atom or timer throw; grenades are free.
-     * The bomb tracks the enemy, falls onto them, and detonates — a capped hit
-     * like a missile unless intercepted by anti-bomb explosive.
+     *
+     * A bomb is thrown with one swipe up. An atom or timer bomb needs one
+     * Bomb Power (850 coins); the grenade of the round-two gift is free and
+     * spends one of its two charges instead. The bomb tracks the enemy, falls
+     * onto them and detonates — a capped hit like a missile unless Robert's
+     * anti-bomb explosive intercepts it.
      */
     private fun launchPlayerBomb() {
         val state = _gameState.value
@@ -3456,6 +3667,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             msg(t("missileInFlight"))
             return
         }
+        // The round-two gift: both free grenades are a per-game stock, and the
+        // second throw spends the last one.
+        if (kind == BombKind.GRENADE && BombRules.grenadeGiftForRound(state.round) &&
+            _grenadeChargesLeft <= 0
+        ) {
+            playSound("ammo")
+            msg(t("grenadeGiftSpent"))
+            return
+        }
         // Bomb Power check — similar to Missile Power. The grenade is free in
         // round three onwards (Robert receives one too), so only the atom bomb
         // and the timer bomb consume a stacked Bomb Power.
@@ -3469,11 +3689,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // but bomb power is the primary gate.
 
         var spent = false
+        // True when this throw spends one of the two free grenades of the gift.
+        val giftChargeThrow = kind == BombKind.GRENADE &&
+            BombRules.grenadeGiftForRound(state.round) && _grenadeChargesLeft > 0
         _gameState.update { s ->
             // Legacy ammo check retained for weapon magazine, but bomb power is also required
             val idx = s.weaponIndex.coerceIn(0, s.ammo.lastIndex)
-            // Allow throw even if ammo is 0 when bomb power exists (power gives charge)
-            val hasCharge = s.ammo.getOrElse(idx) { 0 } > 0 || (needsPower && _inventory.value.bombPowers > 0)
+            // Allow throw even if ammo is 0 when bomb power exists (power gives charge).
+            // A gift grenade carries one charge per throw from its own stock.
+            val hasCharge = s.ammo.getOrElse(idx) { 0 } > 0 || giftChargeThrow ||
+                (needsPower && _inventory.value.bombPowers > 0)
             if (!hasCharge) return@update s
             spent = true
             val intercept = RobertRules.shouldUseDefence(s.robertHp, true) && BombRules.willIntercept(
@@ -3507,6 +3732,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _inventory.value = updated
             prefs.saveInventory(updated)
         }
+        // A thrown gift grenade spends one of the two charges. The second one
+        // leaves the weapon list at once: a spent grenade is never shown in
+        // the rotation of that game again.
+        if (giftChargeThrow) spendGrenadeCharge()
 
         val after = _gameState.value
         val flightMs = BombRules.flightMs(kind, after.timerSeconds)
@@ -3524,6 +3753,139 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         startBombTracking(fromPlayer = true)
         planRobertStep(120L)
         scheduleBombBlast(flightMs)
+    }
+
+    // ---------------------------------------------------------------------
+    // Anti-bomb capacity
+    //
+    // One explosive is a magazine, never a single shot: the player's stops
+    // three bombs (BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE), the enemy's two
+    // (BombRules.ENEMY_INTERCEPTS_PER_EXPLOSIVE). A bought explosive keeps the
+    // stops it has left in the profile, so a partly used one carries over to
+    // the next battle and the shop refuses a second one until it is really
+    // empty.
+    // ---------------------------------------------------------------------
+
+    /**
+     * Records one bomb stopped by the player's own explosive: the carried
+     * capacity drops by one, the profile is written back immediately (a crash
+     * or a killed app never refunds a used stop), and the guard of a spent
+     * explosive stands down instead of silently covering the next bomb for
+     * free. The free round-three anti-bomb re-arms itself instead.
+     */
+    private fun recordPlayerAntiBombStop() {
+        val free = _gameState.value.playerAntiBombFree
+        if (free) {
+            _gameState.update {
+                it.copy(
+                    playerAntiBombCapacity = BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE,
+                    antiBombSpent = false,
+                    antiBombDeployed = true
+                )
+            }
+            return
+        }
+        // The stops the explosive really carries: the battle state first,
+        // then the profile it was seeded from. It is never assumed to be full,
+        // or a partly used explosive would silently refill after every stop.
+        val left = _gameState.value.playerAntiBombCapacity.takeIf { it > 0 }
+            ?: _inventory.value.antiBombCapacityLeft
+        val next = BombRules.capacityAfter(left, 1, freeForRound = false)
+        _gameState.update {
+            it.copy(
+                playerAntiBombCapacity = next,
+                antiBombSpent = next <= 0,
+                antiBombDeployed = next > 0 && it.antiBombDeployed
+            )
+        }
+        val updated = _inventory.value.withAntiBombSpent(1, freeForRound = false)
+        _inventory.value = updated
+        prefs.saveInventory(updated)
+        if (next <= 0) msg(t("antiBombExhausted"))
+    }
+
+    /** Records one bomb stopped by Robert's explosive: his guard is two stops. */
+    private fun recordEnemyAntiBombStop() {
+        _gameState.update { state ->
+            val left = if (state.robertAntiBombCapacity > 0) {
+                state.robertAntiBombCapacity
+            } else {
+                BombRules.ENEMY_INTERCEPTS_PER_EXPLOSIVE
+            }
+            val next = (left - 1).coerceAtLeast(0)
+            val spentOne = next <= 0
+            state.copy(
+                robertAntiBombs = if (spentOne) {
+                    (state.robertAntiBombs - 1).coerceAtLeast(0)
+                } else {
+                    state.robertAntiBombs
+                },
+                robertAntiBombCapacity = if (spentOne) {
+                    if (state.robertAntiBombs > 1) {
+                        BombRules.ENEMY_INTERCEPTS_PER_EXPLOSIVE
+                    } else {
+                        0
+                    }
+                } else {
+                    next
+                }
+            )
+        }
+    }
+
+    /**
+     * Writes the carried anti-bomb capacity back to the profile when a battle
+     * ends (a win, a loss, or an exit). A free round-three explosive always
+     * ends full; a bought one keeps exactly what it has left, and an empty one
+     * is dropped so the shop row unlocks the next purchase.
+     */
+    private fun persistAntiBombCapacity() {
+        val free = _gameState.value.playerAntiBombFree
+        val current = _inventory.value
+        val updated = if (free) {
+            current.copy(
+                antiBombRemaining = BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE
+            )
+        } else {
+            val left = BombRules.capacityAfter(
+                _gameState.value.playerAntiBombCapacity,
+                0,
+                freeForRound = false
+            )
+            current.copy(
+                antiBombs = if (left > 0) current.antiBombs.coerceAtLeast(1) else 0,
+                antiBombRemaining = left
+            )
+        }
+        if (updated == current) return
+        _inventory.value = updated
+        prefs.saveInventory(updated)
+    }
+
+    /** Grenades left in the round-two gift, as shown by the battle screen. */
+    fun grenadeChargesLeft(): Int = _grenadeChargesLeft
+
+    /**
+     * Spends one charge of the round-two gift.
+     *
+     * The last charge removes the grenade from the weapon list of this game at
+     * once: the selected weapon rolls over to the next owned one, so a spent
+     * grenade can never be "thrown" again with an empty stock and never keeps
+     * a dead slot in the left / right rotation.
+     */
+    private fun spendGrenadeCharge() {
+        if (_grenadeChargesLeft > 0) _grenadeChargesLeft -= 1
+        if (_grenadeChargesLeft > 0) return
+        _gameState.update { s ->
+            // The slot to drop is the grenade's OWN slot, never whatever the
+            // player happens to hold: a grenade thrown and then followed by a
+            // quick weapon switch must still leave the rotation, or a spent
+            // grenade would keep a dead slot for the rest of the game.
+            val grenadeIndex = s.weapons.indexOfFirst { it == Weapon.GRENADE.id }
+            if (grenadeIndex < 0) return@update s
+            s.withoutWeaponAt(grenadeIndex)
+        }
+        msg(t("grenadeGiftSpent"))
     }
 
     /**
@@ -3659,17 +4021,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             if (fromPlayer) state.robertDistanceFromBomb else state.playerDistanceFromBomb
         val throwerDistance =
             if (fromPlayer) state.playerDistanceFromBomb else state.robertDistanceFromBomb
+        // Robert carries an explosive with its own capacity, so his own guard
+        // covers two bombs before it is spent; the player's guard covers three
+        // (one stop of a partly used one is all it may still have left).
+        val robertGuardReady = state.robertAntiBombs > 0 &&
+            state.robertAntiBombCapacity > 0
+        val playerGuardReady = state.playerAntiBombFree || state.playerAntiBombCapacity > 0
         val intercepted = if (fromPlayer) {
-            // Robert spends one of his explosives whenever one is left, and
-            // always answers a planned interception.
+            // Robert spends his explosive whenever the carried one still has a
+            // stop left, and always answers a planned interception.
             state.bombInterceptPlanned ||
-                BombRules.willIntercept(state.round, state.robertAntiBombs, bombInFlight = true)
+                BombRules.willIntercept(state.round, state.robertAntiBombs, bombInFlight = true) &&
+                robertGuardReady
         } else {
             state.bombInterceptedByPlayer ||
                 BombRules.autoInterceptPlanned(
                     activated = state.antiBombDeployed,
                     enemyBombInFlight = state.bombInFlight && !state.bombFromPlayer
-                )
+                ) && playerGuardReady
         }
 
         // An anti-bomb explosive destroys the bomb in the air: the explosion
@@ -3683,19 +4052,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     bombKind = "",
                     bombInterceptPlanned = false,
                     bombInterceptedByPlayer = false,
-                    robertAntiBombs = if (fromPlayer) {
-                        (it.robertAntiBombs - 1).coerceAtLeast(0)
-                    } else {
-                        it.robertAntiBombs
-                    },
-                    // A paid explosive covers exactly one bomb; the free one of
-                    // rounds three to five re-arms itself, because the player
-                    // never has to buy it.
-                    antiBombDeployed = if (!fromPlayer) it.playerAntiBombFree else it.antiBombDeployed,
                     robertState = if (fromPlayer) "advance" else it.robertState,
                     robertTurnBackTicks = 0
                 )
             }
+            if (fromPlayer) recordEnemyAntiBombStop() else recordPlayerAntiBombStop()
             msg(if (fromPlayer) t("antiBombIntercept") else t("antiBombSavedYou"))
             rollRobertFireRange()
             ensureRobertPositioned()
@@ -4293,6 +4654,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             buyMissilePowerInBattle()
             return
         }
+        if (weapon.bomb) {
+            // A bomb has no magazine either: swiping down on any bomb buys one
+            // Bomb Power (850 coins) straight away, exactly like the missile.
+            // The grenade never needs one, so its swipe answers instead.
+            buyBombPowerInBattle(weapon)
+            return
+        }
         if (!weapon.needsReload) {
             // Melee weapons are always ready: they have no magazine at all.
             playSound("click")
@@ -4684,6 +5052,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // usable, so it never needs an inventory count.
         val freeAntiBomb = item == DefenceItem.ANTI_BOMB && state.playerAntiBombFree
         if (!freeAntiBomb && inventory.count(item) <= 0) return null
+        // A carried explosive wears out. Its remaining stops live in the
+        // profile ([GameState.playerAntiBombCapacity] seeded from the
+        // inventory), so an explosive with none left is refused here instead
+        // of being deployed as a dead guard.
+        if (item == DefenceItem.ANTI_BOMB && !freeAntiBomb &&
+            state.playerAntiBombCapacity <= 0 &&
+            inventory.antiBombCapacityLeft <= 0
+        ) {
+            if (automatic) return null
+            playSound("ammo")
+            return t("antiBombExhausted")
+        }
 
         when (item) {
             DefenceItem.MEDKIT -> {
@@ -4762,12 +5142,28 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 // the air by itself; deployed while the bomb already flies it
                 // marks that bomb as destroyed at once, and the explosion
                 // sound still plays when the countdown ends. From round three
-                // the player's one is free, so no inventory is spent.
+                // the player's one is free, so no inventory is spent; a bought
+                // one deploys with the capacity it carried into the battle.
                 if (state.antiBombDeployed && !state.bombInFlight) {
                     playSound("click")
                     return t("antiBombAlreadyDeployed")
                 }
-                _gameState.update { it.copy(antiBombDeployed = true) }
+                // The deployed guard gets the stops it really has: a free
+                // explosive is always full, a carried one keeps what is left
+                // (the profile value is the authority when the battle has not
+                // seeded one yet).
+                val carried = when {
+                    freeAntiBomb -> BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE
+                    state.playerAntiBombCapacity > 0 -> state.playerAntiBombCapacity
+                    else -> inventory.antiBombCapacityLeft
+                }
+                _gameState.update {
+                    it.copy(
+                        antiBombDeployed = true,
+                        antiBombSpent = false,
+                        playerAntiBombCapacity = carried
+                    )
+                }
                 if (!freeAntiBomb && !automatic) consumeDefence(item)
                 if (state.bombInFlight && !state.bombFromPlayer) {
                     _gameState.update { it.copy(bombInterceptedByPlayer = true) }
@@ -4918,6 +5314,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun exitBattle() {
         cancelTimerSelection()
         stopTimers()
+        persistAntiBombCapacity()
         audioManager.stopFootsteps()
         audioManager.stopScreenAudio()
         ttsManager.stop()
@@ -4944,6 +5341,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun endGame(won: Boolean, timeUp: Boolean = false) {
         stopTimers()
         audioManager.stopFootsteps()
+        // The carried anti-bomb explosive keeps its remaining stops across the
+        // end of the battle, before any reward bundle is granted.
+        persistAntiBombCapacity()
 
         val state = _gameState.value
         val oldStats = _stats.value
@@ -5658,6 +6058,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** When Robert's own shock started. */
     private var robertShockStartedAtMs = 0L
 
+    /**
+     * Battle-clock moment from which Robert's gun is live again after a shock
+     * throw. It is zero unless the recovery walk has just finished.
+     */
+    private var robertShockSilentUntilMs = 0L
+
     /** True while Robert's shock is an answer to the player's shock. */
     private var robertShockIsCounter = false
 
@@ -5890,20 +6296,45 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (_currentScreen.value != Screen.BATTLE || before.robertHp <= 0 || before.playerHp <= 0) return
         stopEnemyFireSound()
         audioManager.stopSound("enemyWalk")
+        // A countered throw is halved; a clean one lands the enemy on the
+        // farthest reachable point of the arena, a whole diagonal away from
+        // where the player stands, and he has to walk every metre back.
         val (x, y) = ElectricShockRules.pushLanding(
             before.playerX, before.playerY, before.robertX, before.robertY, countered
         )
         val fleeing = (before.robertState == "missileFlee" && before.missileInFlight) ||
             (before.robertState == "bombFlee" && before.bombInFlight)
+        // A car thrown out of the shock is not "parked" at the corner: the
+        // push wrecks it. He is thrown clear of it and continues on foot, so
+        // no ghost car keeps shielding him after the throw.
+        val wreckedCar = before.robertInCar &&
+            ElectricShockRules.throwWrecksCar(
+                targetInCar = true,
+                pushedToFarthestPoint = !countered
+            )
         _gameState.update {
             it.withPositions(robertX = x, robertY = y).copy(
                 robertState = if (fleeing) it.robertState else "shockReturn",
                 robertShockRecovering = true,
                 robertTurnBackTicks = 0,
                 robertConsecutiveHits = 0,
-                robertExchangeShots = 0
+                robertExchangeShots = 0,
+                robertInCar = if (wreckedCar) false else it.robertInCar,
+                robertCarHp = if (wreckedCar) 0 else it.robertCarHp
             )
         }
+        if (wreckedCar) {
+            stopRobertCarAudio()
+            robertCarStarted = false
+            audioManager.playSequence(listOf("carBrake", "carCrash"))
+            msg(t("enemyCarDestroyed"))
+        }
+        // The walk back itself is the silence of the throw: the engine blocks
+        // his trigger for the whole way ([robertShockSilentUntilMs]).
+        robertShockSilentUntilMs = battleClock.nowMs() +
+            ElectricShockRules.throwSilenceMs(
+                ElectricShockRules.throwDistance(before.playerX, before.playerY, Pair(x, y))
+            )
         stopBurstShotsLeft = 0
         stopBurstFinished = false
         robertSprintTicks = 0
@@ -6056,14 +6487,40 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // particular the fifth solo pulse lands before the shield rises.
         val duel = live.robertShocking
         playerShockDamageMs += dtMs
-        val enemyPulses = playerShockDamageMs / 1_000L
+        // The elapsed time charged to the drain, and the sub-second remainder
+        // kept for the next tick so a whole battle never drifts.
+        val drainMs = playerShockDamageMs
         playerShockDamageMs %= 1_000L
-        var robertLoss = if (duel) {
-            ElectricShockRules.damageFor(live.robertMaxHp, 10f, enemyPulses * 1_000L).roundToInt()
-        } else (60L * enemyPulses).toInt()
+        // The solo drain is a PERCENTAGE of the victim's maximum health - 50%
+        // a second inside the 40%-100% band - never a flat number of health
+        // points: the old "60 health every second" made the shock weaker in
+        // every later round and is gone. The duel keeps its own symmetric
+        // window: 10% of maximum health every two seconds for both fighters.
+        // In a duel BOTH fighters drain by the same law and both are charged
+        // on the same two-second window. The old code drained Robert by a
+        // percentage but the player by a flat 10 health points, so a duel in
+        // round five hurt the 2600-health player ten times less than it hurt
+        // Robert; that is gone.
+        // `var`: the bulletproof-car shield below zeroes the player's share.
         duelShockDamageMs = if (duel) duelShockDamageMs + dtMs else 0L
-        var playerLoss = (10L * (duelShockDamageMs / ElectricShockRules.DUEL_WINDOW_MS)).toInt()
+        val duelWindows = duelShockDamageMs / ElectricShockRules.DUEL_WINDOW_MS
         duelShockDamageMs %= ElectricShockRules.DUEL_WINDOW_MS
+        // `var`: an active car shields its passenger, and the shield zeroes
+        // one of these below before the hit is applied.
+        var (playerLoss, robertLossInDuel) = ElectricShockRules.duelDamagePerWindows(
+            live.playerMaxHp,
+            live.robertMaxHp,
+            if (duel) duelWindows else 0L
+        )
+        var robertLoss = if (duel) {
+            robertLossInDuel
+        } else {
+            ElectricShockRules.damageFor(
+                live.robertMaxHp,
+                ElectricShockRules.PLAYER_CLOSE_PERCENT_PER_SECOND,
+                drainMs
+            ).roundToInt()
+        }
         if (!duel && live.shockHolding && robertLoss < live.robertHp) respondToPlayerShock()
         if (live.shockHolding && burning) shockPushHeldMs += dtMs
         if (live.shockHolding && shockPushHeldMs >= ElectricShockRules.PUSH_DELAY_MS) {
@@ -6071,11 +6528,36 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val current = _gameState.value
             if (!shockCarPushed && current.robertInCar && robertCarStarted) {
                 shockCarPushed = true
-                val (x, y) = ElectricShockRules.pushLanding(
-                    current.playerX, current.playerY, current.robertX, current.robertY, current.robertShocking
+                // Five seconds of shock drive the car to the farthest reachable
+                // point of the arena - the corner a thrown fighter lands on -
+                // and wreck it there: the drive back is a long walk on foot,
+                // not a fresh car ride beside the player.
+                val (x, y) = ElectricShockRules.carLanding(current.playerX, current.playerY)
+                val wrecked = ElectricShockRules.throwWrecksCar(
+                    targetInCar = true,
+                    pushedToFarthestPoint = true
                 )
-                _gameState.update { it.withPositions(robertX = x, robertY = y) }
-                audioManager.playMixed(SoundLibrary.SHOCK_RELEASE_KEYS)
+                _gameState.update {
+                    it.withPositions(robertX = x, robertY = y).copy(
+                        robertInCar = if (wrecked) false else it.robertInCar,
+                        robertCarHp = if (wrecked) 0 else it.robertCarHp,
+                        robertState = "shockReturn",
+                        robertShockRecovering = true,
+                        robertTurnBackTicks = 0
+                    )
+                }
+                if (wrecked) {
+                    stopRobertCarAudio()
+                    robertCarStarted = false
+                }
+                robertShockSilentUntilMs = battleClock.nowMs() +
+                    ElectricShockRules.throwSilenceMs(
+                        ElectricShockRules.throwDistance(
+                            current.playerX, current.playerY, Pair(x, y)
+                        )
+                    )
+                audioManager.playSequence(listOf("carBrake", "carCrash"))
+                msg(t("enemyCarDestroyed"))
             }
         }
         // Electric shock cannot damage a fighter protected by a bulletproof car.
@@ -6298,6 +6780,43 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Buttons and gestures set this marker; a tap immediately afterwards
         // belongs to that action and must not activate the menu as well.
         if (battleClock.nowMs() - lastExplicitActionAt < TAP_ACTION_DEBOUNCE_MS) return
+        // The loan prompt is answered with a real double tap: the first tap
+        // arms the window (with a click as its audible receipt), the second
+        // one inside it hands the principal out. The window is armed ONLY by a
+        // tap that answered the open prompt, so two ordinary menu taps can
+        // never take a loan behind the player's back. While the prompt is
+        // open no tap activates the quick menu either: a refused purchase must
+        // never turn into an accidental recovery or a second spend.
+        val now = battleClock.nowMs()
+        if (loanPromptOpen && !canTakeBattleLoan()) {
+            // The loan was taken or became unavailable (a balance above the
+            // limit): the prompt is stale now.
+            loanPromptOpen = false
+            lastCenterTapAt = 0L
+        }
+        if (loanPromptOpen) {
+            val secondTapOfLoan = Loans.doubleTapTakes(
+                promptOpen = true,
+                previousTapAt = lastCenterTapAt,
+                now = now,
+                eligible = canTakeBattleLoan(),
+                windowMs = LOAN_DOUBLE_TAP_WINDOW_MS
+            )
+            if (secondTapOfLoan) {
+                lastCenterTapAt = 0L
+                markExplicitAction()
+                takeBattleLoan()
+                return
+            }
+            // The first tap of the double tap: a click is the audible proof
+            // that it registered, and the line stays on screen.
+            lastCenterTapAt = now
+            playSound("click")
+            setLog("${t("notEnoughCoins")} ${t("doubleTapForLoan")}")
+            return
+        }
+        // No prompt: a tap is an ordinary menu tap and never arms the window.
+        lastCenterTapAt = 0L
         // While the timer bomb picker is open a tap locks the highlighted
         // duration in and throws the bomb.
         if (_gameState.value.timerSelectActive) {

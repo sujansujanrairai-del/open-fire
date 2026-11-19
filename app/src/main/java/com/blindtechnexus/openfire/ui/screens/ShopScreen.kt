@@ -14,6 +14,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,6 +22,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
@@ -65,6 +68,25 @@ fun ShopScreen(viewModel: GameViewModel) {
     var pendingExtension by remember { mutableStateOf<Extension?>(null) }
     var pendingMissilePowerRemove by remember { mutableStateOf(false) }
     var pendingBombPowerRemove by remember { mutableStateOf(false) }
+    // Every removal dialog puts the keyboard / switch focus on its Cancel
+    // button, so confirming a removal is always a deliberate second step.
+    val cancelFocus = remember { FocusRequester() }
+    // The dialog only attaches the requester while it is composed, so the
+    // request is made once that composition is live.
+    val dialogOpen = pendingWeapon != null || pendingDefence != null ||
+        pendingExtension != null || pendingMissilePowerRemove || pendingBombPowerRemove
+    if (dialogOpen) {
+        LaunchedEffect(cancelFocus) {
+            // A frame for the dialog to attach its focus modifier.
+            kotlinx.coroutines.delay(60L)
+            try {
+                cancelFocus.requestFocus()
+            } catch (_: Throwable) {
+                // No focus system on this device (or a dialog closed already):
+                // the browse order alone is still correct.
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -464,7 +486,10 @@ fun ShopScreen(viewModel: GameViewModel) {
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingWeapon = null }) {
+                TextButton(
+                    onClick = { pendingWeapon = null },
+                    modifier = Modifier.focusRequester(cancelFocus)
+                ) {
                     Text(text = viewModel.t("cancel"), color = TextAccent)
                 }
             },
@@ -507,8 +532,13 @@ fun ShopScreen(viewModel: GameViewModel) {
                     )
                 }
             },
+            // The focus lands on Cancel, never on the destructive confirm:
+            // a stray switch press can therefore never remove an item.
             dismissButton = {
-                TextButton(onClick = { pendingDefence = null }) {
+                TextButton(
+                    onClick = { pendingDefence = null },
+                    modifier = Modifier.focusRequester(cancelFocus)
+                ) {
                     Text(text = viewModel.t("cancel"), color = TextAccent)
                 }
             },
@@ -552,7 +582,10 @@ fun ShopScreen(viewModel: GameViewModel) {
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingMissilePowerRemove = false }) {
+                TextButton(
+                    onClick = { pendingMissilePowerRemove = false },
+                    modifier = Modifier.focusRequester(cancelFocus)
+                ) {
                     Text(text = viewModel.t("cancel"), color = TextAccent)
                 }
             },
@@ -596,7 +629,10 @@ fun ShopScreen(viewModel: GameViewModel) {
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingBombPowerRemove = false }) {
+                TextButton(
+                    onClick = { pendingBombPowerRemove = false },
+                    modifier = Modifier.focusRequester(cancelFocus)
+                ) {
                     Text(text = viewModel.t("cancel"), color = TextAccent)
                 }
             },
@@ -640,7 +676,10 @@ fun ShopScreen(viewModel: GameViewModel) {
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingExtension = null }) {
+                TextButton(
+                    onClick = { pendingExtension = null },
+                    modifier = Modifier.focusRequester(cancelFocus)
+                ) {
                     Text(text = viewModel.t("cancel"), color = TextAccent)
                 }
             },
@@ -710,6 +749,30 @@ private fun DefenceRow(
             color = WarnBright,
             fontWeight = FontWeight.Bold
         )
+        // The anti-bomb explosive is the one defence that wears out. A charged
+        // one announces the stops it has left and says why a second one cannot
+        // be bought yet; an exhausted one says the shop is open again.
+        if (item == DefenceItem.ANTI_BOMB) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = if (inventory.holdsUsedAntiBomb) {
+                    "${viewModel.t("antiBombStopsLeft")}: " +
+                        "${inventory.antiBombCapacityLeft}. " +
+                        viewModel.t("antiBombCharged")
+                } else {
+                    if (inventory.count(item) > 0) {
+                        viewModel.t("antiBombExhausted")
+                    } else {
+                        viewModel.t("antiBombChargedEmpty")
+                    }
+                },
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (inventory.holdsUsedAntiBomb) TextMuted else WarnBright,
+                lineHeight = 18.sp,
+                modifier = Modifier.testTag("shop_defence_${item.id}_state")
+            )
+        }
         Spacer(modifier = Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -720,7 +783,9 @@ private fun DefenceRow(
                 onClick = { viewModel.buyDefence(item.id) },
                 type = ButtonType.PRIMARY,
                 modifier = Modifier.weight(1f),
-                testTag = "shop_defence_${item.id}_buy"
+                testTag = "shop_defence_${item.id}_buy",
+                // A charged explosive blocks the purchase of a second one.
+                enabled = unlocked && !(item == DefenceItem.ANTI_BOMB && inventory.holdsUsedAntiBomb)
             )
             GameButton(
                 text = viewModel.t("remove"),

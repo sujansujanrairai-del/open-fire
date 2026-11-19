@@ -1,5 +1,7 @@
 package com.blindtechnexus.openfire.model
 
+import kotlin.math.roundToInt
+
 /**
  * Shock damage and timing rules.
  *
@@ -7,14 +9,16 @@ package com.blindtechnexus.openfire.model
  * functions so no caller can mix them up:
  *
  *  - **Alone** ([shockPercentPerSecond]) the shock drains the whole proximity
- *    ladder of the game: 60% of maximum health per second at 40% to 100%
+ *    ladder of the game: 50% of maximum health per second at 40% to 100%
  *    proximity (the only band in which the shock works at all) and 10% per
  *    second outside it.
  *  - **When both fighters shock at once** ([duelPercentPerSecond]) the fight
  *    turns into a duel of colliding shocks. Both fighters lose exactly 10% of
  *    their maximum health every [DUEL_WINDOW_MS] (two seconds), so the duel is
  *    perfectly symmetric and the fighter with the weaker health bar loses
- *    first.
+ *    first. The single-striker 50% rule is the whole law of a solo shock: the
+ *    old flat "60 health points every second" is gone, so the drain follows
+ *    the victim's own health bar in every round and at every level.
  *
  * The enemy may either counter the player's shock ([RobertRules.shouldCounterShock])
  * or flee out of it ([RobertRules.shouldFleeShock]); the battle engine rolls
@@ -31,7 +35,7 @@ object ElectricShockRules {
     const val COUNTER_DELAY_MS = 5_000L
 
     /** Drain of the opponent's health per second while alone in the close band. */
-    const val PLAYER_CLOSE_PERCENT_PER_SECOND = 60f
+    const val PLAYER_CLOSE_PERCENT_PER_SECOND = 50f
 
     /** Drain of the opponent's health per second while alone outside the close band. */
     const val PLAYER_FAR_PERCENT_PER_SECOND = 10f
@@ -143,7 +147,7 @@ object ElectricShockRules {
      * The drain percentage of one fighter's shock - the whole shock law in
      * one pure function.
      *
-     * Alone, the close band decides (60 or 10 percent per second). While both
+     * Alone, the close band decides (50 or 10 percent per second). While both
      * shocks run the duel law replaces it: 10 percent of maximum health every
      * two seconds for both fighters, whatever the proximity and whoever
      * activated first.
@@ -164,15 +168,83 @@ object ElectricShockRules {
     /** True once one shock use has drained enough health to be worth coins. */
     fun paysCoins(drainedHp: Int): Boolean = drainedHp >= MIN_PAYABLE_DRAIN_HP
 
+    /**
+     * The whole duel drain of one two-second window, for BOTH fighters.
+     *
+     * A duel is symmetric by law: whoever struck first gains nothing, and
+     * because the share is taken from each fighter's own maximum health, a
+     * 2600-health bar loses thirteen times as many points as a 200-health bar
+     * in the same window. Both numbers are returned together so a caller can
+     * never apply one law to the player and another to the enemy - which is
+     * exactly the bug this function replaced (Robert was drained by a
+     * percentage, the player by a flat ten points).
+     *
+     * @param playerMaxHp the player's maximum health this battle.
+     * @param enemyMaxHp the enemy's maximum health this battle.
+     * @param windows whole two-second windows elapsed; a partial window pays
+     *   nothing, so the drain can never drift between ticks.
+     */
+    fun duelDamagePerWindows(
+        playerMaxHp: Int,
+        enemyMaxHp: Int,
+        windows: Long
+    ): Pair<Int, Int> {
+        if (windows <= 0L) return Pair(0, 0)
+        val elapsedMs = windows * DUEL_WINDOW_MS
+        val playerLoss = damageFor(playerMaxHp, duelPercentPerSecond(), elapsedMs)
+            .roundToInt()
+        val enemyLoss = damageFor(enemyMaxHp, duelPercentPerSecond(), elapsedMs)
+            .roundToInt()
+        return Pair(playerLoss, enemyLoss)
+    }
+
     // ------------------------------------------------------------------
     // The throw and the way back
     // ------------------------------------------------------------------
 
-    /** Metres the returning enemy covers on each movement tick. */
+    /**
+     * Metres the returning enemy covers on each movement tick.
+     *
+     * The throw must give the player real breathing room, so the walk back is
+     * deliberately unhurried: at [RETURN_STEP_M] every [RETURN_TICK_MS] the
+     * enemy needs about 3.4 seconds to cross the shortest line of the arena
+     * and about 6.9 seconds to walk back from the farthest corner. While he
+     * walks, his gun is silent ([GameState.robertShockRecovering]), so the
+     * throw can never be answered in a second as it used to be.
+     */
     const val RETURN_STEP_M = 1.6f
 
     /** Length of a return tick, in pausable battle-clock milliseconds. */
     const val RETURN_TICK_MS = 300L
+
+    /**
+     * Silence that follows a finished return walk.
+     *
+     * A throw must never be answered with a shot a second later. Even after
+     * the enemy has walked all the way back into fighting range he keeps his
+     * gun lowered for this long, so every throw really buys the player the
+     * breathing room the throw is for: up to about seven seconds of walking
+     * (the farthest-corner landing) plus a further [RECOVERY_SILENCE_MS]
+     * before his trigger is live again.
+     */
+    const val RECOVERY_SILENCE_MS = 1_500L
+
+    /** Ticks of the return walk for a landing this far from the player. */
+    fun returnTicksForDistance(distance: Float): Int = returnTicks(distance)
+
+    /**
+     * Total milliseconds a throw keeps the enemy silent: the walk back plus
+     * the recovery silence. This is the number the battle engine and the
+     * tests can reason about when they promise "he cannot return in a second".
+     */
+    fun throwSilenceMs(fromDistance: Float): Long =
+        returnTimeMs(fromDistance) + RECOVERY_SILENCE_MS
+
+    /**
+     * Capacity of the enemy's anti-bomb explosive: it stops two bombs, one
+     * less than the player's own three ([BombRules]).
+     */
+    const val ENEMY_ANTI_BOMB_STOPS = 2
 
     /**
      * The farthest reachable point in the square from the player. The farthest
@@ -181,6 +253,10 @@ object ElectricShockRules {
      * some centre-to-corner landings: no point farther away exists there, so
      * the battle engine separately blocks attacks until Robert returns. Ties
      * are deterministic and coordinates use Arena's normal bounds/fallbacks.
+     *
+     * The landing is kept [ROBERT_WALL_MARGIN] metres inside the boundary, so
+     * the thrown fighter is standing in the arena rather than wedged into the
+     * wall he lands on.
      */
     fun farthestLanding(playerX: Float, playerY: Float): Pair<Float, Float> {
         val x = Arena.clampX(playerX)
@@ -191,6 +267,30 @@ object ElectricShockRules {
             if (y < middle) Arena.MAX else Arena.MIN
         )
     }
+
+    /**
+     * Where a thrown car lands: the same farthest arena corner a thrown
+     * fighter reaches, so the car has the whole diagonal to drive back over.
+     *
+     * A car that is thrown out of the shock is handled as a wreck by the
+     * battle engine when the push finishes ([throwWrecksCar]) - it never
+     * silently pops back beside the player.
+     */
+    fun carLanding(playerX: Float, playerY: Float): Pair<Float, Float> {
+        val (x, y) = farthestLanding(playerX, playerY)
+        return Pair(Arena.clampX(x), Arena.clampY(y))
+    }
+
+    /** True when a throw that reaches its final push destroys the enemy's car. */
+    fun throwWrecksCar(targetInCar: Boolean, pushedToFarthestPoint: Boolean): Boolean =
+        targetInCar && pushedToFarthestPoint
+
+    /**
+     * Metres between the landing point and the player, used by the engine to
+     * report the throw distance back as speech.
+     */
+    fun throwDistance(playerX: Float, playerY: Float, landing: Pair<Float, Float>): Float =
+        Arena.distanceBetween(playerX, playerY, landing.first, landing.second)
 
     /** A countershock halves the displacement, without changing the release sound. */
     fun pushLanding(playerX: Float, playerY: Float, targetX: Float, targetY: Float, countered: Boolean): Pair<Float, Float> {

@@ -20,6 +20,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -69,8 +71,13 @@ fun GameButton(
     modifier: Modifier = Modifier,
     type: ButtonType = ButtonType.DEFAULT,
     testTag: String = "game_button",
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    focusRequester: FocusRequester? = null
 ) {
+    // A caller that needs to land the keyboard or switch focus on this button
+    // (the Confirm/Cancel pair of a dialog, the first control of a screen)
+    // passes its own requester; otherwise the button keeps the default browse
+    // order of the surrounding column.
     val bgColor = when (type) {
         ButtonType.PRIMARY -> BtnPrimary
         ButtonType.DANGER -> BtnDanger
@@ -97,7 +104,18 @@ fun GameButton(
                 ),
                 shape = shape
             )
-            .testTag(testTag),
+            .testTag(testTag)
+            // A caller that has to land the focus here (a dialog's Cancel, the
+            // first control of a screen) passes its own requester. The button
+            // itself already owns exactly one focusable, clickable node with
+            // its label, so no second focus target is ever added.
+            .then(
+                if (focusRequester != null) {
+                    Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                }
+            ),
         colors = ButtonDefaults.buttonColors(
             containerColor = Color.Transparent,
             disabledContainerColor = Color.Transparent,

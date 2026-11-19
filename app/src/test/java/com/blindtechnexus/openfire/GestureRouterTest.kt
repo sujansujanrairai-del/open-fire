@@ -246,18 +246,23 @@ class GestureRouterTest {
     }
 
     @Test
-    fun aThreeFingerSwipeMustBeLongAndClearlyPointed() {
-        // The activation distance is deliberate: above the tap slop, below the
-        // one-finger threshold, so the shortcut stays cheap but never fires on
-        // a firm tap.
-        assertTrue(SwipeClassifier.THREE_FINGER_ACTIVATION > SwipeClassifier.TAP_SLOP)
+    fun aThreeFingerSwipeMustBeDeliberateButNeverUnreachable() {
+        // The activation distance has to sit clearly above the tap slop so a
+        // three-finger tap never pauses or exits the battle by itself, and it
+        // has to stay far below the one-finger threshold so the shortcut is
+        // never more expensive than ordinary firing.
+        assertTrue(SwipeClassifier.THREE_FINGER_ACTIVATION >= 2f * SwipeClassifier.TAP_SLOP)
         assertTrue(
             SwipeClassifier.THREE_FINGER_ACTIVATION < SwipeClassifier.ONE_FINGER_THRESHOLD
         )
+        // A three-finger swipe is never harder to perform than a one-finger one.
+        assertTrue(
+            SwipeClassifier.threshold(3) < SwipeClassifier.threshold(2)
+        )
         assertFalse(SwipeClassifier.reached(0f, -12f))
-        assertTrue(SwipeClassifier.reached(0f, -40f))
-        assertTrue(SwipeClassifier.reached(0f, 40f))
-        assertTrue(SwipeClassifier.reached(35f, 0f))
+        assertTrue(SwipeClassifier.reached(0f, -60f))
+        assertTrue(SwipeClassifier.reached(0f, 60f))
+        assertTrue(SwipeClassifier.reached(55f, 0f))
         // The activation distance is never below the three-finger threshold, so
         // the two constants can never drift apart in the wrong direction.
         assertTrue(
@@ -274,5 +279,27 @@ class GestureRouterTest {
         // Degenerate input is never a shortcut.
         assertFalse(SwipeClassifier.dominant(0f, 0f))
         assertFalse(SwipeClassifier.reached(Float.NaN, 0f))
+    }
+
+    @Test
+    fun aThreeFingerSwipeIsNeverLostWhenTheHandIsSlightlyDiagonal() {
+        // The lifted-finger gate is deliberately more forgiving than the live
+        // one: a real three-finger swipe whose average displacement is a little
+        // diagonal must still commit at touch-up instead of being dropped.
+        assertTrue(SwipeClassifier.reachedAtEnd(0f, -30f))
+        assertTrue(SwipeClassifier.reachedAtEnd(0f, 30f))
+        assertTrue(SwipeClassifier.reachedAtEnd(-30f, 2f))
+        assertTrue(SwipeClassifier.reachedAtEnd(26f, -18f))
+        // It never accepts a wobble shorter than the three-finger threshold,
+        // never a slash with no clear direction at all, and no degenerate
+        // input, so the fallback cannot fire from a settling tap.
+        assertFalse(SwipeClassifier.reachedAtEnd(0f, -12f))
+        assertFalse(SwipeClassifier.reachedAtEnd(0f, 0f))
+        assertFalse(SwipeClassifier.reachedAtEnd(Float.NaN, 0f))
+        // A committed end-of-touch swipe really routes to a battle action.
+        assertEquals(
+            GameAction.TOGGLE_PAUSE,
+            GestureRouter.route(Screen.BATTLE, "down", 3)
+        )
     }
 }

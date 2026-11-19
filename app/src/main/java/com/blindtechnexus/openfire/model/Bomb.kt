@@ -59,9 +59,15 @@ object SoundDurations {
      * chain then starts both sounds together.
      */
     fun forKey(key: String): Long = when (key) {
-        "carDoorOpen" -> 2_444L
+        // The car clips each have exactly one measured length: the duplicated
+        // branches that used to shadow these keys (2 444 / 2 440 ms for one
+        // door, 3 410 ms twice for the ignition) are gone, so a chained car
+        // sound can never be answered with two different durations.
+        "carDoorOpen" -> 2_440L
         "carDoorClose" -> 1_320L
         "carStart" -> 3_410L
+        "carBrake" -> 2_630L
+        "carCrash" -> 6_210L
         "missile" -> MISSILE_MS
         "explosion", "timerBomb" -> EXPLOSION_MS
         "atomBomb" -> ATOM_BOMB_MS
@@ -75,11 +81,6 @@ object SoundDurations {
         "roundComplete" -> ROUND_COMPLETE_MS
         "wall" -> WALL_MS
         "walk", "playerWalk", "enemyWalk" -> WALK_MS
-        "carStart" -> 3_410L
-        "carBrake" -> 2_630L
-        "carDoorOpen" -> 2_440L
-        "carDoorClose" -> 1_320L
-        "carCrash" -> 6_210L
         else -> 0L
     }
 }
@@ -365,6 +366,33 @@ object BombRules {
     fun escapeDistance(distanceFromBomb: Float): Float =
         (distanceFromBomb + SAFE_DISTANCE).coerceIn(0f, Arena.SIZE)
 
+    // ------------------------------------------------------------------
+    // The two-grenade gift of round two
+    //
+    // From round two every new game hands the player two free grenades.
+    // They are the only bombs of that round, they cost no Bomb Power, and
+    // once both have been thrown the grenade is a spent weapon: it leaves
+    // the weapon list for the remainder of that game instead of sitting
+    // there empty.
+    // ------------------------------------------------------------------
+
+    /** Free grenades the player receives at the start of every round-two game. */
+    const val ROUND_GIFT_GRENADES = 2
+
+    /** The first round that hands the free grenades out. */
+    const val GRENADE_GIFT_ROUND = 2
+
+    /** True when this round is played with the two-grenade gift. */
+    fun grenadeGiftForRound(round: Int): Boolean = round == GRENADE_GIFT_ROUND
+
+    /** Grenades a battle of [round] starts with (0 once the gift is over). */
+    fun grenadeChargesForRound(round: Int): Int =
+        if (grenadeGiftForRound(round)) ROUND_GIFT_GRENADES else 0
+
+    /** True when a spent grenade must already be hidden from the weapon list. */
+    fun grenadeSpent(round: Int, chargesLeft: Int): Boolean =
+        grenadeGiftForRound(round) && chargesLeft <= 0
+
     /**
      * True when Robert fires his anti-bomb explosive. From round three he has
      * limited charges per the round table (1 in R3, 3 in R4, unlimited R5).
@@ -377,6 +405,15 @@ object BombRules {
         bombInFlight &&
             bombsUnlocked(round) &&
             antiBombsLeft > 0
+
+    /**
+     * True when Robert still has capacity in the anti-bomb explosive he is
+     * carrying. His explosive is shorter than the player's
+     * ([ENEMY_INTERCEPTS_PER_EXPLOSIVE]) and its remaining capacity is handed
+     * to the battle state as `robertAntiBombs`, so he fires one intercept per
+     * capacity point and then has to rely on the next explosive.
+     */
+    fun enemyAntiBombReady(antiBombsLeft: Int): Boolean = antiBombsLeft > 0
 
     /**
      * True when Robert throws one of his bombs. Like his missile it is a
@@ -453,6 +490,73 @@ object BombRules {
      * is available in the quick menu for every battle of those rounds.
      */
     fun playerAntiBombsFree(round: Int): Boolean = bombsUnlocked(round)
+
+    // ------------------------------------------------------------------
+    // Anti-bomb capacity: one explosive is a magazine, never a single shot
+    //
+    // A player's anti-bomb explosive stops [PLAYER_INTERCEPTS_PER_EXPLOSIVE]
+    // bombs before it is spent; the enemy's one is deliberately shorter and
+    // stops only [ENEMY_INTERCEPTS_PER_EXPLOSIVE]. The remaining capacity is
+    // carried in the profile ([Inventory.antiBombRemaining]), so a half-used
+    // explosive really survives from one battle to the next: with one bomb
+    // still covered, the shop refuses to sell another and the battle refuses
+    // to deploy a second guard, exactly like a half-empty magazine.
+    // ------------------------------------------------------------------
+
+    /** Bombs one bought player anti-bomb explosive stops before it is spent. */
+    const val PLAYER_INTERCEPTS_PER_EXPLOSIVE = 3
+
+    /** Bombs one enemy anti-bomb explosive stops before it is spent. */
+    const val ENEMY_INTERCEPTS_PER_EXPLOSIVE = 2
+
+    /**
+     * True when a profile holding [owned] explosives and [remaining] stops in
+     * the one being carried may not buy another: the carried explosive still
+     * has capacity left, so the purchase would be a wasted double.
+     */
+    fun blocksNewAntiBomb(owned: Int, remaining: Int): Boolean =
+        owned > 0 && remaining > 0
+
+    /**
+     * The capacity a battle really deploys with.
+     *
+     * A recorded-but-zero remainder is the fingerprint of an explosive that
+     * spent its last stop ([Shop.kt] fires it and stores 0), so it must NOT be
+     * refilled; only an explosive that never had a capacity written at all
+     * (a profile from before the magazine existed) starts full.
+     */
+    fun deployedCapacity(recorded: Int, owned: Int): Int = when {
+        owned <= 0 -> 0
+        recorded > 0 -> carriedCapacity(recorded)
+        // Exactly -1 is the legacy sentinel; anything else (including a 0 or a
+        // nonsense negative) is read as an exhausted explosive, never as a
+        // free refill.
+        recorded == -1 -> PLAYER_INTERCEPTS_PER_EXPLOSIVE
+        else -> 0
+    }
+
+    /**
+     * Capacity carried in a new anti-bomb explosive. An owned explosive with
+     * no recorded capacity is a legacy profile and simply starts full.
+     */
+    fun carriedCapacity(remaining: Int): Int =
+        remaining.coerceIn(0, PLAYER_INTERCEPTS_PER_EXPLOSIVE)
+
+    /**
+     * The capacity left after [spent] more interceptions of [capacity].
+     *
+     * A free anti-bomb (the round-three-and-later player one) never runs out:
+     * it re-arms itself, so its capacity always comes back full. An explosive
+     * that ran out to zero is spent and must be carried as 0 until the next
+     * purchase or reload.
+     */
+    fun capacityAfter(capacity: Int, spent: Int, freeForRound: Boolean): Int {
+        val safe = carriedCapacity(capacity)
+        if (freeForRound) return PLAYER_INTERCEPTS_PER_EXPLOSIVE
+        val used = spent.coerceAtLeast(0)
+        val left = (safe - used).coerceAtLeast(0)
+        return if (left == 0) 0 else left.coerceAtMost(PLAYER_INTERCEPTS_PER_EXPLOSIVE)
+    }
 
     /**
      * True when the anti-bomb explosive may be activated right now.

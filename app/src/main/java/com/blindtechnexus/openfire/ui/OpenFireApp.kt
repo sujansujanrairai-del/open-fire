@@ -306,9 +306,24 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             if (holdFireStarted && maxFingers == 1) {
                                 return@awaitEachGesture
                             }
-                            // Three fingers that never crossed the threshold are
-                            // not a gesture: never guess a one-finger one.
-                            if (maxFingers >= 3) return@awaitEachGesture
+                            // A three-finger hand that never crossed the strict
+                            // activation gate while its fingers were down is
+                            // committed here instead of being thrown away: a
+                            // vertical swipe is the accessibility shortcut of a
+                            // blind player, and one swallowed swipe means a
+                            // battle that cannot be paused. The relaxed gate
+                            // still demands the three-finger threshold and a
+                            // clear dominant axis, so a plain tap never fires a
+                            // shortcut and a diagonal is never guessed.
+                            if (maxFingers >= 3) {
+                                if (SwipeClassifier.reachedAtEnd(averageDx, averageDy)) {
+                                    viewModel.handleGesture(
+                                        SwipeClassifier.direction(averageDx, averageDy),
+                                        3
+                                    )
+                                }
+                                return@awaitEachGesture
+                            }
 
                             val threshold = if (maxFingers >= 2) {
                                 SWIPE_THRESHOLD_TWO_FINGERS

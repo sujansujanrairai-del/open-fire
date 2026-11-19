@@ -104,7 +104,7 @@ object Arena {
         return hypot(dx, dy).coerceIn(0f, SIZE)
     }
 
-    /** Distance from a bomb destination, used by the 50 m bomb rules. */
+    /** Distance from a bomb destination, used by the bomb blast rules. */
     fun distanceTo(bombX: Float, bombY: Float, x: Float, y: Float): Float =
         distanceBetween(bombX, bombY, x, y)
 

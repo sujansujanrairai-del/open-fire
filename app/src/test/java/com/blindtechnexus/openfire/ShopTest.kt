@@ -6,6 +6,7 @@ import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.ExtensionState
 import com.blindtechnexus.openfire.model.Inventory
+import com.blindtechnexus.openfire.model.Loans
 import com.blindtechnexus.openfire.model.MissileRules
 import com.blindtechnexus.openfire.model.Rewards
 import com.blindtechnexus.openfire.model.Shop
@@ -427,7 +428,9 @@ class ShopTest {
         }
         assertTrue(everything.battleWeapons(2).contains(Weapon.AWM))
         assertTrue(everything.battleWeapons(2).contains(Weapon.SUBMACHINE_GUN))
-        assertFalse(everything.battleWeapons(2).contains(Weapon.GRENADE))
+        // The grenade IS in round two - that is the round of its free gift -
+        // even though it only becomes buyable in round three.
+        assertTrue(everything.battleWeapons(2).contains(Weapon.GRENADE))
         assertFalse(everything.battleWeapons(2).contains(Weapon.MISSILE))
         assertTrue(everything.battleWeapons(3).contains(Weapon.GRENADE))
         // The electric shock is unlocked once round two is completed.
@@ -446,8 +449,12 @@ class ShopTest {
     @Test
     fun freeWeaponsAreIssuedByRoundAndNeverTwice() {
         assertEquals(emptyList<Weapon>(), Weapon.issuedForRound(1))
-        assertEquals(listOf(Weapon.AWM), Weapon.issuedForRound(2))
+        // Round two hands out the AWM and, as the round-two gift, the grenade:
+        // two free grenade charges are issued with the weapon itself.
+        assertEquals(listOf(Weapon.AWM, Weapon.GRENADE), Weapon.issuedForRound(2))
         assertEquals(listOf(Weapon.AWM, Weapon.GRENADE), Weapon.issuedForRound(3))
+        assertEquals(2, Weapon.GRENADE.issuedFreeFromRound)
+        assertEquals(3, Weapon.GRENADE.unlockRound)
         // The machine gun is unlockable in the shop but is never handed out
         // for free and is never part of any reward.
         assertEquals(0, Weapon.MACHINE_GUN.issuedFreeFromRound)
@@ -492,6 +499,168 @@ class ShopTest {
         assertEquals(5, Rewards.LEVEL_REWARDS.size)
         assertEquals(Rewards.ROUND_REWARD, Rewards.forPromotion(false, true, kotlin.random.Random))
         assertTrue(Rewards.forPromotion(false, false, kotlin.random.Random).isEmpty)
+    }
+
+    @Test
+    fun aChargedAntiBombCannotBeBoughtTwiceButAnExhaustedOneCan() {
+        // A carried explosive with stops left blocks a second purchase: the
+        // button would be a wasted double and the shop says so.
+        val charged = Inventory(antiBombs = 1)
+        assertTrue(charged.holdsUsedAntiBomb)
+        assertEquals(BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE, charged.antiBombCapacityLeft)
+        val refused = Shop.buyDefence(charged, 5_000, DefenceItem.ANTI_BOMB)
+        assertFalse(refused.success)
+        assertEquals("antiBombStillCharged", refused.reasonKey)
+        assertEquals(5_000, refused.coins)
+
+        // After every stop has been used the row opens again and the bought
+        // explosive arrives full.
+        val spent = charged.withAntiBombSpent(spent = 3, freeForRound = false)
+        assertEquals(0, spent.antiBombs)
+        assertEquals(0, spent.antiBombCapacityLeft)
+        assertFalse(spent.holdsUsedAntiBomb)
+        val bought = Shop.buyDefence(spent, 5_000, DefenceItem.ANTI_BOMB)
+        assertTrue(bought.success)
+        assertEquals(
+            BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE,
+            bought.inventory.antiBombCapacityLeft
+        )
+        assertEquals(1, bought.inventory.antiBombs)
+        // A partial use really lowers the capacity that is carried on.
+        val partial = charged.withAntiBombSpent(spent = 1, freeForRound = false)
+        assertEquals(BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE - 1, partial.antiBombRemaining)
+        // ...and it survives a save and reload as the same number.
+        assertEquals(
+            BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE - 1,
+            Inventory(antiBombs = 1, antiBombRemaining = partial.antiBombRemaining)
+                .antiBombCapacityLeft
+        )
+    }
+
+    @Test
+    fun theBattleLoanNeedsAnOpenPromptAndTheFullDoubleTapWindow() {
+        // Only a tap that answered an open prompt can arm the window, and only
+        // the second tap inside the window takes the loan.
+        assertTrue(Loans.doubleTapTakes(true, 1_000L, 1_900L, eligible = true))
+        assertTrue(Loans.doubleTapTakes(true, 1_000L, 1_000L, eligible = true))
+        assertFalse(Loans.doubleTapTakes(true, 1_000L, 1_901L, eligible = true))
+        // No prompt: an ordinary tap, so two menu taps can never take a loan.
+        assertFalse(Loans.doubleTapTakes(false, 1_000L, 1_100L, eligible = true))
+        // The prompt is stale once the loan is no longer available.
+        assertFalse(Loans.doubleTapTakes(true, 1_000L, 1_100L, eligible = false))
+        // An unarmed window (0) or a clock that reset is never a double tap.
+        assertFalse(Loans.doubleTapTakes(true, 0L, 1_100L, eligible = true))
+        assertFalse(Loans.doubleTapTakes(true, 5_000L, 1_000L, eligible = true))
+        // The default window is the shared 900 ms and it is the real bound.
+        assertEquals(900L, Loans.BATTLE_DOUBLE_TAP_WINDOW_MS)
+        assertFalse(Loans.doubleTapTakes(true, 1L, 1L + 901L, eligible = true))
+    }
+
+    @Test
+    fun aSpentAntiBombIsNeverRefilledByAReload() {
+        // -1 means "never recorded" (a pre-magazine profile) and starts full;
+        // 0 means "spent" and must stay spent, or a restart would hand the
+        // player a free explosive.
+        assertEquals(
+            BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE,
+            Inventory(antiBombs = 1).antiBombCapacityLeft
+        )
+        assertEquals(BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE, BombRules.deployedCapacity(-1, 1))
+        assertEquals(0, BombRules.deployedCapacity(0, 0))
+        assertEquals(0, BombRules.deployedCapacity(0, 1))
+        assertEquals(0, Inventory(antiBombs = 0, antiBombRemaining = 0).antiBombCapacityLeft)
+        assertFalse(Inventory(antiBombs = 0, antiBombRemaining = 0).holdsUsedAntiBomb)
+        // A partly used explosive reloads with the stops it had left.
+        assertEquals(2, BombRules.deployedCapacity(2, 1))
+        assertEquals(1, BombRules.deployedCapacity(1, 1))
+        // No capacity ever exceeds the magazine or goes negative.
+        assertEquals(BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE, BombRules.deployedCapacity(99, 1))
+        assertEquals(0, BombRules.deployedCapacity(99, 0))
+        assertEquals(0, BombRules.deployedCapacity(-1, 0))
+    }
+
+    @Test
+    fun theFreeAntiBombOfLaterRoundsAlwaysRearmsItself() {
+        val owned = Inventory(antiBombs = 1)
+        val used = owned.withAntiBombSpent(spent = 3, freeForRound = true)
+        assertEquals(
+            BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE,
+            used.antiBombRemaining
+        )
+        assertEquals(1, used.antiBombs)
+        // Capacity never exceeds the magazine and never goes negative.
+        assertEquals(0, BombRules.capacityAfter(1, 5, freeForRound = false))
+        assertEquals(
+            BombRules.PLAYER_INTERCEPTS_PER_EXPLOSIVE,
+            BombRules.capacityAfter(99, 0, freeForRound = false)
+        )
+        assertEquals(0, BombRules.carriedCapacity(-4))
+    }
+
+    @Test
+    fun aSpentGrenadeLeavesItsOwnSlotAndKeepsTheHeldWeapon() {
+        val state = com.blindtechnexus.openfire.model.GameState(
+            weapons = listOf("shortGun", "grenade", "pistol"),
+            ammo = listOf(6, 1, 6),
+            damaged = listOf(false, true, false),
+            weaponIndex = 0
+        )
+        // Throwing the grenade and switching away before the charge is spent
+        // must still drop the grenade's own slot, and the held slot must keep
+        // holding the same gun.
+        val after = state.withoutWeaponAt(1)
+        assertEquals(listOf("shortGun", "pistol"), after.weapons)
+        assertEquals(listOf(6, 6), after.ammo)
+        assertEquals(listOf(false, false), after.damaged)
+        assertEquals(0, after.weaponIndex)
+        assertEquals("shortGun", after.activeWeapon.id)
+        // Holding the grenade itself rolls over to the slot it occupied.
+        val holding = state.copy(weaponIndex = 1).withoutWeaponAt(1)
+        assertEquals(listOf("shortGun", "pistol"), holding.weapons)
+        assertEquals("pistol", holding.activeWeapon.id)
+        // The last remaining weapon is never dropped, and a bad index is a
+        // no-op, so the rotation can never become empty.
+        val single = com.blindtechnexus.openfire.model.GameState(
+            weapons = listOf("shortGun"), ammo = listOf(6), damaged = listOf(false)
+        )
+        assertEquals(single, single.withoutWeaponAt(0))
+        assertEquals(state, state.withoutWeaponAt(9))
+        assertEquals(state, state.withoutWeaponAt(-1))
+    }
+
+    @Test
+    fun everyWeaponGrantedFreeIsReallyUsableInThatRound() {
+        // A gift that cannot be thrown is not a gift: the round-two grenade is
+        // issued a whole round before it can be bought, so the battle rotation
+        // must honour the grant as well as the shop unlock.
+        val all = Inventory(weaponIds = Weapon.entries.map { it.id }.toSet())
+        assertTrue(all.battleWeapons(2).contains(Weapon.GRENADE))
+        assertTrue(all.battleWeapons(2).contains(Weapon.AWM))
+        // Round one has no bombs and no round-two gifts yet.
+        assertFalse(all.battleWeapons(1).contains(Weapon.GRENADE))
+        // The grenade later stays available on its own shop unlock.
+        for (round in 3..6) assertTrue(all.battleWeapons(round).contains(Weapon.GRENADE))
+        // Whatever a round grants must be in that round's rotation, always.
+        for (round in 1..6) {
+            val available = all.battleWeapons(round).toSet()
+            for (granted in Weapon.issuedForRound(round)) {
+                assertTrue("round $round grants ${granted.id} but hides it", granted in available)
+            }
+        }
+    }
+
+    @Test
+    fun theRoundTwoGiftHandsTwoSellableGrenadesAndNoMore() {
+        assertEquals(2, BombRules.grenadeChargesForRound(2))
+        assertEquals(0, BombRules.grenadeChargesForRound(1))
+        assertEquals(0, BombRules.grenadeChargesForRound(3))
+        assertTrue(BombRules.grenadeSpent(2, 0))
+        assertFalse(BombRules.grenadeSpent(2, 1))
+        assertFalse(BombRules.grenadeSpent(3, 0))
+        // The grenade itself is still sold at its own price and unlocked in
+        // round three, so a spent gift can be bought back.
+        assertEquals(600, Weapon.GRENADE.price)
+        assertEquals(3, Weapon.GRENADE.unlockRound)
     }
 
     @Test

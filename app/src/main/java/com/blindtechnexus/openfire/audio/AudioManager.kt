@@ -760,7 +760,11 @@ class AudioManager(private val context: Context) {
             val depth = -place.rear * place.distance
             calculateSourceGains(lateral, 0f, depth, volume, key)
         } else {
-            val level = effectiveBaseVolume(key, volume)
+            // A centred / in-hand loop is normalised by the asset's own
+            // measured loudness, exactly like a placed one: a quiet recording
+            // such as the car engine is heard at the level of a gun.
+            val level = (effectiveBaseVolume(key, volume) *
+                VolumeMixer.assetGainFor(key)).coerceIn(0f, 1f)
             Pair(level, level)
         }
         val left = gains.first
@@ -934,7 +938,7 @@ class AudioManager(private val context: Context) {
     fun updatePlayerWalkAudio(
         speedMps: Float = RunPressure.BASE_SPEED_MPS,
         volumeGain: Float = 1.0f,
-        playbackRate: Float = VolumeMixer.walkRate(speedMps)
+        playbackRate: Float = VolumeMixer.walkRateForSpeed(speedMps)
     ) {
         val base = VolumeMixer.walkLevel(1f, distanceGain = 1f, speedGain = volumeGain)
         updateWalkingTrack(key = "playerWalk", volume = base, speedMps = speedMps, place = null, playbackRate = playbackRate)
@@ -946,7 +950,7 @@ class AudioManager(private val context: Context) {
         speedMps: Float,
         place: SpatialPlace?,
         rateScale: Float = 1f,
-        playbackRate: Float = VolumeMixer.walkRate(speedMps) * rateScale
+        playbackRate: Float = VolumeMixer.walkRateForSpeed(speedMps) * rateScale
     ) {
         if (released) return
         // The steps follow the real speed smoothly, inside the natural window.
