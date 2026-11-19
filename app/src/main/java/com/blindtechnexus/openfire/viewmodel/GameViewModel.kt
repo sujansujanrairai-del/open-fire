@@ -1807,7 +1807,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // running away instead.
         ensureGlueWallAvoidance()
 
-        if (state.robertInCar && !robertCarStarted) return
+        if (state.robertInCar && (!robertCarStarted || state.robertState == "advance")) return
         val round = state.round
         val speedMultiplier = RobertRules.movementSpeedMultiplier(round)
         when (_gameState.value.robertState) {
@@ -1816,7 +1816,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 val metres = ElectricShockRules.RETURN_STEP_M
                 val step = approachStep(current, metres)
                 _gameState.value = step.state
-                if (step.blocked || step.state.distance <= robertTargetDistance(step.state) + BAND_TOLERANCE_M) {
+                if (RobertRules.canLandShotAt(step.state.distance, step.state.robertWeapon) &&
+                    step.state.distance <= robertTargetDistance(step.state) + BAND_TOLERANCE_M) {
                     _gameState.update { it.copy(robertState = "advance") }
                     audioManager.stopSound("enemyWalk")
                     ensureRobertPositioned()
@@ -2496,9 +2497,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val normalInterval = AutomaticFirePowerMap.intervalFor(firingWeapon) ?: answerInterval
         val unarmed = isPlayerWeaponLocked(state) || state.activeWeapon.melee ||
             (!state.activeWeapon.electricShock && state.activeAmmo <= 0)
-        val fireInterval = if (unarmed) 1_250L else normalInterval
+        val fireInterval = if (unarmed) 1_000L else normalInterval
         val playerInterval = EnemyFireStrategy.playerInterval(playerShotTimes.toList())
-        if (!unarmed && mirrorDuel && playerInterval != null && playerInterval < fireInterval) {
+        if (!unarmed && nowMs - lastPlayerShotAtMs <= EnemyFireStrategy.STOP_DETECT_MS && playerInterval != null && playerInterval < fireInterval) {
             playerShotTimes.clear()
             beginRobertSprint()
             return
@@ -5524,7 +5525,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Robert climbs into his own bulletproof car (granted from round four)
+     * Robert climbs into his own bulletproof car (granted from round five)
      * once his health drops below the 400 line: the door opens, closes, the
      * engine starts - and he drives and fires from cover of the car.
      */
@@ -5553,18 +5554,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertCarStarted = true
             ensureRobertPositioned()
             var moving = false
-            var stationaryTicks = 0
-            var previousX = Float.NaN
-            var previousY = Float.NaN
             while (_currentScreen.value == Screen.BATTLE && _gameState.value.robertInCar &&
                 _gameState.value.playerHp > 0 && _gameState.value.robertHp > 0
             ) {
                 val state = _gameState.value
-                if (state.robertX != previousX || state.robertY != previousY) stationaryTicks = 0
-                else stationaryTicks++
-                previousX = state.robertX
-                previousY = state.robertY
-                val driving = stationaryTicks * CarRules.TICK_MS <= ADVANCE_TICK_MS + CarRules.TICK_MS
+                // In normal pursuit the vehicle, not the footstep scheduler,
+                // closes the gap. Leave tactical retreats to their own rules.
+                val pursuit = state.robertState == "advance" && !state.opponentLocked(battleClock.nowMs())
+                val gap = if (moving) CarRules.STOP_DISTANCE_M else
+                    CarRules.STOP_DISTANCE_M + CarRules.GAP_TOLERANCE_M
+                val driving = if (pursuit && state.distance > gap) {
+                    val step = approachStep(state, CarRules.SPEED_MPS * CarRules.TICK_MS / 1000f)
+                    _gameState.value = step.state
+                    step.state != state
+                } else !pursuit && state.robertState in setOf("retreat", "missileFlee", "bombFlee", "flank", "turnBack")
                 if (moving && !driving) playEnemySound("carBrake")
                 moving = driving
                 val (lateral, depth) = enemyAudioOffsets()
@@ -5807,14 +5810,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         ) {
             return
         }
-        val answer = RobertRules.chooseShockAnswer(
-            round = state.round,
-            robertHp = state.robertHp,
-            robertMaxHp = state.robertMaxHp,
-            random = Random
-        )
+        if (state.opponentLocked(battleClock.nowMs())) return
         shockResponseChosen = true
-        if (answer == RobertRules.ShockAnswer.COUNTER) startRobertShock()
+        startRobertShock()
     }
 
     /**
@@ -5975,48 +5973,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val live = _gameState.value
-        // Robert answers once, a moment after the shock really started to burn.
-        if (live.shockHolding && !live.robertShocking) {
-            respondToPlayerShock()
-        }
-        val duel = _gameState.value.shockHolding && _gameState.value.robertShocking
-
-        var robertLoss = 0
-        var playerLoss = 0
-        if (duel) {
-            // A duel of colliding shocks: BOTH fighters lose 10% of their
-            // maximum health every two seconds, applied as whole pulses.
-            duelShockDamageMs += dtMs
-            playerShockDamageMs = 0L
-            val pulses = duelShockDamageMs / ElectricShockRules.DUEL_WINDOW_MS
-            duelShockDamageMs %= ElectricShockRules.DUEL_WINDOW_MS
-            if (pulses > 0) {
-                // DUEL_PERCENT_PER_SECOND is derived from the window, so one
-                // full window is exactly DUEL_PERCENT_PER_WINDOW of the bar.
-                robertLoss = ElectricShockRules.damageFor(
-                    live.robertMaxHp,
-                    ElectricShockRules.DUEL_PERCENT_PER_SECOND,
-                    pulses * ElectricShockRules.DUEL_WINDOW_MS
-                ).roundToInt()
-                playerLoss = ElectricShockRules.damageFor(
-                    live.playerMaxHp,
-                    ElectricShockRules.DUEL_PERCENT_PER_SECOND,
-                    pulses * ElectricShockRules.DUEL_WINDOW_MS
-                ).roundToInt()
-            }
-        } else {
-            // Alone: the single-striker law, applied in whole one-second pulses.
-            playerShockDamageMs += dtMs
-            duelShockDamageMs = 0L
-            val pulses = playerShockDamageMs / 1_000L
-            playerShockDamageMs %= 1_000L
-            if (pulses > 0) {
-                val rate = ElectricShockRules.playerDrainPercentPerSecond(proximity)
-                robertLoss = ElectricShockRules.damageFor(
-                    live.robertMaxHp, rate, pulses * 1_000L
-                ).roundToInt()
-            }
-        }
+        // Charge elapsed time to the state that actually occupied it. In
+        // particular the fifth solo pulse lands before the shield rises.
+        val duel = live.robertShocking
+        playerShockDamageMs += dtMs
+        val enemyPulses = playerShockDamageMs / 1_000L
+        playerShockDamageMs %= 1_000L
+        var robertLoss = if (duel) {
+            ElectricShockRules.damageFor(live.robertMaxHp, 10f, enemyPulses * 1_000L).roundToInt()
+        } else (60L * enemyPulses).toInt()
+        duelShockDamageMs = if (duel) duelShockDamageMs + dtMs else 0L
+        var playerLoss = (10L * (duelShockDamageMs / ElectricShockRules.DUEL_WINDOW_MS)).toInt()
+        duelShockDamageMs %= ElectricShockRules.DUEL_WINDOW_MS
+        if (!duel && live.shockHolding && robertLoss < live.robertHp) respondToPlayerShock()
         // Electric shock cannot damage a fighter protected by a bulletproof car.
         if (live.robertInCar) robertLoss = 0
         if (CarRules.shieldsUser(live.carStage)) playerLoss = 0

@@ -74,7 +74,7 @@ object SoundLibrary {
         "timerBomb" to "explosion.ogg",
         "levelComplete" to "level-complete.ogg",
         "roundComplete" to "round-complete.ogg",
-        "shockKnockback" to "shock-knockback.ogg",
+        "shockKnockback" to "enemy-shock-throw.ogg",
         "enemyCarEngine" to "car-engine.ogg",
         "enemyCarMoving" to "car-moving.ogg",
         "carBrake" to "car-brake.ogg",
@@ -152,7 +152,7 @@ object SoundLibrary {
 
     /** Recordings that are genuinely stereo and keep their own image. */
     private val STEREO_RECORDINGS: Set<String> = setOf(
-        "music", "carMoving", "carEngine", "airplane", "airplaneEngine"
+        "music", "carMoving", "carEngine", "enemyCarMoving", "enemyCarEngine", "airplane", "airplaneEngine"
     )
 
     /**

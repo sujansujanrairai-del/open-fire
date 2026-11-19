@@ -185,11 +185,11 @@ class CarAndElectricShockTest {
     @Test
     fun enemyReceivesCarStartingInRoundFive() {
         assertFalse(RobertRules.robotCarGranted(3))
-        assertTrue(RobertRules.robotCarGranted(4))
+        assertFalse(RobertRules.robotCarGranted(4))
         assertTrue(RobertRules.robotCarGranted(5))
         assertTrue(RobertRules.shouldEnterCar(5, 399, false))
         assertFalse(RobertRules.shouldEnterCar(3, 399, false))
-        assertTrue(RobertRules.shouldEnterCar(4, 399, false))
+        assertFalse(RobertRules.shouldEnterCar(4, 399, false))
     }
 
     // ------------------------------------------------------------------
@@ -289,7 +289,7 @@ class CarAndElectricShockTest {
     @Test
     fun robertEitherCountersTheShockOrFleesFromIt() {
         // A detected shock inside the band can be answered; outside it cannot.
-        assertTrue(RobertRules.shouldCounterShock(true, 0, 70f))
+        assertTrue(RobertRules.shouldCounterShock(true, 5_000, 70f))
         assertFalse(RobertRules.shouldCounterShock(true, 0, 30f))
         assertFalse(RobertRules.shouldCounterShock(false, 0, 70f))
         // Both answers stay possible whatever the health and the random draw.
@@ -316,10 +316,10 @@ class CarAndElectricShockTest {
     }
 
     @Test
-    fun robertAnswersImmediately() {
+    fun robertAnswersAfterFiveSeconds() {
         assertFalse(RobertRules.shouldCounterShock(false, 0))
-        assertTrue(ElectricShockRules.counterOpen(1_000))
-        assertEquals(0L, ElectricShockRules.COUNTER_DELAY_MS)
+        assertFalse(ElectricShockRules.counterOpen(4_999))
+        assertEquals(5_000L, ElectricShockRules.COUNTER_DELAY_MS)
         assertEquals(5f, ElectricShockRules.FIRST_STRIKER_PERCENT_PER_SECOND, 0.001f)
         assertEquals(5f, ElectricShockRules.secondStrikerPercentPerSecond(), 0.001f)
     }
