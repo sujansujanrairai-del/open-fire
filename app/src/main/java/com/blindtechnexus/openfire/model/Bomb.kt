@@ -220,6 +220,7 @@ object BombRules {
         when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
             3 -> 2
             4 -> 3
+            6 -> 8
             5 -> when (level.coerceIn(1, Progression.LEVELS_PER_ROUND)) {
                 1 -> 3
                 2 -> 4
@@ -242,7 +243,8 @@ object BombRules {
      */
     fun enemyBombUsesForRound(round: Int, kind: BombKind, level: Int = 1): Int =
         when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
-            3 -> if (kind == BombKind.GRENADE) 2 else 0
+            2 -> if (kind == BombKind.GRENADE) 2 else 0
+            3 -> if (kind == BombKind.GRENADE) 3 else 0
             4 -> 3
             // Round five keeps separate finite stocks. Lower levels start
             // with grenades, then add atom and timer bombs as their total grows.
@@ -257,6 +259,7 @@ object BombRules {
                     else -> 2
                 }
             }
+            6 -> 3
             else -> 0
         }
 
@@ -392,11 +395,11 @@ object BombRules {
         missileInFlight: Boolean
     ): Boolean {
         if (bombInFlight || missileInFlight || bombsLeft <= 0) return false
-        if (!bombsUnlocked(round)) return false
+        if (round < 2) return false
         if (robertMaxHp <= 0 || playerMaxHp <= 0 || robertHp <= 0 || playerHp <= 0) return false
         if (robertShots < ENEMY_THROW_MIN_SHOTS) return false
         // Round 5 strategic logic: throw bombs more liberally to control battle
-        if (round == 5) {
+        if (round >= 5) {
             val robertFraction = robertHp.toFloat() / robertMaxHp.toFloat()
             // In round 5, strategic play — throw when at disadvantage or even, not just desperation
             return robertFraction <= 0.65f
@@ -440,7 +443,7 @@ object BombRules {
      * that do not know which bomb is being thrown yet.
      */
     fun requiresBombPower(round: Int, kind: BombKind? = null): Boolean {
-        if (!bombsUnlocked(round)) return false
+        if (round < 2) return false
         return kind == null || kind != BombKind.GRENADE
     }
 
@@ -487,11 +490,11 @@ object BombRules {
         playerHpFraction: Float,
         random: kotlin.random.Random
     ): BombKind? {
-        if (!bombsUnlocked(round)) return null
+        if (round < 2) return null
         val available = buildList {
             if (grenades > 0) add(BombKind.GRENADE)
-            if (atomBombs > 0) add(BombKind.ATOM)
-            if (timerBombs > 0) add(BombKind.TIMER)
+            if (atomBombs > 0 && round >= 4) add(BombKind.ATOM)
+            if (timerBombs > 0 && round >= 4) add(BombKind.TIMER)
         }
         if (available.isEmpty()) return null
         if (available.contains(BombKind.ATOM) && playerHpFraction <= 0.35f) return BombKind.ATOM

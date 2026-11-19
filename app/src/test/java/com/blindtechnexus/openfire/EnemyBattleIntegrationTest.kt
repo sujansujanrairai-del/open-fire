@@ -45,6 +45,64 @@ class EnemyBattleIntegrationTest {
     }
 
     @Test
+    fun shockPushesAnIncomingMissileOnlyAfterFiveContinuousSeconds() {
+        val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
+        try {
+            val state = flow<GameState>(vm, "_gameState")
+            flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            state.value = GameState(
+                round = 1, distance = 5f,
+                playerHp = 5000, playerMaxHp = 5000, robertHp = 5000, robertMaxHp = 5000,
+                weapons = listOf(Weapon.ELECTRIC_SHOCK.id), ammo = listOf(0)
+            )
+            vm.startHoldFire()
+            state.value = state.value.copy(missileInFlight = true, missileFromPlayer = false)
+            val duration = GameViewModel::class.java.getDeclaredField("missileFlightDurationMs").apply { isAccessible = true }
+            val impact = GameViewModel::class.java.getDeclaredField("missileImpactAtMs").apply { isAccessible = true }
+            val used = GameViewModel::class.java.getDeclaredField("missileDeflectionUsed").apply { isAccessible = true }
+            duration.setLong(vm, 10_000L)
+            impact.setLong(vm, android.os.SystemClock.elapsedRealtime() + 5_000L)
+            invoke(vm, "tickActiveShock", 4_999L)
+            assertFalse(used.getBoolean(vm))
+            invoke(vm, "tickActiveShock", 1L)
+            assertTrue(used.getBoolean(vm))
+            assertTrue(impact.getLong(vm) - android.os.SystemClock.elapsedRealtime() >= 9_900L)
+        } finally {
+            invoke(vm, "stopTimers")
+            vm.onAppPaused()
+            vm.audioManager.release()
+            vm.ttsManager.shutdown()
+        }
+    }
+
+    @Test
+    fun shockPushesMovingCarWithoutDamagingItsPassenger() {
+        val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
+        try {
+            val state = flow<GameState>(vm, "_gameState")
+            flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            state.value = GameState(
+                round = 1, distance = 5f, playerX = 1f, playerY = 1f, robertX = 1f, robertY = 6f,
+                playerHp = 5000, playerMaxHp = 5000, robertHp = 5000, robertMaxHp = 5000,
+                robertInCar = true, weapons = listOf(Weapon.ELECTRIC_SHOCK.id), ammo = listOf(0)
+            )
+            GameViewModel::class.java.getDeclaredField("robertCarStarted").apply { isAccessible = true }.setBoolean(vm, true)
+            vm.startHoldFire()
+            invoke(vm, "tickActiveShock", 4_999L)
+            assertEquals(1f, state.value.robertX, 0.001f)
+            invoke(vm, "tickActiveShock", 1L)
+            assertEquals(25f, state.value.robertX, 0.001f)
+            assertEquals(25f, state.value.robertY, 0.001f)
+            assertEquals(5000, state.value.robertHp)
+        } finally {
+            invoke(vm, "stopTimers")
+            vm.onAppPaused()
+            vm.audioManager.release()
+            vm.ttsManager.shutdown()
+        }
+    }
+
+    @Test
     fun shockDamagesRobertInTheCloseBandWithOrWithoutACounter() {
         val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
         try {
@@ -228,13 +286,13 @@ class EnemyBattleIntegrationTest {
     }
 
     @Test
-    fun tenSecondTimeoutProcessesTheLastTickThrowsOnceAndRequiresALift() {
+    fun elevenSecondTimeoutProcessesTheLastTickThrowsOnceAndRequiresALift() {
         val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
         try {
             val state = flow<GameState>(vm, "_gameState")
             flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
             state.value = GameState(
-                round = 2, distance = 2f,
+                round = 1, distance = 2f,
                 playerX = 1f, playerY = 1f, robertX = 1f, robertY = 3f,
                 playerHp = 1_000, playerMaxHp = 1_000, robertHp = 1_000, robertMaxHp = 1_000,
                 robertGlueWallActive = true,

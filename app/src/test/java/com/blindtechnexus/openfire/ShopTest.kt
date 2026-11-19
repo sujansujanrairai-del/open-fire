@@ -132,7 +132,7 @@ class ShopTest {
 
     @Test
     fun antiMissileDefenceUnlocksAfterRoundThree() {
-        assertEquals(1500, DefenceItem.ANTI_MISSILE.price)
+        assertEquals(1000, DefenceItem.ANTI_MISSILE.price)
         assertEquals(3, DefenceItem.ANTI_MISSILE.requiredCompletedRounds)
 
         val locked = Shop.buyDefence(
@@ -161,7 +161,7 @@ class ShopTest {
             completedRounds = 3
         )
         assertTrue(unlocked.success)
-        assertEquals(3500, unlocked.coins)
+        assertEquals(4000, unlocked.coins)
         assertEquals(1, unlocked.inventory.antiMissiles)
 
         val consumed = Shop.consume(unlocked.inventory, DefenceItem.ANTI_MISSILE)
@@ -266,6 +266,18 @@ class ShopTest {
         assertEquals("gunReload", Weapon.MISSILE.switchSoundKey)
         // Missile power is a consumable, never a permanent extension.
         assertFalse(Extension.entries.any { it.id == "missilePowers" })
+    }
+
+    @Test
+    fun atomBombAndShockAndBombPowerUnlockAfterRoundOne() {
+        for (weapon in listOf(Weapon.ATOM_BOMB, Weapon.ELECTRIC_SHOCK)) {
+            assertFalse(Shop.buyWeapon(Inventory(), 5000, weapon, 0).success)
+            assertTrue(Shop.buyWeapon(Inventory(), 5000, weapon, 1).success)
+        }
+        assertFalse(Shop.buyBombPower(Inventory(), 5000, 0).success)
+        assertTrue(Shop.buyBombPower(Inventory(), 5000, 1).success)
+        assertFalse(Shop.buyWeapon(Inventory(), 5000, Weapon.GRENADE, 1).success)
+        assertFalse(Shop.buyWeapon(Inventory(), 5000, Weapon.TIMER_BOMB, 1).success)
     }
 
     @Test
@@ -419,7 +431,8 @@ class ShopTest {
         assertFalse(everything.battleWeapons(2).contains(Weapon.MISSILE))
         assertTrue(everything.battleWeapons(3).contains(Weapon.GRENADE))
         // The electric shock is unlocked once round two is completed.
-        assertFalse(everything.battleWeapons(2).contains(Weapon.ELECTRIC_SHOCK))
+        assertTrue(everything.battleWeapons(2).contains(Weapon.ELECTRIC_SHOCK))
+        assertTrue(everything.battleWeapons(2).contains(Weapon.ATOM_BOMB))
         assertTrue(everything.battleWeapons(3).contains(Weapon.ELECTRIC_SHOCK))
         assertTrue(everything.battleWeapons(3).contains(Weapon.ATOM_BOMB))
         assertTrue(everything.battleWeapons(3).contains(Weapon.TIMER_BOMB))

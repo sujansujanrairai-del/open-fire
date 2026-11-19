@@ -4,7 +4,7 @@ package com.blindtechnexus.openfire.model
  * Strict progression ladder:
  *  - 5 wins    = 1 level (and one random reward)
  *  - 5 levels  = 1 round (and the fixed round reward)
- *  - 5 rounds  = the whole match
+ *  - 6 rounds  = the whole match
  *
  * Wins collected inside the current level are tracked explicitly instead of
  * being inferred from the lifetime win count. Completed rounds are also kept
@@ -15,7 +15,7 @@ object Progression {
     /** Five wins complete one level and pay one random reward. */
     const val WINS_PER_LEVEL = 5
     const val LEVELS_PER_ROUND = 5
-    const val ROUNDS_PER_MATCH = 5
+    const val ROUNDS_PER_MATCH = 6
 
     /** Health at round 1, level 1, and the increase for every later level. */
     const val INITIAL_HEALTH = 200
@@ -37,17 +37,18 @@ object Progression {
      * The final round is played against the clock: seven minutes per game.
      * If Robert is still alive when they run out, the player loses.
      */
-    const val FINAL_ROUND_TIME_LIMIT_MS = 7L * 60L * 1_000L
+    const val ROUND_FIVE_TIME_LIMIT_MS = 7L * 60L * 1_000L
+    const val FINAL_ROUND_TIME_LIMIT_MS = 5L * 60L * 1_000L
 
     /** Coins taken away from the player for a lost game. */
     const val DEFEAT_COIN_PENALTY = 20
 
     /** The time limit of a round in milliseconds (0 = no limit). */
     fun roundTimeLimitMs(round: Int): Long =
-        if (round.coerceIn(1, ROUNDS_PER_MATCH) >= ROUNDS_PER_MATCH) {
-            FINAL_ROUND_TIME_LIMIT_MS
-        } else {
-            0L
+        when (round.coerceIn(1, ROUNDS_PER_MATCH)) {
+            5 -> ROUND_FIVE_TIME_LIMIT_MS
+            6 -> FINAL_ROUND_TIME_LIMIT_MS
+            else -> 0L
         }
 
     /**
@@ -63,7 +64,7 @@ object Progression {
         val stats: GameStats,
         val leveledUp: Boolean,
         val roundCompleted: Boolean,
-        /** True when the fifth round was completed: the match is won. */
+        /** True when the sixth round was completed: the match is won. */
         val matchWon: Boolean = false
     )
 

@@ -265,7 +265,7 @@ class CombatTest {
         assertEquals(250, DefenceItem.MEDKIT.price)
         assertEquals(550, DefenceItem.GLUE_WALL.price)
         assertEquals(400, DefenceItem.COVER.price)
-        assertEquals(1500, DefenceItem.ANTI_MISSILE.price)
+        assertEquals(1000, DefenceItem.ANTI_MISSILE.price)
         assertEquals(1700, DefenceItem.ANTI_BOMB.price)
     }
 

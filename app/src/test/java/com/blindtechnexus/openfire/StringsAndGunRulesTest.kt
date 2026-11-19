@@ -105,7 +105,7 @@ class StringsAndGunRulesTest {
         )
         for ((weapon, price) in prices) assertEquals(price, weapon.price)
         assertEquals(
-            listOf(250, 400, 550, 1500, 1500, 1500, 1700),
+            listOf(250, 400, 550, 1000, 1500, 1700, 2200),
             DefenceItem.entries.map { it.price }.sorted()
         )
         // Max Speed (250) is gone: the four remaining extensions.
@@ -113,7 +113,7 @@ class StringsAndGunRulesTest {
         assertEquals(1000, MissileRules.MISSILE_POWER_PRICE)
         assertEquals(Weapon.forSale().map { it.price }.sorted(), Weapon.forSale().map { it.price })
         assertTrue(Weapon.forSale().all { it.price <= 2200 })
-        assertTrue(DefenceItem.entries.all { it.price <= 1700 })
+        assertTrue(DefenceItem.entries.all { it.price <= 2200 })
     }
 
     @Test
@@ -143,7 +143,7 @@ class StringsAndGunRulesTest {
             "three quick shots", "unlock and can be bought from round 1",
             "heavy hit or repeated", "500, 1000 or 1500", "fewer than 500",
             "1500-coin loan and 1100", "400 owed", "remaining debt", "no interest",
-            "missile 2200", "anti-missile 1500", "interceptor", "timer bomb",
+            "missile 2200", "anti-missile 1000", "interceptor", "timer bomb",
             "lock the opponent", "2500 coins", "1000", "700 to 1000",
             "gloo wall", "second chance", "quick menu", "Settings",
             "level-specific", "L1 has 1 missile power", "L2 has 1 missile power, no interceptor",

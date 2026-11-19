@@ -58,6 +58,15 @@ class ProjectileLockAndShockThrowTest {
     }
 
     @Test
+    fun countershockHalvesTheThrowDistance() {
+        assertEquals(5_000L, ElectricShockRules.PUSH_DELAY_MS)
+        val full = ElectricShockRules.pushLanding(1f, 1f, 3f, 5f, false)
+        val countered = ElectricShockRules.pushLanding(1f, 1f, 3f, 5f, true)
+        assertEquals(25f to 25f, full)
+        assertEquals(14f to 15f, countered)
+    }
+
+    @Test
     fun aCornerReturnMakesRealProgressOnEveryTickWithoutCrossingWalls() {
         val players = listOf(0f to 0f, 1f to 24f, 12.5f to 12.5f, 25f to 25f)
         for ((px, py) in players) {

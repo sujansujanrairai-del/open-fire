@@ -54,7 +54,7 @@ enum class CarStage(val id: String) {
  */
 object CarRules {
     /** Shop price of the bulletproof car. */
-    const val PRICE = 1_500
+    const val PRICE = 2_200
 
     /** Price of one refuel once the car is out of fuel. */
     const val REFUEL_PRICE = 500
@@ -75,8 +75,8 @@ object CarRules {
     /** The robot enters its own bulletproof car once its health drops below this. */
     const val ROBOT_CAR_TRIGGER_HP = 400
 
-    /** The robot is granted a bulletproof car from this round (round five). */
-    const val ROBOT_CAR_ROUND = 5
+    /** The robot is granted a bulletproof car from this round (round two). */
+    const val ROBOT_CAR_ROUND = 2
 
     /** Two consecutive bomb hits destroy the car; one missile destroys it. */
     const val BOMB_HITS_TO_DESTROY = 2

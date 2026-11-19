@@ -323,7 +323,7 @@ enum class Weapon(
     ),
     /**
      * The electric shock, listed with the machine guns. It unlocks once round
-     * two is complete and costs 1500 coins. Holding the up-swipe shocks Robert
+     * one is complete and costs 1500 coins. Holding the up-swipe shocks Robert
      * for as long as the hold lasts; Robert answers with his own shock.
      */
     ELECTRIC_SHOCK(
@@ -339,7 +339,7 @@ enum class Weapon(
         switchSoundKey = "gunReload",
         hitSoundKey = "electricShock",
         missSoundKey = "click",
-        unlockRound = 3,
+        unlockRound = 2,
         electricShock = true
     ),
     GRENADE(
@@ -373,7 +373,7 @@ enum class Weapon(
         hitSoundKey = "explosion",
         missSoundKey = "ammo",
         bomb = true,
-        unlockRound = 3
+        unlockRound = 2
     ),
     TIMER_BOMB(
         id = "timerBomb",
@@ -866,7 +866,7 @@ object Shop {
         coins: Int,
         completedRounds: Int
     ): ShopResult {
-        if (completedRounds < BombRules.FIRST_BOMB_ROUND - 1) {
+        if (completedRounds < Weapon.ATOM_BOMB.requiredCompletedRounds) {
             return ShopResult(false, coins, inventory, "bombPowerLocked")
         }
         if (coins < BombRules.BOMB_POWER_PRICE) {

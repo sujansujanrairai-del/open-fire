@@ -59,12 +59,29 @@ class RoundRulesTest {
     }
 
     @Test
+    fun sixthRoundHasFiniteStrongerStocksAtEveryLevel() {
+        for (level in 1..5) {
+            val profile = RobertRules.profile(6, level)
+            assertEquals(6, profile.round)
+            assertEquals(3, profile.grenades)
+            assertEquals(3, profile.atomBombs)
+            assertEquals(3, profile.timerBombs)
+            assertEquals(9, profile.bombs)
+            assertEquals(8, profile.missilePowers)
+            assertEquals(2, profile.antiMissiles)
+            assertEquals(8, profile.antiBombs)
+            assertTrue(BombRules.requiresBombPower(2, BombKind.ATOM))
+        }
+    }
+
+    @Test
     fun enemyBombsFollowTheRoundTable() {
         // Round three: grenades only, twice per game.
-        assertEquals(2, BombRules.enemyBombUsesForRound(3, BombKind.GRENADE))
+        assertEquals(2, BombRules.enemyBombUsesForRound(2, BombKind.GRENADE))
+        assertEquals(3, BombRules.enemyBombUsesForRound(3, BombKind.GRENADE))
         assertEquals(0, BombRules.enemyBombUsesForRound(3, BombKind.ATOM))
         assertEquals(0, BombRules.enemyBombUsesForRound(3, BombKind.TIMER))
-        assertEquals(2, BombRules.enemyBombsForRound(3))
+        assertEquals(3, BombRules.enemyBombsForRound(3))
         // Round four: all three bombs, three times each.
         for (kind in BombKind.entries) {
             assertEquals(3, BombRules.enemyBombUsesForRound(4, kind))
@@ -91,12 +108,13 @@ class RoundRulesTest {
         assertEquals(2, BombRules.enemyBombUsesForRound(5, BombKind.TIMER, 5))
         // Rounds one and two have no bombs.
         assertEquals(0, BombRules.enemyBombsForRound(1))
-        assertEquals(0, BombRules.enemyBombsForRound(2))
+        assertEquals(2, BombRules.enemyBombsForRound(2))
     }
 
     @Test
     fun theEnemyPicksTheBombHeStillOwns() {
-        assertNull(BombRules.chooseEnemyBomb(2, 9, 9, 9, 0.5f, Random(1)))
+        assertEquals(BombKind.GRENADE, BombRules.chooseEnemyBomb(2, 9, 9, 9, 0.5f, Random(1)))
+        assertNull(BombRules.chooseEnemyBomb(2, 0, 9, 9, 0.5f, Random(1)))
         assertNull(BombRules.chooseEnemyBomb(3, 0, 0, 0, 0.5f, Random(1)))
         // Only grenades left: the grenade is thrown.
         assertEquals(
@@ -134,10 +152,12 @@ class RoundRulesTest {
 
     @Test
     fun roundFiveHasSevenMinutesAndTheLimitIsOnlyThere() {
-        assertEquals(7L * 60L * 1_000L, Progression.FINAL_ROUND_TIME_LIMIT_MS)
+        assertEquals(7L * 60L * 1_000L, Progression.ROUND_FIVE_TIME_LIMIT_MS)
+        assertEquals(5L * 60L * 1_000L, Progression.FINAL_ROUND_TIME_LIMIT_MS)
         assertEquals(0L, Progression.roundTimeLimitMs(1))
         assertEquals(0L, Progression.roundTimeLimitMs(4))
-        assertEquals(Progression.FINAL_ROUND_TIME_LIMIT_MS, Progression.roundTimeLimitMs(5))
+        assertEquals(Progression.ROUND_FIVE_TIME_LIMIT_MS, Progression.roundTimeLimitMs(5))
+        assertEquals(Progression.FINAL_ROUND_TIME_LIMIT_MS, Progression.roundTimeLimitMs(6))
 
         assertFalse(GameState(round = 4).timeLimitActive)
         val state = GameState(

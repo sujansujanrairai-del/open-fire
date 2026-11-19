@@ -279,10 +279,10 @@ fun ShopScreen(viewModel: GameViewModel) {
             BombPowerRow(
                 viewModel = viewModel,
                 inventory = inventory,
-                unlocked = stats.completedRounds >= BombRules.FIRST_BOMB_ROUND - 1,
-                unlockMessage = if (stats.completedRounds < BombRules.FIRST_BOMB_ROUND - 1) {
+                unlocked = stats.completedRounds >= Weapon.ATOM_BOMB.requiredCompletedRounds,
+                unlockMessage = if (stats.completedRounds < Weapon.ATOM_BOMB.requiredCompletedRounds) {
                     viewModel.t(
-                        Shop.unlockReasonKey(BombRules.FIRST_BOMB_ROUND - 1)
+                        Shop.unlockReasonKey(Weapon.ATOM_BOMB.requiredCompletedRounds)
                     )
                 } else {
                     null

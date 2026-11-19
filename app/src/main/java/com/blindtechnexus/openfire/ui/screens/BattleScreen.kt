@@ -26,7 +26,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blindtechnexus.openfire.model.BattleMenuItem
-import com.blindtechnexus.openfire.model.BombRules
+import com.blindtechnexus.openfire.model.Weapon
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.HitZone
@@ -200,7 +200,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                 // From round three Robert carries bombs: the HUD always shows
                 // exactly how many grenades, atom bombs, timer bombs and
                 // anti-bomb explosives he still owns (unlimited reads as ∞).
-                if (gameState.round >= BombRules.FIRST_BOMB_ROUND) {
+                if (gameState.round >= Weapon.ATOM_BOMB.unlockRound) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "${viewModel.t("gunGrenade")} ${enemyCount(gameState.robertGrenades)} | " +
