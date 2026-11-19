@@ -74,6 +74,9 @@ object SoundLibrary {
         "timerBomb" to "explosion.ogg",
         "levelComplete" to "level-complete.ogg",
         "roundComplete" to "round-complete.ogg",
+        "shockKnockback" to "shock-knockback.ogg",
+        "enemyCarEngine" to "car-engine.ogg",
+        "enemyCarMoving" to "car-moving.ogg",
         "carBrake" to "car-brake.ogg",
         "carStart" to "car-start.ogg",
         "carEngine" to "car-engine.ogg",
@@ -113,7 +116,7 @@ object SoundLibrary {
      * They are held loops of the player, but they are never cut by a weapon
      * clean-up, only by [CAR_KEYS].
      */
-    val CAR_IDLE_LOOP_KEYS: Set<String> = setOf("carEngine", "electricShock")
+    val CAR_IDLE_LOOP_KEYS: Set<String> = setOf("carEngine", "electricShock", "enemyCarEngine", "enemyCarMoving")
 
     /** Footstep tracks: each fighter walks on his own loop of the same take. */
     val WALK_KEYS: Set<String> = setOf("walk", "playerWalk", "enemyWalk")
@@ -141,7 +144,7 @@ object SoundLibrary {
     /** Keys of the car sounds. They stop together when the battle ends. */
     val CAR_KEYS: Set<String> = setOf(
         "carBrake", "carStart", "carEngine", "carMoving",
-        "carDoorOpen", "carDoorClose", "carCrash"
+        "carDoorOpen", "carDoorClose", "carCrash", "enemyCarEngine", "enemyCarMoving"
     )
 
     /** The projectiles that get the approach cue. */

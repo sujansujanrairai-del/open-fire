@@ -71,10 +71,10 @@ class RoundRulesTest {
         }
         assertEquals(9, BombRules.enemyBombsForRound(4))
         // Round five stock is finite and varies by level.
-        assertEquals(2, BombRules.enemyBombsForRound(5, 1))
-        assertEquals(4, BombRules.enemyBombsForRound(5, 2))
+        assertEquals(3, BombRules.enemyBombsForRound(5, 1))
+        assertEquals(5, BombRules.enemyBombsForRound(5, 2))
         assertEquals(5, BombRules.enemyBombsForRound(5, 3))
-        assertEquals(5, BombRules.enemyBombsForRound(5, 4))
+        assertEquals(6, BombRules.enemyBombsForRound(5, 4))
         assertEquals(6, BombRules.enemyBombsForRound(5, 5))
         for (level in 1..5) {
             assertEquals(
@@ -82,10 +82,10 @@ class RoundRulesTest {
                 BombKind.entries.sumOf { BombRules.enemyBombUsesForRound(5, it, level) }
             )
         }
-        assertEquals(2, BombRules.enemyBombUsesForRound(5, BombKind.GRENADE, 1))
+        assertEquals(3, BombRules.enemyBombUsesForRound(5, BombKind.GRENADE, 1))
         assertEquals(0, BombRules.enemyBombUsesForRound(5, BombKind.ATOM, 1))
         assertEquals(2, BombRules.enemyBombUsesForRound(5, BombKind.GRENADE, 2))
-        assertEquals(1, BombRules.enemyBombUsesForRound(5, BombKind.ATOM, 2))
+        assertEquals(2, BombRules.enemyBombUsesForRound(5, BombKind.ATOM, 2))
         assertEquals(1, BombRules.enemyBombUsesForRound(5, BombKind.TIMER, 2))
         assertEquals(2, BombRules.enemyBombUsesForRound(5, BombKind.ATOM, 3))
         assertEquals(2, BombRules.enemyBombUsesForRound(5, BombKind.TIMER, 5))
@@ -118,18 +118,18 @@ class RoundRulesTest {
         assertEquals(0, MissileRules.enemyMissilePowersForRound(3))
         assertEquals(1, MissileRules.enemyMissilePowersForRound(4))
         assertEquals(1, MissileRules.enemyMissilePowersForRound(5, 1))
-        assertEquals(2, MissileRules.enemyMissilePowersForRound(5, 5))
+        assertEquals(7, MissileRules.enemyMissilePowersForRound(5, 5))
         assertEquals(0, MissileRules.antiMissilesForRound(3))
         assertEquals(2, MissileRules.antiMissilesForRound(4))
         assertEquals(1, MissileRules.antiMissilesForRound(5, 1))
-        assertEquals(2, MissileRules.antiMissilesForRound(5, 5))
+        assertEquals(1, MissileRules.antiMissilesForRound(5, 5))
         assertEquals(2, BombRules.antiBombsForRound(3))
         assertEquals(3, BombRules.antiBombsForRound(4))
-        assertEquals(2, BombRules.antiBombsForRound(5, 1))
-        assertEquals(2, BombRules.antiBombsForRound(5, 2))
-        assertEquals(1, BombRules.antiBombsForRound(5, 3))
-        assertEquals(3, BombRules.antiBombsForRound(5, 4))
-        assertEquals(5, BombRules.antiBombsForRound(5, 5))
+        assertEquals(3, BombRules.antiBombsForRound(5, 1))
+        assertEquals(4, BombRules.antiBombsForRound(5, 2))
+        assertEquals(5, BombRules.antiBombsForRound(5, 3))
+        assertEquals(6, BombRules.antiBombsForRound(5, 4))
+        assertEquals(7, BombRules.antiBombsForRound(5, 5))
     }
 
     @Test

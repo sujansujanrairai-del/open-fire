@@ -59,6 +59,9 @@ object SoundDurations {
      * chain then starts both sounds together.
      */
     fun forKey(key: String): Long = when (key) {
+        "carDoorOpen" -> 2_444L
+        "carDoorClose" -> 1_320L
+        "carStart" -> 3_410L
         "missile" -> MISSILE_MS
         "explosion", "timerBomb" -> EXPLOSION_MS
         "atomBomb" -> ATOM_BOMB_MS
@@ -218,10 +221,11 @@ object BombRules {
             3 -> 2
             4 -> 3
             5 -> when (level.coerceIn(1, Progression.LEVELS_PER_ROUND)) {
-                1, 2 -> 2
-                3 -> 1
-                4 -> 3
-                else -> 5
+                1 -> 3
+                2 -> 4
+                3 -> 5
+                4 -> 6
+                else -> 7
             }
             else -> 0
         }
@@ -245,12 +249,8 @@ object BombRules {
             5 -> {
                 val safeLevel = level.coerceIn(1, Progression.LEVELS_PER_ROUND)
                 when (safeLevel) {
-                    1 -> if (kind == BombKind.GRENADE) 2 else 0
-                    2 -> when (kind) {
-                        BombKind.GRENADE -> 2
-                        BombKind.ATOM, BombKind.TIMER -> 1
-                    }
-                    3, 4 -> when (kind) {
+                    1 -> if (kind == BombKind.GRENADE) 3 else 0
+                    2, 3 -> when (kind) {
                         BombKind.GRENADE, BombKind.ATOM -> 2
                         BombKind.TIMER -> 1
                     }
@@ -262,18 +262,7 @@ object BombRules {
 
     /** Total bombs Robert may throw; round five stocks vary by level. */
     fun enemyBombsForRound(round: Int, level: Int = 1): Int =
-        when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
-            3 -> 2
-            4 -> 9
-            5 -> when (level.coerceIn(1, Progression.LEVELS_PER_ROUND)) {
-                1 -> 2
-                2 -> 4
-                3 -> 5
-                4 -> 5
-                else -> 6
-            }
-            else -> 0
-        }
+        BombKind.entries.sumOf { enemyBombUsesForRound(round, it, level) }
 
     /** True when bombs are part of this round at all. */
     fun bombsUnlocked(round: Int): Boolean =

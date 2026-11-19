@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.blindtechnexus.openfire.audio.AudioManager
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DefenceItem
+import com.blindtechnexus.openfire.model.Arena
 import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.Inventory
 import com.blindtechnexus.openfire.model.Screen
@@ -39,7 +40,7 @@ class EnemyBattleIntegrationTest {
     }
 
     @Test
-    fun shockIsADuelInTheCloseBandAndRobertAnswersOrFlees() {
+    fun shockDamagesRobertInTheCloseBandWithOrWithoutACounter() {
         val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
         try {
             val state = flow<GameState>(vm, "_gameState")
@@ -67,7 +68,7 @@ class EnemyBattleIntegrationTest {
                 "inside the 40 to 100 band the shock hum must play",
                 vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_PLAYER)
             )
-            // The enemy answered this shock, either with a duel or by fleeing.
+            // A counter changes the damage rate, not whether the hold stays active.
             val duel = state.value.robertShocking
             val lastTick = GameViewModel::class.java.getDeclaredField("shockLastTickMs").apply {
                 isAccessible = true
@@ -111,6 +112,36 @@ class EnemyBattleIntegrationTest {
             assertFalse(state.value.robertShocking)
             assertFalse(state.value.electricShockInPlay)
             assertFalse(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_ENEMY))
+        } finally {
+            invoke(vm, "stopTimers")
+            vm.onAppPaused()
+            vm.audioManager.release()
+            vm.ttsManager.shutdown()
+        }
+    }
+
+    @Test
+    fun releasingShockThrowsRobertAndBlocksImmediateCounterfire() {
+        val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
+        try {
+            val state = flow<GameState>(vm, "_gameState")
+            flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            state.value = GameState(
+                round = 2, distance = 5f,
+                playerX = 1f, playerY = 1f, robertX = 1f, robertY = 6f,
+                weapons = listOf(Weapon.ELECTRIC_SHOCK.id), ammo = listOf(0)
+            )
+            vm.startHoldFire()
+            invoke(vm, "robertStep")
+            assertTrue(state.value.shockHolding)
+            assertEquals(5f, state.value.distance, 0.001f)
+            vm.stopHoldFire()
+            assertEquals("shockReturn", state.value.robertState)
+            assertEquals(Arena.SIZE, state.value.robertX, 0.001f)
+            assertEquals(Arena.SIZE, state.value.robertY, 0.001f)
+            val shots = state.value.robertShots
+            invoke(vm, "robertAttack")
+            assertEquals(shots, state.value.robertShots)
         } finally {
             invoke(vm, "stopTimers")
             vm.onAppPaused()
@@ -245,6 +276,50 @@ class EnemyBattleIntegrationTest {
                 invoke(vm, "robertAttack")
                 assertEquals(index + 1, state.value.robertShots)
             }
+        } finally {
+            invoke(vm, "stopTimers")
+            vm.onAppPaused()
+            vm.audioManager.release()
+            vm.ttsManager.shutdown()
+        }
+    }
+
+    @Test
+    fun enemyReturnsToGunfireBetweenExplosiveAttacks() {
+        val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
+        try {
+            val state = flow<GameState>(vm, "_gameState")
+            flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            state.value = GameState(
+                round = 5, distance = 5f, robertHp = 640, robertMaxHp = 1000,
+                robertShots = 5, robertBombs = 2, robertGrenades = 2,
+                robertWeapons = listOf(Weapon.ASSAULT_GUN.id), robertAmmo = listOf(20),
+                robertDamaged = listOf(false), coverActive = true
+            )
+            val nextShot = GameViewModel::class.java.getDeclaredField("robertNextShotAtMs")
+                .apply { isAccessible = true }
+            val specialReady = GameViewModel::class.java.getDeclaredField("robertSpecialReadyAtMs")
+                .apply { isAccessible = true }
+            invoke(vm, "robertAttack")
+            assertTrue(state.value.bombInFlight)
+            assertEquals(1, state.value.robertBombs)
+            invoke(vm, "robertAttack")
+            assertEquals(6, state.value.robertShots)
+
+            state.value = state.value.copy(bombInFlight = false, robertHp = 620)
+            invoke(vm, "robertAttack")
+            assertFalse(state.value.bombInFlight)
+            assertEquals(7, state.value.robertShots)
+            assertEquals(1, state.value.robertBombs)
+
+            nextShot.setLong(vm, 0L)
+            invoke(vm, "robertAttack")
+            assertFalse(state.value.bombInFlight)
+            nextShot.setLong(vm, 0L)
+            specialReady.setLong(vm, 0L)
+            invoke(vm, "robertAttack")
+            assertTrue(state.value.bombInFlight)
+            assertEquals(0, state.value.robertBombs)
         } finally {
             invoke(vm, "stopTimers")
             vm.onAppPaused()

@@ -75,8 +75,8 @@ object CarRules {
     /** The robot enters its own bulletproof car once its health drops below this. */
     const val ROBOT_CAR_TRIGGER_HP = 400
 
-    /** The robot is granted a bulletproof car from this round (round five). */
-    const val ROBOT_CAR_ROUND = 5
+    /** The robot is granted a bulletproof car from this round (round four). */
+    const val ROBOT_CAR_ROUND = 4
 
     /** Two consecutive bomb hits destroy the car; one missile destroys it. */
     const val BOMB_HITS_TO_DESTROY = 2

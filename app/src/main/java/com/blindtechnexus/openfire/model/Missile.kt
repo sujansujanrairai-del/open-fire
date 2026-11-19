@@ -184,13 +184,7 @@ object MissileRules {
     fun antiMissilesForRound(round: Int, level: Int = 1): Int =
         when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
             4 -> 2
-            5 -> when (level.coerceIn(1, Progression.LEVELS_PER_ROUND)) {
-                1 -> 1
-                2 -> 0
-                3 -> 1
-                4 -> 1
-                else -> 2
-            }
+            5 -> 1
             else -> 0
         }
 
@@ -199,8 +193,11 @@ object MissileRules {
         when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
             4 -> 1
             5 -> when (level.coerceIn(1, Progression.LEVELS_PER_ROUND)) {
-                1, 2 -> 1
-                else -> 2
+                1 -> 1
+                2 -> 2
+                3 -> 4
+                4 -> 6
+                else -> 7
             }
             else -> 0
         }

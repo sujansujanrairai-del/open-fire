@@ -1224,11 +1224,11 @@ object RobertRules {
     // Bulletproof car and electric shock: the robot's own autonomy.
     // ------------------------------------------------------------------
 
-    /** True when the robot is granted a bulletproof car in this round (round five). */
+    /** True when the robot is granted a bulletproof car in this round (round four). */
     fun robotCarGranted(round: Int): Boolean = CarRules.robotHasCar(round)
 
     /**
-     * True when the robot climbs into its bulletproof car: from round five,
+     * True when the robot climbs into its bulletproof car: from round four,
      * once its health falls below the 400 line and the car is not in use yet.
      */
     fun shouldEnterCar(round: Int, robertHp: Int, robertInCar: Boolean): Boolean =

@@ -909,7 +909,8 @@ class AudioManager(private val context: Context) {
         slot.left = (base * pan.first).coerceIn(0f, 1f)
         slot.right = (base * pan.second).coerceIn(0f, 1f)
         slot.spatialPosition = BinauralPosition.fromCoordinates(lateralOffset, -depthOffset)
-        mixer.updateLoop(key = "enemyWalk", volume = base, rate = slot.rate, place = place)
+        // The mixer applies spatial attenuation itself; do not apply that curve twice.
+        mixer.updateLoop(key = "enemyWalk", volume = 1f, rate = slot.rate, place = place)
     }
 
     /**
@@ -919,10 +920,11 @@ class AudioManager(private val context: Context) {
      */
     fun updatePlayerWalkAudio(
         speedMps: Float = RunPressure.BASE_SPEED_MPS,
-        volumeGain: Float = 1.0f
+        volumeGain: Float = 1.0f,
+        playbackRate: Float = VolumeMixer.walkRate(speedMps)
     ) {
         val base = VolumeMixer.walkLevel(1f, distanceGain = 1f, speedGain = volumeGain)
-        updateWalkingTrack(key = "playerWalk", volume = base, speedMps = speedMps, place = null)
+        updateWalkingTrack(key = "playerWalk", volume = base, speedMps = speedMps, place = null, playbackRate = playbackRate)
     }
 
     private fun updateWalkingTrack(
@@ -930,13 +932,14 @@ class AudioManager(private val context: Context) {
         volume: Float,
         speedMps: Float,
         place: SpatialPlace?,
-        rateScale: Float = 1f
+        rateScale: Float = 1f,
+        playbackRate: Float = VolumeMixer.walkRate(speedMps) * rateScale
     ) {
         if (released) return
         // The steps follow the real speed smoothly, inside the natural window.
         // The three-level ladder of footstepRate() stays available for a caller
         // that wants a hard step between two paces.
-        val rate = VolumeMixer.walkRate(speedMps) * rateScale
+        val rate = playbackRate
         startHeldLoop(
             key = key,
             volume = volume.coerceIn(0f, 1f),
