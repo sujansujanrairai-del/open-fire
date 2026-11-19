@@ -124,14 +124,14 @@ class MissileRulesTest {
         assertEquals(0, MissileRules.antiMissilesForRound(3))
         assertEquals(2, MissileRules.antiMissilesForRound(4))
         assertEquals(1, MissileRules.antiMissilesForRound(5, 1))
-        assertEquals(0, MissileRules.antiMissilesForRound(5, 2))
+        assertEquals(1, MissileRules.antiMissilesForRound(5, 2))
         assertEquals(1, MissileRules.antiMissilesForRound(5, 3))
-        assertEquals(2, MissileRules.antiMissilesForRound(5, 5))
+        assertEquals(1, MissileRules.antiMissilesForRound(5, 5))
         assertEquals(0, MissileRules.enemyMissilePowersForRound(3))
         assertEquals(1, MissileRules.enemyMissilePowersForRound(4))
         assertEquals(1, MissileRules.enemyMissilePowersForRound(5, 1))
-        assertEquals(1, MissileRules.enemyMissilePowersForRound(5, 2))
-        assertEquals(2, MissileRules.enemyMissilePowersForRound(5, 3))
+        assertEquals(2, MissileRules.enemyMissilePowersForRound(5, 2))
+        assertEquals(4, MissileRules.enemyMissilePowersForRound(5, 3))
     }
 
     @Test

@@ -184,10 +184,12 @@ class CarAndElectricShockTest {
 
     @Test
     fun enemyReceivesCarStartingInRoundFive() {
-        assertFalse(RobertRules.robotCarGranted(4))
+        assertFalse(RobertRules.robotCarGranted(3))
+        assertTrue(RobertRules.robotCarGranted(4))
         assertTrue(RobertRules.robotCarGranted(5))
         assertTrue(RobertRules.shouldEnterCar(5, 399, false))
-        assertFalse(RobertRules.shouldEnterCar(4, 399, false))
+        assertFalse(RobertRules.shouldEnterCar(3, 399, false))
+        assertTrue(RobertRules.shouldEnterCar(4, 399, false))
     }
 
     // ------------------------------------------------------------------

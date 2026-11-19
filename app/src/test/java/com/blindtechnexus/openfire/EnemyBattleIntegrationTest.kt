@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.blindtechnexus.openfire.audio.AudioManager
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DefenceItem
+import com.blindtechnexus.openfire.model.Arena
 import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.Inventory
 import com.blindtechnexus.openfire.model.Screen
@@ -116,6 +117,34 @@ class EnemyBattleIntegrationTest {
             vm.onAppPaused()
             vm.audioManager.release()
             vm.ttsManager.shutdown()
+        }
+    }
+
+    @Test
+    fun releasingShockThrowsRobertAndBlocksImmediateCounterfire() {
+        val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
+        try {
+            val state = flow<GameState>(vm, "_gameState")
+            flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            state.value = GameState(
+                round = 2, distance = 5f,
+                playerX = 1f, playerY = 1f, robertX = 1f, robertY = 6f,
+                weapons = listOf(Weapon.ELECTRIC_SHOCK.id), ammo = listOf(0)
+            )
+            vm.startHoldFire()
+            invoke(vm, "robertStep")
+            assertTrue(state.value.shockHolding)
+            assertEquals(5f, state.value.distance, 0.001f)
+            vm.stopHoldFire()
+            assertEquals("shockReturn", state.value.robertState)
+            assertEquals(Arena.SIZE, state.value.robertX, 0.001f)
+            assertEquals(Arena.SIZE, state.value.robertY, 0.001f)
+            val shots = state.value.robertShots
+            invoke(vm, "robertAttack")
+            assertEquals(shots, state.value.robertShots)
+        } finally {
+            invoke(vm, "stopTimers")
+            vm.onAppPaused()
         }
     }
 
