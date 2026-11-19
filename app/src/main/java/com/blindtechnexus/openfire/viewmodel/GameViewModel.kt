@@ -6491,17 +6491,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // kept for the next tick so a whole battle never drifts.
         val drainMs = playerShockDamageMs
         playerShockDamageMs %= 1_000L
-        // The solo drain is a PERCENTAGE of the victim's maximum health - 50%
-        // a second inside the 40%-100% band - never a flat number of health
-        // points: the old "60 health every second" made the shock weaker in
-        // every later round and is gone. The duel keeps its own symmetric
-        // window: 10% of maximum health every two seconds for both fighters.
+        // The solo drain takes a share of the health the victim STILL has -
+        // half of it every second inside the 40%-100% band - exactly the way a
+        // bomb takes a share of the remaining health. Two earlier laws are
+        // both gone: the flat "60 health every second" cooled the shock in
+        // every later round, and draining half of the MAXIMUM health killed
+        // any fighter in two seconds, which made the five-second push, the
+        // seven- and nine-second barrier breaks and the eleven-second cap
+        // unreachable. The halving compounds per whole second, so a long
+        // battle-clock catch-up drains exactly what the same seconds would
+        // have drained one by one ([ElectricShockRules.soloDrain]).
+        //
         // In a duel BOTH fighters drain by the same law and both are charged
         // on the same two-second window. The old code drained Robert by a
         // percentage but the player by a flat 10 health points, so a duel in
         // round five hurt the 2600-health player ten times less than it hurt
         // Robert; that is gone.
-        // `var`: the bulletproof-car shield below zeroes the player's share.
+        // The duel is charged in whole two-second windows, so a partial window
+        // pays nothing and the drain can never drift between ticks.
         duelShockDamageMs = if (duel) duelShockDamageMs + dtMs else 0L
         val duelWindows = duelShockDamageMs / ElectricShockRules.DUEL_WINDOW_MS
         duelShockDamageMs %= ElectricShockRules.DUEL_WINDOW_MS
@@ -6515,11 +6522,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         var robertLoss = if (duel) {
             robertLossInDuel
         } else {
-            ElectricShockRules.damageFor(
-                live.robertMaxHp,
-                ElectricShockRules.PLAYER_CLOSE_PERCENT_PER_SECOND,
-                drainMs
-            ).roundToInt()
+            ElectricShockRules.soloDrain(live.robertHp, drainMs)
         }
         if (!duel && live.shockHolding && robertLoss < live.robertHp) respondToPlayerShock()
         if (live.shockHolding && burning) shockPushHeldMs += dtMs

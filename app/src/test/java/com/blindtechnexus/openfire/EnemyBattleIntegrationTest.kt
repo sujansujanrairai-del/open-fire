@@ -50,9 +50,13 @@ class EnemyBattleIntegrationTest {
         try {
             val state = flow<GameState>(vm, "_gameState")
             flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            // A big, healthy bar: the solo shock takes a share of what the
+            // victim still has, so Robert must stay alive through the full
+            // five continuous seconds the push needs.
             state.value = GameState(
                 round = 1, distance = 5f,
-                playerHp = 5000, playerMaxHp = 5000, robertHp = 5000, robertMaxHp = 5000,
+                playerHp = 100_000, playerMaxHp = 100_000,
+                robertHp = 100_000, robertMaxHp = 100_000,
                 weapons = listOf(Weapon.ELECTRIC_SHOCK.id), ammo = listOf(0)
             )
             vm.startHoldFire()
@@ -307,7 +311,10 @@ class EnemyBattleIntegrationTest {
             GameViewModel::class.java.getDeclaredField("playerShockBreakMs").apply { isAccessible = true }
                 .setLong(vm, 8_000L)
             invoke(vm, "shockTick")
-            assertEquals(940, state.value.robertHp)
+            // One second of the solo shock takes half of what Robert still
+            // has: 1000 -> 500, never a flat number and never half of his
+            // MAXIMUM (which would kill him in two seconds).
+            assertEquals(500, state.value.robertHp)
             assertFalse("the final interval must count for breaking the wall", state.value.robertGlueWallActive)
             assertFalse(state.value.shockHolding)
             assertFalse(vm.audioManager.isWeaponLoopActive("magicalSound", AudioManager.LOOP_OWNER_PLAYER))

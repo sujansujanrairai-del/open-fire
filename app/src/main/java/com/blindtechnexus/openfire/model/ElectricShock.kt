@@ -8,17 +8,18 @@ import kotlin.math.roundToInt
  * Two situations exist, and they are deliberately described by two different
  * functions so no caller can mix them up:
  *
- *  - **Alone** ([shockPercentPerSecond]) the shock drains the whole proximity
- *    ladder of the game: 50% of maximum health per second at 40% to 100%
- *    proximity (the only band in which the shock works at all) and 10% per
- *    second outside it.
+ *  - **Alone** ([soloDrain]) the shock halves the health the victim STILL has
+ *    every second, for as long as the hold lasts at 40% to 100% proximity
+ *    (the only band in which the shock works at all); outside the band it
+ *    neither sounds nor hurts, and [PLAYER_FAR_SHARE_PER_SECOND] is only the
+ *    rate a caller reads when it asks for one without a band.
  *  - **When both fighters shock at once** ([duelPercentPerSecond]) the fight
  *    turns into a duel of colliding shocks. Both fighters lose exactly 10% of
  *    their maximum health every [DUEL_WINDOW_MS] (two seconds), so the duel is
  *    perfectly symmetric and the fighter with the weaker health bar loses
- *    first. The single-striker 50% rule is the whole law of a solo shock: the
- *    old flat "60 health points every second" is gone, so the drain follows
- *    the victim's own health bar in every round and at every level.
+ *    first. The single-striker halving rule is the whole law of a solo shock:
+ *    the old flat "60 health points every second" is gone, so the drain
+ *    follows the victim's own health bar in every round and at every level.
  *
  * The enemy may either counter the player's shock ([RobertRules.shouldCounterShock])
  * or flee out of it ([RobertRules.shouldFleeShock]); the battle engine rolls
@@ -34,11 +35,63 @@ object ElectricShockRules {
     /** The robot answers after five seconds when a shock is detected. */
     const val COUNTER_DELAY_MS = 5_000L
 
-    /** Drain of the opponent's health per second while alone in the close band. */
-    const val PLAYER_CLOSE_PERCENT_PER_SECOND = 50f
+    /**
+     * Share of the victim's REMAINING health the solo shock takes each second
+     * inside the close band.
+     *
+     * The share is taken from what the victim still has, exactly like a bomb
+     * blast ([BombRules.blastPercent]), not from their maximum. That is what
+     * makes the rest of the shock law possible at all: draining half of the
+     * MAXIMUM health per second kills any fighter in two seconds whatever the
+     * round, so the five-second missile push, the seven-second cover break,
+     * the nine-second gloo-wall break and the eleven-second use cap would all
+     * be unreachable. Halving the remaining health keeps the promised "half
+     * every second" while every one of those milestones stays reachable.
+     */
+    const val PLAYER_CLOSE_SHARE_PER_SECOND = 0.5f
 
-    /** Drain of the opponent's health per second while alone outside the close band. */
-    const val PLAYER_FAR_PERCENT_PER_SECOND = 10f
+    /** Kept as the spoken percentage of [PLAYER_CLOSE_SHARE_PER_SECOND]. */
+    const val PLAYER_CLOSE_PERCENT_PER_SECOND = PLAYER_CLOSE_SHARE_PER_SECOND * 100f
+
+    /**
+     * Health the solo shock takes from [remainingHp] in [elapsedMs].
+     *
+     * The halving COMPOUNDS, once per whole second, exactly as the guide
+     * describes it ("every second it halves the health the victim still
+     * has"). This is what makes the drain independent of tick size: five
+     * one-second calls and one five-second call take exactly the same health,
+     * so a long battle-clock catch-up can never one-shot a victim the way a
+     * single linear application of the share would.
+     *
+     * Each second takes the share of what is left, rounded UP so the shock
+     * always really bites, and never more than the victim still has.
+     */
+    fun soloDrain(remainingHp: Int, elapsedMs: Long): Int {
+        if (remainingHp <= 0 || elapsedMs <= 0L) return 0
+        val seconds = (elapsedMs / 1_000L).toInt()
+        if (seconds <= 0) return 0
+        var left = remainingHp
+        repeat(seconds) {
+            if (left <= 0) return@repeat
+            val bite = kotlin.math.ceil(left * PLAYER_CLOSE_SHARE_PER_SECOND)
+                .toInt()
+                .coerceAtLeast(1)
+            left = (left - bite).coerceAtLeast(0)
+        }
+        return remainingHp - left
+    }
+
+    /**
+     * Share of the remaining health per second the old far-band rule used.
+     * The shock only bites inside 40 to 100 percent proximity ([inCloseBand]),
+     * so nothing is ever drained outside the band; this is only the value a
+     * caller reads when it asks for a rate without a band, and it matches the
+     * old far-band percentage.
+     */
+    const val PLAYER_FAR_SHARE_PER_SECOND = 0.1f
+
+    /** Kept as the spoken percentage of [PLAYER_FAR_SHARE_PER_SECOND]. */
+    const val PLAYER_FAR_PERCENT_PER_SECOND = PLAYER_FAR_SHARE_PER_SECOND * 100f
 
     /** Health percentage both fighters lose in one window of a shock duel. */
     const val DUEL_PERCENT_PER_WINDOW = 10f
@@ -77,7 +130,7 @@ object ElectricShockRules {
 
     /**
      * Continuous shock needed to destroy a gloo wall. This must fit within one
-     * ten-second use; cover remains the quicker barrier to break.
+     * eleven-second use; cover remains the quicker barrier to break.
      */
     const val GLUE_WALL_BREAK_MS = 9_000L
 
@@ -94,7 +147,12 @@ object ElectricShockRules {
      */
     const val MIN_PAYABLE_DRAIN_HP = 1
 
-    /** Health the shock drains per second at [proximityPercent] while alone. */
+    /**
+     * Share of the health STILL LEFT that one second of a solo shock takes at
+     * [proximityPercent], as a percentage. Inside the close band this is half
+     * of what remains ([soloDrain] applies it); the value is only meaningful
+     * as that share, never as a slice of the victim's maximum health.
+     */
     fun playerDrainPercentPerSecond(proximityPercent: Float): Float =
         if (inCloseBand(proximityPercent)) {
             PLAYER_CLOSE_PERCENT_PER_SECOND

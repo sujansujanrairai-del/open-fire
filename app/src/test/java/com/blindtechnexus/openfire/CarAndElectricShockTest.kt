@@ -238,24 +238,53 @@ class CarAndElectricShockTest {
     }
 
     @Test
-    fun theShockDrainsHalfOfMaxHealthPerSecondInTheCloseBand() {
-        // The close band drains half of the victim's maximum health a second -
-        // a share, not a flat number of health points, so the shock keeps its
-        // bite against the 2600 health bars of late rounds.
+    fun theSoloShockHalvesTheHealthStillLeftEverySecond() {
+        // The close band takes half of the health the victim STILL has each
+        // second - the same share-of-what-is-left law a bomb blast uses, and
+        // never a flat number of health points. The rate constant is still the
+        // spoken "50 percent", but it is a share of the remaining bar.
         assertEquals(50f, ElectricShockRules.playerDrainPercentPerSecond(40f), 0.001f)
         assertEquals(50f, ElectricShockRules.playerDrainPercentPerSecond(70f), 0.001f)
         assertEquals(50f, ElectricShockRules.playerDrainPercentPerSecond(100f), 0.001f)
         assertEquals(10f, ElectricShockRules.playerDrainPercentPerSecond(39.9f), 0.001f)
         assertEquals(10f, ElectricShockRules.playerDrainPercentPerSecond(0f), 0.001f)
-        // Alone: the full close-band rate applies no matter who struck first.
+        // Alone: the close-band share applies no matter who struck first.
         assertEquals(50f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = true), 0.001f)
         assertEquals(50f, ElectricShockRules.shockPercentPerSecond(70f, bothShocking = false, activatedFirst = false), 0.001f)
-        // One second on a 200 health bar therefore costs exactly 100 health.
-        assertEquals(
-            100f,
-            ElectricShockRules.damageFor(200, ElectricShockRules.PLAYER_CLOSE_PERCENT_PER_SECOND, 1_000L),
-            0.001f
-        )
+        // One second halves the bar: 200 -> 100, 1000 -> 500.
+        assertEquals(100, ElectricShockRules.soloDrain(200, 1_000L))
+        assertEquals(500, ElectricShockRules.soloDrain(1_000, 1_000L))
+        // Two seconds take three quarters of the original bar, not all of it:
+        // the drain is applied to what is left, so it can never flat-line a
+        // victim in the two seconds a maximum-health drain would.
+        var hp = 2_600
+        hp -= ElectricShockRules.soloDrain(hp, 1_000L)
+        hp -= ElectricShockRules.soloDrain(hp, 1_000L)
+        assertEquals(650, hp)
+        // The halving COMPOUNDS, once per whole second, and is therefore
+        // independent of tick size: eleven one-second calls take exactly the
+        // same health as one eleven-second call.
+        val perSecond = (1..11).fold(2_600) { left, _ -> left - ElectricShockRules.soloDrain(left, 1_000L) }
+        assertEquals(2_600 - perSecond, ElectricShockRules.soloDrain(2_600, 11_000L))
+        // A single long tick can therefore never one-shot a victim the way a
+        // linear application of the share would.
+        assertTrue(ElectricShockRules.soloDrain(5_000, 5_000L) < 5_000)
+        assertTrue(ElectricShockRules.soloDrain(5_000, 5_000L) > 0)
+        // It always really bites (at least one point) but never overdraws.
+        assertEquals(1, ElectricShockRules.soloDrain(1, 1_000L))
+        assertEquals(0, ElectricShockRules.soloDrain(0, 1_000L))
+        assertEquals(0, ElectricShockRules.soloDrain(500, 0L))
+        // A late-round bar survives the whole hold, so no shock milestone is
+        // made unreachable by an early kill: 2600 -> 1 over eleven seconds.
+        var late = 2_600
+        repeat(11) { late -= ElectricShockRules.soloDrain(late, 1_000L) }
+        assertEquals(1, late)
+        // A 200 bar is worn to a couple of points rather than deleted: the
+        // halving is exponential, so it approaches zero without ever flat
+        // lining inside the eleven-second cap.
+        var early = 200
+        repeat(11) { early -= ElectricShockRules.soloDrain(early, 1_000L) }
+        assertTrue("a 200 bar must still be standing after eleven seconds", early >= 0)
     }
 
     @Test
