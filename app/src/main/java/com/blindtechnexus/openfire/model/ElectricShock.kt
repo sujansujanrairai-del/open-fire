@@ -24,8 +24,8 @@ object ElectricShockRules {
     /** Longest single use, in milliseconds. */
     const val MAX_USE_MS = 30_000L
 
-    /** The robot answers immediately when a shock is detected. */
-    const val COUNTER_DELAY_MS = 0L
+    /** The robot answers after five seconds when a shock is detected. */
+    const val COUNTER_DELAY_MS = 5_000L
 
     /** Drain of the opponent's health per second while alone in the close band. */
     const val PLAYER_CLOSE_PERCENT_PER_SECOND = 60f

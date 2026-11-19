@@ -277,6 +277,7 @@ class NativeMixer(context: Context) {
         handles[handle] = record
         if (handles.size > MAX_HANDLES) pruneHandles()
         withClip(file) { clipId ->
+            if (handles[handle] !== record) return@withClip
             val id = engine.play(
                 clipId = clipId,
                 key = key,
@@ -294,6 +295,7 @@ class NativeMixer(context: Context) {
                 delayMs = delayMs
             )
             record.voiceId = id
+            if (id > 0 && handles[handle] !== record) engine.stopVoice(id)
             if (id <= 0) handles.remove(handle, record)
         }
         return handle
@@ -540,6 +542,9 @@ class NativeMixer(context: Context) {
     /** Stops one sound key completely: its loops and its one-shots. */
     fun stopKey(key: String) {
         if (!available) return
+        for ((handle, record) in handles) {
+            if (record.key == key) handles.remove(handle, record)
+        }
         stopLoopsOfKey(key)
     }
 

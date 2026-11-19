@@ -449,7 +449,7 @@ class AudioManager(private val context: Context) {
             volume = effectiveBaseVolume(key, volume),
             rate = VolumeMixer.naturalRate(rate),
             place = place,
-            deadlineMs = 0,
+            deadlineMs = if (key == "parachute") 2_000 else 0,
             approachProximity = approach
         )
         if (SoundLibrary.isProjectile(key)) {
