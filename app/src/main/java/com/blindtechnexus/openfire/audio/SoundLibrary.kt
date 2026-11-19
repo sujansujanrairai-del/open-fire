@@ -15,6 +15,9 @@ package com.blindtechnexus.openfire.audio
  */
 object SoundLibrary {
 
+    /** The two centred clips played together when a shock throws Robert. */
+    val SHOCK_RELEASE_KEYS: List<String> = listOf("electricShock", "shockKnockback")
+
     /** Sound key -> asset file name, inside `assets/sounds`. */
     val SOUND_FILES: Map<String, String> = mapOf(
         "click" to "click.ogg",
@@ -74,7 +77,7 @@ object SoundLibrary {
         "timerBomb" to "explosion.ogg",
         "levelComplete" to "level-complete.ogg",
         "roundComplete" to "round-complete.ogg",
-        "shockKnockback" to "enemy-shock-throw.ogg",
+        "shockKnockback" to "enemy-throw-shock.ogg",
         "enemyCarEngine" to "car-engine.ogg",
         "enemyCarMoving" to "car-moving.ogg",
         "carBrake" to "car-brake.ogg",
@@ -138,7 +141,7 @@ object SoundLibrary {
         "m10", "ar15", "submachineGun", "ak47", "machineGun",
         "submachineGunShot", "ak47Shot", "machineGunShot",
         "knifeSwish", "knifeMiss", "swordGlide", "swordMiss",
-        "magicalSound", "electricShock"
+        "magicalSound", "electricShock", "shockKnockback"
     )
 
     /** Keys of the car sounds. They stop together when the battle ends. */
@@ -152,7 +155,11 @@ object SoundLibrary {
 
     /** Recordings that are genuinely stereo and keep their own image. */
     private val STEREO_RECORDINGS: Set<String> = setOf(
-        "music", "carMoving", "carEngine", "enemyCarMoving", "enemyCarEngine", "airplane", "airplaneEngine"
+        "music", "carMoving", "carEngine", "enemyCarMoving", "enemyCarEngine", "airplane", "airplaneEngine",
+        // These Ogg assets have two real channels. Preserve both for the
+        // player's centred guns and the mixed shock-release sounds.
+        "submachineGun", "submachineGunShot", "ak47", "ak47Shot", "machineGun", "machineGunShot",
+        "electricShock", "shockKnockback"
     )
 
     /**
@@ -193,6 +200,8 @@ object SoundLibrary {
         "submachine-gun.ogg",
         "machine-gun.ogg",
         "ak-47-gun.ogg",
+        "electric-shock.ogg",
+        "enemy-throw-shock.ogg",
         "walk.ogg",
         "gun-hit.ogg",
         "enemy-hit.ogg",

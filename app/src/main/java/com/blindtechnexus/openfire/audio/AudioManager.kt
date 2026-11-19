@@ -401,6 +401,12 @@ class AudioManager(private val context: Context) {
      */
     private fun placeOf(x: Float, z: Float): SpatialPlace = SpatialPlace.fromZ(x, z)
 
+    /** The player's automatic gun is in their hands, never at the target. */
+    private fun automaticWeaponPlace(key: String, owner: String, x: Float, z: Float): SpatialPlace? {
+        if (owner == LOOP_OWNER_PLAYER && key in AUTO_WEAPON_KEYS) return null
+        return if (x == 0f && z == 0f) null else placeOf(x, z)
+    }
+
     /** Where a source sits from its sideways offset and its forward distance. */
     private fun placeAhead(lateral: Float, forward: Float): SpatialPlace =
         SpatialPlace.fromOffset(lateral, forward)
@@ -489,6 +495,11 @@ class AudioManager(private val context: Context) {
         mixer.playOnce(key, volume = effectiveBaseVolume(key, volume), place = place)
     }
 
+    /** Prepare a group of clips without blocking the game thread. */
+    fun prepareSounds(keys: List<String>) {
+        if (!released) mixer.prepareSounds(keys)
+    }
+
     /** Plays several sounds at once, as one mix. */
     fun playMixed(
         keys: List<String>,
@@ -551,7 +562,7 @@ class AudioManager(private val context: Context) {
     ): Boolean {
         if (released || !SOUND_FILES.containsKey(key)) return false
         val burstMs = max(holdMs, MIN_BURST_MS).toInt()
-        val place = if (posX == 0f && posZ == 0f) null else placeOf(posX, posZ)
+        val place = automaticWeaponPlace(key, owner, posX, posZ)
         val handle = mixer.playOneShot(
             key = key,
             volume = effectiveBaseVolume(key, volume),
@@ -656,7 +667,7 @@ class AudioManager(private val context: Context) {
     ) {
         if (released) return
         val loopKey = holdKeyOf(key) ?: return
-        val place = if (posX == 0f && posZ == 0f) null else placeOf(posX, posZ)
+        val place = automaticWeaponPlace(loopKey, owner, posX, posZ)
         startHeldLoop(
             key = loopKey,
             volume = effectiveBaseVolume(loopKey, volume),
@@ -858,6 +869,8 @@ class AudioManager(private val context: Context) {
 
     /** Stops every weapon sound, both fighters and all held loops. */
     fun stopWeaponSounds() {
+        // A group still decoding must not start after leaving the battle.
+        mixer.cancelPendingMixes()
         stopWeaponLoops()
         for (key in WEAPON_SOUND_KEYS) mixer.stopKey(key)
     }

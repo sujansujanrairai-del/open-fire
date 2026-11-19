@@ -58,6 +58,13 @@ jobs:
       - name: Test release archive handling
         run: python3 -m unittest discover -s .github/scripts/tests -v
 
+      - name: Test native audio placement and mixing
+        shell: bash
+        run: |
+          g++ -std=c++17 -O2 -Wall -Wextra -Iapp/src/main/cpp/engine \
+            app/src/test/cpp/AudioSpatialTest.cpp -o "$RUNNER_TEMP/audio-spatial-test"
+          "$RUNNER_TEMP/audio-spatial-test"
+
       - name: Run unit tests
         shell: bash
         run: |

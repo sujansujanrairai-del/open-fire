@@ -1,32 +1,20 @@
 package com.blindtechnexus.openfire
 
 import com.blindtechnexus.openfire.model.Arena
+import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.ElectricShockRules
 import com.blindtechnexus.openfire.model.SkyLock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.hypot
 
-/**
- * The two rules that used to be one-sided.
- *
- *  - [SkyLock]: while a projectile is in the air **both** fighters are held,
- *    and the hold can never outlive any real flight.
- *  - [ElectricShockRules] knockback: the throw is bounded, always lands on a
- *    point that exists, and the way back is proportional to the distance the
- *    throw really created.
- */
+/** Projectile locks and the geometry and travel time of a shock throw. */
 class ProjectileLockAndShockThrowTest {
-
-    // ------------------------------------------------------------ sky lock
-
     @Test
     fun theClearSkyRuleHoldsBothFightersExactlyAlike() {
-        // No projectile: both may fire.
         assertFalse(SkyLock.blocksWeapons(missileInFlight = false, bombInFlight = false))
-        // Any projectile, of either owner, holds both fighters. This is the
-        // asymmetry the fix removes: the old check asked whose bomb it was.
         assertTrue(SkyLock.blocksWeapons(missileInFlight = true, bombInFlight = false))
         assertTrue(SkyLock.blocksWeapons(missileInFlight = false, bombInFlight = true))
         assertTrue(SkyLock.blocksWeapons(missileInFlight = true, bombInFlight = true))
@@ -38,7 +26,6 @@ class ProjectileLockAndShockThrowTest {
         assertFalse(SkyLock.expired(launch, launch + 1))
         assertFalse(SkyLock.expired(launch, launch + SkyLock.MAX_HOLD_MS))
         assertTrue(SkyLock.expired(launch, launch + SkyLock.MAX_HOLD_MS + 1))
-        // A clear sky (no launch time at all) is never "expired".
         assertFalse(SkyLock.expired(0L, 9_000_000L))
     }
 
@@ -50,80 +37,60 @@ class ProjectileLockAndShockThrowTest {
         assertEquals(0L, SkyLock.remainingMs(0L, 1L))
     }
 
-    // --------------------------------------------------------- shock throw
-
     @Test
-    fun theThrowIsBoundedAndLandsInsideTheArena() {
-        // The throw moves him away by a fixed step...
-        assertEquals(
-            ElectricShockRules.KNOCKBACK_M,
-            ElectricShockRules.knockbackTarget(0f) - 0f,
-            0.001f
-        )
-        assertEquals(
-            ElectricShockRules.KNOCKBACK_M,
-            ElectricShockRules.knockbackTarget(10f) - 10f,
-            0.001f
-        )
-        // ...but never past the ceiling of a single shock.
-        assertEquals(ElectricShockRules.KNOCKBACK_CEILING_M, ElectricShockRules.knockbackTarget(24f), 0.001f)
-        // ...and never outside the arena, whatever it is asked to do.
-        val far = ElectricShockRules.knockbackTarget(1_000f, Arena.SIZE)
-        assertTrue(far <= Arena.SIZE)
-        assertTrue(far <= ElectricShockRules.KNOCKBACK_CEILING_M)
-        assertTrue(ElectricShockRules.knockbackTarget(0f, 0f) >= 0f)
-    }
-
-    @Test
-    fun insideTheCeilingTheThrowOnlyEverMovesHimAway() {
-        var previous = -1f
-        var distance = 0f
-        while (distance <= ElectricShockRules.KNOCKBACK_CEILING_M) {
-            val target = ElectricShockRules.knockbackTarget(distance)
-            assertTrue(target >= distance)
-            assertTrue(target >= previous)
-            previous = target
-            distance += 0.5f
+    fun theThrowLandsAtTheFarthestCornerFromEveryPartOfTheArena() {
+        val corners = listOf(0f to 0f, 0f to Arena.SIZE, Arena.SIZE to 0f, Arena.SIZE to Arena.SIZE)
+        for (x in 0..25) for (y in 0..25) {
+            val px = x.toFloat()
+            val py = y.toFloat()
+            val (ex, ey) = ElectricShockRules.farthestLanding(px, py)
+            assertTrue((ex to ey) in corners)
+            val actual = hypot(px - ex, py - ey)
+            for ((cx, cy) in corners) {
+                assertTrue("($px,$py) -> ($ex,$ey) is not farthest", actual + 0.001f >= hypot(px - cx, py - cy))
+            }
+            // Even the centre's farthest corner is beyond all ordinary guns.
+            assertTrue(Combat.proximityOf(actual) < 40f)
         }
-        // Beyond the ceiling the throw is capped instead of pushing him out:
-        // an opponent already far away is not launched further by a shock.
-        assertEquals(
-            ElectricShockRules.KNOCKBACK_CEILING_M,
-            ElectricShockRules.knockbackTarget(20f),
-            0.001f
-        )
+        assertEquals(0f to 0f, ElectricShockRules.farthestLanding(Arena.SIZE / 2f, Arena.SIZE / 2f))
+        assertEquals(Arena.SIZE to 0f, ElectricShockRules.farthestLanding(0f, Arena.SIZE))
+        assertEquals(0f to 0f, ElectricShockRules.farthestLanding(Float.NaN, Float.POSITIVE_INFINITY))
     }
 
     @Test
-    fun theWayBackIsProportionalToTheThrow() {
-        // A short throw is answered in a couple of steps, the longest throw in
-        // a few more - and never in a walk back across the whole square.
-        assertEquals(1, ElectricShockRules.returnTicks(0f))
+    fun aCornerReturnMakesRealProgressOnEveryTickWithoutCrossingWalls() {
+        val players = listOf(0f to 0f, 1f to 24f, 12.5f to 12.5f, 25f to 25f)
+        for ((px, py) in players) {
+            var (x, y) = ElectricShockRules.farthestLanding(px, py)
+            val startDistance = hypot(px - x, py - y)
+            val expectedTicks = ElectricShockRules.returnTicks(startDistance)
+            var ticks = 0
+            while (hypot(px - x, py - y) > 0.001f && ticks < 100) {
+                val before = hypot(px - x, py - y)
+                val (nextX, nextY) = ElectricShockRules.returnPosition(px, py, x, y)
+                assertTrue(nextX in Arena.MIN..Arena.MAX && nextY in Arena.MIN..Arena.MAX)
+                val step = hypot(nextX - x, nextY - y)
+                assertTrue(step <= ElectricShockRules.RETURN_STEP_M + 0.001f)
+                assertTrue(hypot(px - nextX, py - nextY) < before)
+                x = nextX
+                y = nextY
+                ticks++
+            }
+            assertEquals(expectedTicks, ticks)
+            assertEquals(0f, hypot(px - x, py - y), 0.001f)
+        }
+    }
+
+    @Test
+    fun returnTimingUsesTheTrueDiagonalAndIsNotArtificiallyCapped() {
+        val diagonal = hypot(Arena.SIZE, Arena.SIZE)
+        assertEquals(0, ElectricShockRules.returnTicks(0f))
+        assertEquals(0, ElectricShockRules.returnTicks(2f, 5f))
         assertEquals(2, ElectricShockRules.returnTicks(2.5f))
         assertEquals(3, ElectricShockRules.returnTicks(3.5f))
-        assertTrue(ElectricShockRules.returnTicks(14f) <= 8)
-        assertTrue(
-            ElectricShockRules.returnTicks(14f) > ElectricShockRules.returnTicks(3.5f)
-        )
-        // The whole return stays inside a few seconds.
-        assertTrue(ElectricShockRules.returnTimeMs(14f) <= 8 * ElectricShockRules.RETURN_TICK_MS)
-        assertTrue(ElectricShockRules.returnTimeMs(14f) > 1_000L)
-        // Asking for a distance already reached still costs one step, never zero.
-        assertTrue(ElectricShockRules.returnTicks(0f, 5f) >= 1)
-    }
-
-    @Test
-    fun oneShockIsOneThrowNotAFlightAcrossTheArena() {
-        // Whatever distance the shock starts from, one use of it moves the
-        // opponent by exactly one bounded step: no sprint, no teleport.
-        var distance = 0f
-        while (distance <= Arena.SIZE) {
-            val after = ElectricShockRules.knockbackTarget(distance)
-            val moved = after - distance
-            assertTrue(moved <= ElectricShockRules.KNOCKBACK_M + 0.001f)
-            assertTrue(after <= ElectricShockRules.KNOCKBACK_CEILING_M)
-            if (distance <= ElectricShockRules.KNOCKBACK_CEILING_M) assertTrue(moved >= 0f)
-            distance += 1f
-        }
+        assertEquals(23, ElectricShockRules.returnTicks(diagonal))
+        assertEquals(6_900L, ElectricShockRules.returnTimeMs(diagonal))
+        assertEquals(0, ElectricShockRules.returnTicks(Float.NaN))
+        assertEquals(1f to 1f, ElectricShockRules.returnPosition(1f, 1f, 1f, 1f))
     }
 }

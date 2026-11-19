@@ -278,10 +278,10 @@ class CarAndElectricShockTest {
         // distinct continuous-shock durations for each barrier type.
         assertTrue(ElectricShockRules.inBreakBand(90f))
         assertFalse(ElectricShockRules.inBreakBand(89f))
-        assertEquals(15_000L, ElectricShockRules.barrierBreakDurationMs(isGlueWall = true))
+        assertEquals(9_000L, ElectricShockRules.barrierBreakDurationMs(isGlueWall = true))
         assertEquals(7_000L, ElectricShockRules.barrierBreakDurationMs(isGlueWall = false))
-        assertFalse(ElectricShockRules.barrierBreakReady(14_999L, isGlueWall = true))
-        assertTrue(ElectricShockRules.barrierBreakReady(15_000L, isGlueWall = true))
+        assertFalse(ElectricShockRules.barrierBreakReady(8_999L, isGlueWall = true))
+        assertTrue(ElectricShockRules.barrierBreakReady(9_000L, isGlueWall = true))
         assertFalse(ElectricShockRules.barrierBreakReady(6_999L, isGlueWall = false))
         assertTrue(ElectricShockRules.barrierBreakReady(7_000L, isGlueWall = false))
     }
@@ -325,10 +325,11 @@ class CarAndElectricShockTest {
     }
 
     @Test
-    fun aUseEndsAtThirtySeconds() {
-        assertFalse(ElectricShockRules.timeUp(29_999))
-        assertTrue(ElectricShockRules.timeUp(30_000))
-        assertEquals(30_000L, ElectricShockRules.MAX_USE_MS)
+    fun aUseEndsAtTenSeconds() {
+        assertFalse(ElectricShockRules.timeUp(9_999))
+        assertTrue(ElectricShockRules.timeUp(10_000))
+        assertEquals(10_000L, ElectricShockRules.MAX_USE_MS)
+        assertTrue(ElectricShockRules.GLUE_WALL_BREAK_MS < ElectricShockRules.MAX_USE_MS)
     }
 
     @Test

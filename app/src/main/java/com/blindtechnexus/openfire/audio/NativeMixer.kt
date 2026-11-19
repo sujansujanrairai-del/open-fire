@@ -112,6 +112,10 @@ class NativeMixer(context: Context) {
     /** Children born in [playOneShot] get a short, unique handle of their own. */
     private val nextHandle = AtomicInteger(1)
 
+    /** Invalidates a pending cold-cache mix when all audio is stopped. */
+    private val mixGeneration = AtomicInteger(0)
+    private val mixLock = Any()
+
     /** Live voices by handle, so a caller can retune or cut one sound. */
     private val handles = ConcurrentHashMap<Int, VoiceHandle>()
 
@@ -323,9 +327,39 @@ class NativeMixer(context: Context) {
         return playOneShot(key, volume = volume, place = place, owner = owner)
     }
 
-    /** Plays several sounds at the same time, at one place. */
+    /** Start decoding the clips needed by an upcoming interaction. */
+    fun prepareSounds(keys: List<String>) {
+        if (!available) return
+        keys.mapNotNull(SoundLibrary::fileOf).distinct().forEach(engine::requestClip)
+    }
+
+    /**
+     * Plays several sounds together at one place. On a cold cache, decode the
+     * whole group first on the request lane; otherwise the first clip could
+     * finish decoding and play long before the second. A failed decode does
+     * not prevent the other clips from being heard.
+     */
     fun playMixed(keys: List<String>, volume: Float = 1.0f, place: SpatialPlace? = null) {
-        for (key in keys) playOneShot(key, volume = volume, place = place)
+        if (!available) return
+        val clips = keys.mapNotNull { key -> SoundLibrary.fileOf(key)?.let { key to it } }
+        if (clips.isEmpty()) return
+        val generation = mixGeneration.get()
+        fun startReadyClips() {
+            synchronized(mixLock) {
+                if (!available || generation != mixGeneration.get()) return
+                for ((key, file) in clips) {
+                    if (engine.hasClip(file)) playOneShot(key, volume = volume, place = place)
+                }
+            }
+        }
+        if (clips.all { engine.hasClip(it.second) }) {
+            startReadyClips()
+        } else {
+            submitRequest {
+                clips.map { it.second }.distinct().forEach { ensureDecoded(it) }
+                startReadyClips()
+            }
+        }
     }
 
     /**
@@ -597,7 +631,13 @@ class NativeMixer(context: Context) {
         if (record.voiceId > 0) engine.stopVoice(record.voiceId)
     }
 
+    /** Prevent a still-decoding mix from starting after screen cleanup. */
+    fun cancelPendingMixes() {
+        synchronized(mixLock) { mixGeneration.incrementAndGet() }
+    }
+
     fun stopAll() {
+        cancelPendingMixes()
         if (!available) return
         pendingLoops.clear()
         loopVoices.clear()
@@ -639,6 +679,7 @@ class NativeMixer(context: Context) {
     fun diagnostics(): String = engine.diagnostics()
 
     fun release() {
+        cancelPendingMixes()
         pendingLoops.clear()
         loopVoices.clear()
         loopStartedAtMs.clear()

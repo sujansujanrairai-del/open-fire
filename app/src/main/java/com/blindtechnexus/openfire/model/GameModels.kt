@@ -225,10 +225,16 @@ data class GameState(
      */
     val robertLateral: Float = 0f,
     /**
-     * "advance", "retreat", "flank", "avoid" (a glue wall he cannot break),
-     * "missileFlee", "bombFlee" or "turnBack" (he detected a wall).
+     * "advance", "retreat", "flank", "avoid", "missileFlee", "bombFlee",
+     * "turnBack", or "shockReturn" (walking back from a shock throw).
      */
     val robertState: String = "advance",
+    /**
+     * A shock throw has not yet been followed by a return to fighting range.
+     * This survives temporary AI states such as projectile evasion or a lock,
+     * so those state changes cannot accidentally re-enable immediate fire.
+     */
+    val robertShockRecovering: Boolean = false,
     /** Ticks left of the turn-back run after Robert detected a wall. */
     val robertTurnBackTicks: Int = 0,
     /** Which way Robert comes around while flanking: +1 right, -1 left. */
