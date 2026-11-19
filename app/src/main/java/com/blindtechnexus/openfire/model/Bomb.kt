@@ -59,6 +59,9 @@ object SoundDurations {
      * chain then starts both sounds together.
      */
     fun forKey(key: String): Long = when (key) {
+        "carDoorOpen" -> 2_444L
+        "carDoorClose" -> 1_320L
+        "carStart" -> 3_410L
         "missile" -> MISSILE_MS
         "explosion", "timerBomb" -> EXPLOSION_MS
         "atomBomb" -> ATOM_BOMB_MS

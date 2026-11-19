@@ -2360,7 +2360,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 lastSpecialWasMissile = useMissile
                 robertHpAtLastSpecial = state.robertHp
                 robertGunShotsAfterSpecial = 0
-                robertSpecialReadyAtMs = nowMs + Random.nextLong(5_000L, 9_001L)
                 return
             }
         }
@@ -2504,7 +2503,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             beginRobertSprint()
             return
         }
-        if (!firingWeapon.melee) robertGunShotsAfterSpecial += 1
+        if (!firingWeapon.melee && lastSpecialWasMissile != null && robertGunShotsAfterSpecial == 0) {
+            robertGunShotsAfterSpecial = 1
+            // Start the respite at the first gunshot, not at projectile launch:
+            // a long flight must not consume the entire cooldown.
+            robertSpecialReadyAtMs = nowMs + Random.nextLong(5_000L, 9_001L)
+        }
         markRobertShot(fireInterval)
         if (closingBurst) {
             stopBurstShotsLeft -= 1
@@ -5520,7 +5524,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Robert climbs into his own bulletproof car (granted from round five)
+     * Robert climbs into his own bulletproof car (granted from round four)
      * once his health drops below the 400 line: the door opens, closes, the
      * engine starts - and he drives and fires from cover of the car.
      */
@@ -5560,7 +5564,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 else stationaryTicks++
                 previousX = state.robertX
                 previousY = state.robertY
-                val driving = stationaryTicks < 4
+                val driving = stationaryTicks * CarRules.TICK_MS <= ADVANCE_TICK_MS + CarRules.TICK_MS
                 if (moving && !driving) playEnemySound("carBrake")
                 moving = driving
                 val (lateral, depth) = enemyAudioOffsets()
@@ -5785,9 +5789,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Robert detects the player's shock and answers it at random: either with
-     * his own shock (a duel, in which both lose 10% of maximum health every two
-     * seconds) or with a sprint out of the 40% shock band. Both options are
-     * always possible; a badly hurt robot merely prefers running.
+     * his own shock (a duel, in which both lose 10% every two seconds).
+     * If he does not counter, the player’s hold remains active until release.
      */
     private fun respondToPlayerShock() {
         if (!shockInRange() || incomingMissileTooClose() || shockDeployLocked) return
@@ -5840,9 +5843,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             owner = AudioManager.LOOP_OWNER_ENEMY,
             startOffsetMs = 337L
         )
-        run {
-            setLog(t("electricCounter"))
-        }
+        setLog(t("electricCounter"))
         ensureShockTicker()
     }
 

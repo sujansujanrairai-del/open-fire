@@ -885,7 +885,7 @@ class AudioManager(private val context: Context) {
         }
         updateWalkingTrack(
             key = "enemyWalk",
-            volume = VolumeMixer.walkDistanceGain(distance, Combat.MAX_RANGE),
+            volume = 1f,
             speedMps = effectiveSpeed,
             place = placeAhead(lateralOffset, depthOffset),
             rateScale = ENEMY_WALK_RATE_FACTOR
@@ -909,7 +909,8 @@ class AudioManager(private val context: Context) {
         slot.left = (base * pan.first).coerceIn(0f, 1f)
         slot.right = (base * pan.second).coerceIn(0f, 1f)
         slot.spatialPosition = BinauralPosition.fromCoordinates(lateralOffset, -depthOffset)
-        mixer.updateLoop(key = "enemyWalk", volume = base, rate = slot.rate, place = place)
+        // The mixer applies spatial attenuation itself; do not apply that curve twice.
+        mixer.updateLoop(key = "enemyWalk", volume = 1f, rate = slot.rate, place = place)
     }
 
     /**
